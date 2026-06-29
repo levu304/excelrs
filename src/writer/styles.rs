@@ -22,18 +22,21 @@ use crate::model::style::{Border, Fill, Font, Style};
 /// Deduplicated sub-tables plus the cell-level style-index table.
 ///
 /// Every sub-table has index 0 as the "Normal" entry (empty/font Calibri 11).
-/// The `cell_xfs` vector mirrors the input cell order; each entry records the
-/// sub-table indices for that cell's style.
 pub struct StyleTable {
     pub fonts: Vec<Font>,
     pub fills: Vec<Fill>,
     pub borders: Vec<Border>,
     pub num_fmts: Vec<(u32, String)>,
+    /// Unique cell-level formats (cellXfs) — the OOXML `<cellXfs>` table.
+    /// Index 0 is always Normal.
     pub cell_xfs: Vec<CellXf>,
+    /// Per-cell mapping into `cell_xfs`. Length equals the input style count.
+    /// `cell_indices[i]` = the unique cellXfs index for the i-th input cell.
+    pub cell_indices: Vec<u32>,
 }
 
 /// One cell level format (XF) record — indices into the sub-tables above.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CellXf {
     /// Custom numFmt ID (≥164) or 0 for General / no custom format.
     pub num_fmt_id: u32,
@@ -67,9 +70,9 @@ fn canonical_key<T: serde::Serialize>(value: &T) -> String {
 
 /// Walk a list of cell-level styles and build a deduplicated [`StyleTable`].
 ///
-/// - Every input entry produces one [`CellXf`] in the output.
-/// - `None` / empty style → Normal (all indices 0).
+/// - `None` / empty style → Normal (all indices in `cell_xfs` = 0).
 /// - Matching sub-values (same font, same fill, etc.) share one sub-table slot.
+/// - `cell_indices[i]` maps the i-th input cell to its unique `cellXfs` index.
 pub fn build_style_table(styles: &[Option<Style>]) -> StyleTable {
     // Sub-table dedup maps: canonical key → index
     let mut font_map: BTreeMap<String, u32> = BTreeMap::new();
@@ -81,7 +84,6 @@ pub fn build_style_table(styles: &[Option<Style>]) -> StyleTable {
     let mut fills: Vec<Fill> = Vec::new();
     let mut borders: Vec<Border> = Vec::new();
     let mut num_fmts: Vec<(u32, String)> = Vec::new();
-    let mut cell_xfs: Vec<CellXf> = Vec::with_capacity(styles.len());
 
     // Always seed index 0 with Normal defaults
     let normal_font = Font::default();
@@ -97,6 +99,10 @@ pub fn build_style_table(styles: &[Option<Style>]) -> StyleTable {
     borders.push(normal_border);
 
     let mut next_numfmt_id = 164u32;
+
+    // First pass: build (num_fmt_id, font_id, fill_id, border_id) tuples
+    // for each input cell, stored in input order.
+    let mut tuples: Vec<CellXf> = Vec::with_capacity(styles.len());
 
     for opt in styles {
         let (num_fmt_id, font_id, fill_id, border_id) = if is_normal(opt) {
@@ -148,12 +154,26 @@ pub fn build_style_table(styles: &[Option<Style>]) -> StyleTable {
             (num_fmt_id, font_id, fill_id, border_id)
         };
 
-        cell_xfs.push(CellXf {
+        tuples.push(CellXf {
             num_fmt_id,
             font_id,
             fill_id,
             border_id,
         });
+    }
+
+    // Second pass: dedup the tuple list into the unique cellXfs table.
+    let mut xf_set: BTreeMap<CellXf, u32> = BTreeMap::new();
+    let mut cell_xfs: Vec<CellXf> = Vec::new();
+    let mut cell_indices: Vec<u32> = Vec::with_capacity(tuples.len());
+
+    for xf in &tuples {
+        let idx = *xf_set.entry(*xf).or_insert_with(|| {
+            let id = cell_xfs.len() as u32;
+            cell_xfs.push(*xf);
+            id
+        });
+        cell_indices.push(idx);
     }
 
     StyleTable {
@@ -162,6 +182,7 @@ pub fn build_style_table(styles: &[Option<Style>]) -> StyleTable {
         borders,
         num_fmts,
         cell_xfs,
+        cell_indices,
     }
 }
 
@@ -378,14 +399,18 @@ mod tests {
     fn dedup_normal_only() {
         let styles = vec![None, None];
         let table = build_style_table(&styles);
-        assert_eq!(table.cell_xfs.len(), 2);
-        // Both map to Normal
-        for xf in &table.cell_xfs {
-            assert_eq!(xf.num_fmt_id, 0);
-            assert_eq!(xf.font_id, 0);
-            assert_eq!(xf.fill_id, 0);
-            assert_eq!(xf.border_id, 0);
-        }
+        // Both map to Normal → same unique cellXfs entry
+        assert_eq!(table.cell_xfs.len(), 1);
+        assert_eq!(table.cell_indices.len(), 2);
+        assert_eq!(table.cell_indices[0], 0);
+        assert_eq!(table.cell_indices[1], 0);
+
+        // cell_xfs[0] is Normal
+        let xf = &table.cell_xfs[0];
+        assert_eq!(xf.num_fmt_id, 0);
+        assert_eq!(xf.font_id, 0);
+        assert_eq!(xf.fill_id, 0);
+        assert_eq!(xf.border_id, 0);
     }
 
     /// Two distinct styles produce two distinct cellXfs entries.
@@ -425,7 +450,7 @@ mod tests {
         assert_eq!(table.fonts.len(), 2);
     }
 
-    /// Duplicate styles dedup to the same index.
+    /// Duplicate styles dedup to the same cellXfs index.
     #[test]
     fn dedup_duplicates() {
         let s = Style {
@@ -434,8 +459,10 @@ mod tests {
         };
         let styles = vec![Some(s.clone()), Some(s.clone())];
         let table = build_style_table(&styles);
-        assert_eq!(table.cell_xfs.len(), 2);
-        assert_eq!(table.cell_xfs[0], table.cell_xfs[1]);
+        // Two inputs, but only one unique cellXfs entry
+        assert_eq!(table.cell_xfs.len(), 1);
+        assert_eq!(table.cell_indices.len(), 2);
+        assert_eq!(table.cell_indices[0], table.cell_indices[1]);
     }
 
     // -- 4 emit tests --
@@ -544,9 +571,11 @@ mod tests {
         let s = Style::default(); // is_empty() returns true
         let styles = vec![None, Some(s)];
         let table = build_style_table(&styles);
-        assert_eq!(table.cell_xfs.len(), 2);
-        assert_eq!(table.cell_xfs[0], table.cell_xfs[1]);
-        assert_eq!(table.cell_xfs[0].font_id, 0);
+        // Two inputs but only one unique cellXfs entry (Normal)
+        assert_eq!(table.cell_xfs.len(), 1);
+        assert_eq!(table.cell_indices.len(), 2);
+        assert_eq!(table.cell_indices[0], 0);
+        assert_eq!(table.cell_indices[1], 0);
     }
 
     /// Font color uppercasing from A2 ensures dedup works case-insensitively.
@@ -568,7 +597,39 @@ mod tests {
         };
         let styles = vec![Some(s1), Some(s2)];
         let table = build_style_table(&styles);
-        assert_eq!(table.cell_xfs[0], table.cell_xfs[1]);
+        // Same cellXfs index for both inputs
+        assert_eq!(table.cell_indices[0], table.cell_indices[1]);
+        assert_eq!(table.cell_xfs.len(), 1);
+    }
+
+    /// cell_indices maps each input cell to its unique cellXfs index.
+    #[test]
+    fn dedup_cell_indices_mapping() {
+        // 5 inputs: Normal, style A, style B, Normal, style A
+        let s_a = Style {
+            num_fmt: Some("0.00%".into()),
+            ..Default::default()
+        };
+        let s_b = Style {
+            font: Some(crate::model::style::Font {
+                bold: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let styles = vec![None, Some(s_a.clone()), Some(s_b.clone()), None, Some(s_a)];
+        let table = build_style_table(&styles);
+        assert_eq!(table.cell_indices.len(), 5);
+
+        // Normal → index 0
+        assert_eq!(table.cell_indices[0], 0);
+        assert_eq!(table.cell_indices[3], 0);
+
+        // Style A appears at input 1 and 4 → same index
+        assert_eq!(table.cell_indices[1], table.cell_indices[4]);
+        // Style A and Style B are different
+        assert_ne!(table.cell_indices[1], table.cell_indices[2]);
+        assert_ne!(table.cell_indices[2], table.cell_indices[3]);
     }
 
     /// Multiple distinct numFmt codes each get their own ID starting at 164.
@@ -594,7 +655,19 @@ mod tests {
         assert_eq!(table.num_fmts[0].1, "0.00%");
         assert_eq!(table.num_fmts[1].0, 165);
         assert_eq!(table.num_fmts[1].1, "yyyy-mm-dd");
-        // Duplicate matches
-        assert_eq!(table.cell_xfs[0].num_fmt_id, table.cell_xfs[2].num_fmt_id);
+
+        // 3 inputs, 2 unique cellXfs entries
+        assert_eq!(table.cell_xfs.len(), 2);
+        assert_eq!(table.cell_indices.len(), 3);
+        // Input 0 and 2 share the same cellXfs index
+        assert_eq!(table.cell_indices[0], table.cell_indices[2]);
+        // Input 1 has a different index
+        assert_ne!(table.cell_indices[0], table.cell_indices[1]);
+
+        // Verify the unique cellXfs entries match
+        assert_eq!(
+            table.cell_xfs[table.cell_indices[0] as usize].num_fmt_id,
+            table.cell_xfs[table.cell_indices[2] as usize].num_fmt_id
+        );
     }
 }

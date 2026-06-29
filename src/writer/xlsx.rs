@@ -92,10 +92,22 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
         styles::emit_styles_xml(&mut zip, &style_table)?;
 
         // xl/worksheets/sheet{N}.xml
+        let mut style_offset = 0usize;
         for (i, ws) in worksheets.iter().enumerate() {
             let sheet_path = format!("xl/worksheets/sheet{}.xml", i + 1);
             start_file(&mut zip, &sheet_path)?;
-            write_sheet_xml(&mut zip, ws, &string_indices)?;
+
+            // Count cells in this worksheet for the style-indices slice
+            let cell_count: usize = ws
+                .rows()
+                .iter()
+                .map(|r| r.sorted_cells().len())
+                .sum();
+            let ws_indices =
+                &style_table.cell_indices[style_offset..style_offset + cell_count];
+            style_offset += cell_count;
+
+            write_sheet_xml(&mut zip, ws, &string_indices, ws_indices)?;
         }
 
         zip.finish()
@@ -320,6 +332,7 @@ fn write_sheet_xml<W: Write>(
     w: &mut W,
     ws: &Worksheet,
     string_indices: &HashMap<String, u32>,
+    style_indices: &[u32],
 ) -> Result<(), ExcelrsError> {
     write_str(w, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#)?;
     write_str(
@@ -335,10 +348,12 @@ fn write_sheet_xml<W: Write>(
 
     write_str(w, "<sheetData>")?;
 
+    let mut si = style_indices.iter();
     for row in ws.rows() {
         write!(w, r#"<row r="{}">"#, row.number())?;
         for cell in row.sorted_cells() {
-            write_cell_xml(w, cell, string_indices)?;
+            let style_idx = *si.next().expect("style_indices length matches cell count");
+            write_cell_xml(w, cell, string_indices, style_idx)?;
         }
         write_str(w, "</row>")?;
     }
@@ -353,13 +368,14 @@ fn write_cell_xml<W: Write>(
     w: &mut W,
     cell: &crate::model::cell::Cell,
     string_indices: &HashMap<String, u32>,
+    style_index: u32,
 ) -> Result<(), ExcelrsError> {
     let cv = cell.value();
     let address = cell.address();
     let formula = cell.formula();
 
-    // Open the cell element
-    write!(w, r#"<c r="{}""#, address)?;
+    // Open the cell element with style attribute
+    write!(w, r#"<c r="{}" s="{}""#, address, style_index)?;
 
     // Determine cell type and write value attribute
     let cell_type_attr = match cv.value_type.as_str() {
@@ -685,6 +701,49 @@ mod tests {
 
         // Clean up
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    // ---- s="<idx>" attribute tests ----
+
+    /// Normal cells (no style) get s="0" in the written sheet XML.
+    #[test]
+    fn test_normal_cell_has_s_attr() {
+        let inner = build_test_workbook();
+        let bytes = workbook_to_bytes(&inner).unwrap();
+
+        // Extract sheet1.xml from the zip
+        use std::io::Cursor;
+        use std::io::Read;
+        let mut archive = zip::read::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut sheet_xml = String::new();
+        archive
+            .by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut sheet_xml)
+            .unwrap();
+
+        // All cells should have s="0" (Normal)
+        assert!(sheet_xml.contains(r#"<c r="A1" s="0""#));
+        assert!(sheet_xml.contains(r#"<c r="B1" s="0" t="s""#));
+        assert!(sheet_xml.contains(r#"<c r="C1" s="0" t="b""#));
+        assert!(sheet_xml.contains(r#"<c r="A2" s="0""#));
+    }
+
+    /// Direct test: write_cell_xml emits s="<idx>" with the given style index.
+    #[test]
+    fn test_write_cell_xml_emits_style_index() {
+        use std::collections::HashMap;
+        use crate::model::cell::Cell;
+
+        let mut buf = Vec::new();
+        let cell = Cell::new("A1".into(), 1, 1);
+        let string_indices = HashMap::new();
+        write_cell_xml(&mut buf, &cell, &string_indices, 42).unwrap();
+        let xml = String::from_utf8(buf).unwrap();
+        assert!(
+            xml.contains(r#"s="42""#),
+            "expected s=\"42\" in cell XML, got: {xml}"
+        );
     }
 
     // ---- helpers ----
