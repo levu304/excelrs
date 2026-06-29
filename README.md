@@ -9,13 +9,13 @@ Native XLSX spreadsheet library for Node.js — a Rust port of
 ## Install
 
 ```bash
-npm install excelrs
+npm install @levu304/excelrs
 ```
 
 ## Quick Start
 
 ```typescript
-import { Workbook } from 'excelrs';
+import { Workbook } from '@levu304/excelrs';
 
 // Read
 const wb = new Workbook();

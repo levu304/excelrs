@@ -88,13 +88,13 @@ jobs:
         run: |
           VERSION=$(node -p "require('./package.json').version")
           cat > npm/darwin-arm64/package.json <<EOF
-          { "name": "excelrs-darwin-arm64", "version": "$VERSION", "os": ["darwin"], "cpu": ["arm64"], "main": "excelrs.darwin-arm64.node" }
+          { "name": "@levu304/excelrs-darwin-arm64", "version": "$VERSION", "os": ["darwin"], "cpu": ["arm64"], "main": "excelrs.darwin-arm64.node" }
           EOF
           cat > npm/linux-x64-gnu/package.json <<EOF
-          { "name": "excelrs-linux-x64-gnu", "version": "$VERSION", "os": ["linux"], "cpu": ["x64"], "main": "excelrs.linux-x64-gnu.node" }
+          { "name": "@levu304/excelrs-linux-x64-gnu", "version": "$VERSION", "os": ["linux"], "cpu": ["x64"], "main": "excelrs.linux-x64-gnu.node" }
           EOF
           cat > npm/win32-x64-msvc/package.json <<EOF
-          { "name": "excelrs-win32-x64-msvc", "version": "$VERSION", "os": ["win32"], "cpu": ["x64"], "main": "excelrs.win32-x64-msvc.node" }
+          { "name": "@levu304/excelrs-win32-x64-msvc", "version": "$VERSION", "os": ["win32"], "cpu": ["x64"], "main": "excelrs.win32-x64-msvc.node" }
           EOF
           echo "Platform package.json files created"
 
