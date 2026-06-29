@@ -16,6 +16,8 @@
 
 **npm package:** `@levu304/excelrs`. Install: `npm install @levu304/excelrs`.
 
+**v0.2.0 scope:** write-only style system (cell + column). See §6.8, §6.9, §9.2 for the full contract. Round-trip of a styled `.xlsx` drops styles; style *read* is deferred to v0.3.0.
+
 ---
 
 ## 2. Design Principles
@@ -189,7 +191,7 @@ model/
    - Handle shared strings: deduplicate strings, write `xl/sharedStrings.xml`, reference by index.
    - Write formula strings (preserved, not evaluated) as `<f>SUM(A1:A10)</f>`.
    - **Shared formula handling in v0.1:** If calamine read shared formulas, excelrs writes them as regular formulas (expanded per-cell). This preserves the formula text but may produce larger files than the original.
-6. Write `xl/styles.xml`. **v0.2.0+:** full style table — dedup `numFmts`/`fonts`/`fills`/`borders`, emit `cellXfs` index (see §6.8, ADR-27). Each written cell `<c>` gets an `s="<idx>"` attribute pointing into `cellXfs` (Normal = index 0). **v0.1 (historical):** table is minimal ("Normal" only); see v0.1 limitations list below.
+6. Write `xl/styles.xml`. **v0.2.0+:** full style table — dedup `numFmts`/`fonts`/`fills`/`borders`, emit `cellXfs` index (see §6.8, ADR-27). Every written cell `<c>` is emitted with an `s="<idx>"` attribute pointing into `cellXfs`; Normal cells get `s="0"`. The `s` attribute is never omitted. **v0.1 (historical):** table is minimal ("Normal" only); see v0.1 limitations list below.
 7. Write `xl/_rels/workbook.xml.rels` with worksheet relationships.
 8. Flush zip to `Vec<u8>`.
 
@@ -804,7 +806,7 @@ impl Column {
 
 ### 6.8 Style (v0.2.0+ write; not read)
 
-The full style model is composed of five sub-types plus an aggregate `Style` struct. All are `#[napi(object)]` flat structs (ADR-11 pattern). Colors are ARGB hex strings (8 chars, e.g. `"FFFF0000"`) or RGB hex strings (6 chars, e.g. `"FF0000"`). Theme color references are **not** supported in v0.2.0 (deferred to v0.3.0, see §9.2.1).
+The full style model is composed of five sub-types and one aggregate `Style` struct (six `#[napi(object)]` flat structs total, ADR-11 pattern). Colors are ARGB hex strings (8 chars, e.g. `"FFFF0000"`) or RGB hex strings (6 chars, e.g. `"FF0000"`). Theme color references are **not** supported in v0.2.0 (deferred to v0.3.0, see §9.2.1).
 
 ```rust
 #[napi(object)]
@@ -868,6 +870,7 @@ pub struct Style {
 - **Optional fields** (`Some(v)` vs `None`): `None` is omitted from the canonical key. `Some("")` is a real value (empty string), distinct from `None`. Callers must explicitly set `null`/`undefined` to clear a field.
 - **`Fill.kind`**: must be one of `"none" | "solid" | "pattern"`. Any other value (including `"gradient"`) is rejected with `ExcelrsError::InvalidStyle("fill.kind: '<x>' is not supported in v0.2.0")` (see §9.2.1).
 - **`BorderStyle.style`**: must be one of `"thin" | "medium" | "thick" | "dashed" | "dotted" | "double"`. `"none"` is rejected; use `Border.top = None` (or omit the field from the JS object) to express "no top border."
+- **`num_fmt`**: must be `None` or a non-empty format-code string. `Some("")` is rejected with `ExcelrsError::InvalidStyle("num_fmt: empty string is not a valid format code; use null for no format")`. In JS, set `null`/`undefined` (or omit the field) to express "no format." The format code itself is otherwise passed through unchanged to OOXML (Excel/calamine will sort it out on read).
 
 These rules ensure the canonical key passed to `BTreeMap` is deterministic and the dedup is round-trip stable (see ADR-27).
 
@@ -905,6 +908,8 @@ column.style = { font: { bold: true } };
 ```
 
 Column-level style is applied as the default for cells in that column that have no explicit cell-level style. (v0.2.0 implementation note: column-level style is stored on the `Column` struct; the writer applies it as a fallback when emitting `<c s="..."/>`.)
+
+**Common pitfall (cell vs column merge):** `cell.style = { font: { italic: true } }` is full-replace; it silently drops every other field, including any field inherited from the column-level style. To change one field while keeping the rest, spread the column style first: `cell.style = { ...column.style, font: { italic: true } }`. This matches the OOXML `cellXfs` model (a style is one XF record per cell) and exceljs's setter behavior. A future `setStyle(partial, { merge: true })` helper is not part of v0.2.0.
 
 **v0.2.0 reader behavior:** Reading a styled `.xlsx` produces `Cell.style = null` (Normal). Style *read* is deferred to v0.3.0 (see §9.2.1).
 
@@ -1179,7 +1184,9 @@ cargo fmt -- --check
 
 **Explicitly out of scope (deferred to v0.3.0, see §9.2.1):** eight items — style read, `Worksheet.mergeCells`, cell-level interior mutability, `Hyperlink`/`RichText`/`Merge` CellValue variants, theme color references, row-level style, gradient fills, diagonal borders.
 
-**Test budget:** ~22 new Rust + ~13 new JS. v0.1.0 ends at 73+42; v0.2.0 targets **95+55** total.
+**Test budget:** ~22 new Rust (6 type construction + 8 setter validation + 4 `cellXfs` dedup + 4 round-trip) + ~13 new JS (4 setter + 5 round-trip via exceljs fixtures + 4 column-style). v0.1.0 ends at 73+42; v0.2.0 targets **95+55** total.
+
+**Release prep (A11):** `README.md` updates for v0.2.0 are part of release prep (A11), not A2–A10. The new section lists the style CRUD API with a worked example; the limitations block is updated from `No style CRUD` to `No style read (round-trip of a styled .xlsx drops styles; deferred to v0.3.0)`.
 
 ### 9.2.1 v0.3.0 candidate
 
@@ -1287,4 +1294,4 @@ These are capabilities that excelrs will **not** implement, now or in the future
 
 ---
 
-*Spec version: 1.3.2. Last updated: 2026-06-29. v0.2.0 (Style System, write-only) — see §6.8, §6.9, §9.2; deferred items in §9.2.1. v1.3.2: design decisions A-H resolved — NumFmt inlined as `Option<String>`, Fill.kind enum tightened, BorderStyle.style tightened, setter full-replace, reader path simplified, row-level style / gradient fills / diagonal borders deferred to v0.3.0, ADR-27 expanded with alternatives + canonical serialization rules.*
+*Spec version: 1.3.3. Last updated: 2026-06-29. v0.2.0 (Style System, write-only) — see §6.8, §6.9, §9.2; deferred items in §9.2.1. v1.3.3: review nits folded in — `num_fmt: Some("")` rejected, cell/column merge pitfall called out, `s="0"` always written for Normal, §1 v0.2.0 scope callout, test budget breakdown, README update noted as A11. v1.3.2: design decisions A-H resolved.*

@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Spec v1.3.3 (post-architect-reviewer pass-2): `num_fmt: Some("")` is rejected with `ExcelrsError::InvalidStyle`; common-pitfall callout added to §6.9 documenting that `cell.style = {...}` silently replaces the column-level style (use spread to merge); §4.3 step 6 now states explicitly that every written `<c>` carries `s="<idx>"` including Normal at `s="0"` (the `s` attribute is never omitted); §1 Overview gains a one-line v0.2.0 scope callout pointing to §6.8/§6.9/§9.2; §9.2 test budget is broken down per task; §9.2 notes that the v0.2.0 README update is part of A11 release prep. No code-affecting changes; all nits are doc-quality only.
 - Spec referred to the npm package as `excelrs` (unscoped). npm rejected the unscoped name as too similar to the existing `exceljs` package. The published v0.1.0 artifact is `@levu304/excelrs` (scoped). spec.md has been updated to use the scoped name in all install/import/require references; Cargo crate name `excelrs-core`, binary pattern `excelrs.<platform>.node`, and CLI argument `new excelrs` are intentionally untouched.
 
 ### Security
