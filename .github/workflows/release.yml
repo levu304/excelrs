@@ -1,0 +1,96 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-14
+            npm_dir: darwin-arm64
+          - target: x86_64-apple-darwin
+            os: macos-13
+            npm_dir: darwin-x64
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+            npm_dir: linux-x64-gnu
+          - target: x86_64-pc-windows-msvc
+            os: windows-2019
+            npm_dir: win32-x64-msvc
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+
+      - name: Install Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install pnpm
+        run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build native addon
+        run: npx napi build --platform --release --js native.js
+
+      - name: Run Rust tests
+        run: cargo test
+
+      - name: Run JS tests
+        run: pnpm test
+
+      - name: Upload native artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.npm_dir }}
+          path: excelrs.*.node
+
+  publish:
+    needs: [build]
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install pnpm
+        run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: npm
+
+      - name: Publish to npm
+        run: |
+          npx napi prepublish -t npm/
+          npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
