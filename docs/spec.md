@@ -101,6 +101,7 @@ excelrs/
 User builds Workbook in JS (calls Rust methods via napi)
   → Rust model types hold all state
   → writer::xlsx traverses model
+  → style table built (dedup numFmts/fonts/fills/borders → cellXfs index; v0.2.0+)
   → quick-xml generates OOXML XML fragments
   → zip crate assembles .xlsx archive (in-memory)
   → Buffer returned to JS
@@ -161,7 +162,7 @@ model/
      - Store formula strings — **calamine stores formulas in a separate API.** After iterating cell data, call `sheet.formulas()` for each sheet and iterate the formula iterator to obtain formula strings by cell reference. Merge them into the corresponding `Cell` model objects by address.
      - Build `Cell` with address, row, col, value, formula.
    - Parse styles from calamine's style metadata (read-only in v0.1).
-   - Detect date cells using calamine's number format metadata (built-in date format IDs 14–22, 27–36, 45–47; custom formats resolved from styles table).
+   - Detect date cells using calamine's number format metadata (built-in date format IDs 14–22, 27–36, 45–47, 50–81; custom formats resolved from styles table).
 3. Assemble `Workbook { worksheets }`.
 
 **Edge cases handled:**
@@ -189,13 +190,13 @@ model/
    - Handle shared strings: deduplicate strings, write `xl/sharedStrings.xml`, reference by index.
    - Write formula strings (preserved, not evaluated) as `<f>SUM(A1:A10)</f>`.
    - **Shared formula handling in v0.1:** If calamine read shared formulas, excelrs writes them as regular formulas (expanded per-cell). This preserves the formula text but may produce larger files than the original.
-6. Write `xl/styles.xml` with a minimal built-in style table ("Normal" style only in v0.1).
+6. Write `xl/styles.xml` with the style table. **v0.2.0+:** dedup `numFmts`/`fonts`/`fills`/`borders`, emit `cellXfs` index (see §6.8). Each written cell `<c>` gets an `s="<idx>"` attribute pointing into `cellXfs`. **v0.1:** table is minimal ("Normal" only).
 7. Write `xl/_rels/workbook.xml.rels` with worksheet relationships.
 8. Flush zip to `Vec<u8>`.
 
 **v0.1 limitations:**
-- Styles table is minimal (Normal only). Cells write without custom formatting.
-- No merged cell support in write path.
+- Styles table is minimal (Normal only). v0.2.0 adds full font/fill/border/alignment/numFmt support (see §6.8, §6.9, §9.2).
+- No merged cell support in write path (deferred to v0.3.0, see §9.2.1).
 - No column width storage in written files.
 
 ### 4.4 `error` — Error handling
@@ -801,25 +802,99 @@ impl Column {
 }
 ```
 
-### 6.8 CellStyle (read-only in v0.1)
+### 6.8 Style (v0.2.0+ write; not read)
+
+The full style model is composed of five sub-types plus an aggregate `Style` struct. All are `#[napi(object)]` flat structs (ADR-11 pattern). Colors are ARGB hex strings (8 chars, e.g. `"FFFF0000"`) or RGB hex strings (6 chars, e.g. `"FF0000"`). Theme color references are **not** supported in v0.2.0 (deferred to v0.3.0, see §9.2.1).
 
 ```rust
 #[napi(object)]
-#[derive(Debug, Clone)]
-pub struct CellStyle {
-    pub font_name: Option<String>,
-    pub font_size: Option<f64>,
+pub struct Font {
+    pub name: Option<String>,           // default: "Calibri"
+    pub size: Option<f64>,              // points, default: 11
     pub bold: Option<bool>,
     pub italic: Option<bool>,
     pub underline: Option<bool>,
-    pub font_color: Option<String>,
-    pub fill_color: Option<String>,
-    pub number_format: Option<String>,
-    pub alignment_horizontal: Option<String>,
-    pub alignment_vertical: Option<String>,
-    pub border: Option<BorderStyle>,
+    pub color: Option<String>,          // ARGB hex (8 chars) or RGB hex (6 chars)
+}
+
+#[napi(object)]
+pub struct Fill {
+    pub kind: String,                   // "none" | "solid" | "pattern"
+    pub foreground: Option<String>,     // ARGB hex
+    pub background: Option<String>,     // ARGB hex
+    pub pattern: Option<String>,        // for kind="pattern"
+}
+
+#[napi(object)]
+pub struct BorderStyle {
+    pub style: String,                  // "thin" | "medium" | "thick" | "dashed" | "dotted" | "double" | "none"
+    pub color: Option<String>,          // ARGB hex
+}
+
+#[napi(object)]
+pub struct Border {
+    pub top: Option<BorderStyle>,
+    pub right: Option<BorderStyle>,
+    pub bottom: Option<BorderStyle>,
+    pub left: Option<BorderStyle>,
+}
+
+#[napi(object)]
+pub struct Alignment {
+    pub horizontal: Option<String>,     // "left" | "center" | "right" | "fill" | "justify"
+    pub vertical: Option<String>,       // "top" | "middle" | "bottom"
+    pub wrap_text: Option<bool>,
+    pub indent: Option<u32>,
+}
+
+#[napi(object)]
+pub struct NumFmt {
+    pub format_code: String,            // e.g., "0.00%", "$#,##0.00", "yyyy-mm-dd"
+}
+
+#[napi(object)]
+pub struct Style {
+    pub font: Option<Font>,
+    pub fill: Option<Fill>,
+    pub border: Option<Border>,
+    pub alignment: Option<Alignment>,
+    pub num_fmt: Option<NumFmt>,
 }
 ```
+
+**v0.1→v0.2.0 migration note:** The v0.1 spec had a single `CellStyle` struct with 10 `Option` fields (lines replaced in v1.3.0). It is removed in v0.2.0 in favor of the nested `Style` aggregate. Any v0.1 callers using `cell.style` (read-only) must migrate.
+
+**Defaults:** A cell with no `Style` set has index 0 in the written `cellXfs` table — the built-in "Normal" style. `cell.style = null` (or `undefined` from JS) also resolves to Normal.
+
+### 6.9 Style setter API contract
+
+Style is set via a JS object through the napi v3 `serde-json` feature (same pattern as the `cell.value` setter, ADR-13/ADR-26). Rust receives `serde_json::Value` and dispatches on JSON shape.
+
+**Cell-level setter:**
+
+```typescript
+cell.style = {
+  font:      { bold: true, size: 14, color: "FF0000FF" },
+  fill:      { kind: "solid", foreground: "FFFFFF00" },
+  border: {
+    top:    { style: "thin", color: "FF000000" },
+    bottom: { style: "thin", color: "FF000000" },
+  },
+  alignment: { horizontal: "center", vertical: "middle" },
+  num_fmt:   { format_code: "0.00%" },
+};
+// cell.style = null  → resets to Normal (index 0)
+```
+
+**Column-level setter:**
+
+```typescript
+column.style = { font: { bold: true } };
+```
+
+Column-level style is applied as the default for cells in that column that have no explicit cell-level style. (v0.2.0 implementation note: column-level style is stored on the `Column` struct; the writer applies it as a fallback when emitting `<c s="..."/>`.)
+
+**v0.2.0 reader behavior:** Reading a styled `.xlsx` produces `Cell.style = null` (Normal). Style *read* is deferred to v0.3.0 (see §9.2.1).
 
 ---
 
@@ -1076,16 +1151,43 @@ cargo fmt -- --check
 - Formula evaluation
 - `Hyperlink`, `RichText`, `SharedString`, `Merge` CellValue variants (no reader source in calamine)
 
-### 9.2 v0.2 — Style System
+### 9.2 v0.2 — Style System (write only)
 
-- Full style model: font, fill, border, alignment, number format.
-- Style CRUD: `cell.style = { bold: true, font: { size: 14 } }`.
-- Style write to `xl/styles.xml`.
-- Built-in style inheritance.
+**Scope:** styles **write** path only. Reading styles from existing `.xlsx` files is out of scope and deferred to v0.3.0.
+
+**In scope:**
+
+- Full style model in Rust: `Font`, `Fill`, `Border`, `Alignment`, `NumFmt`, `Style` (§6.8).
+- `xl/styles.xml` writer: dedup `numFmts`/`fonts`/`fills`/`borders`, emit `cellXfs` index. `BTreeMap`-backed dedup (ADR-27) for stable round-trip indices.
+- `s="<idx>"` attribute on every written `<c>` element pointing into `cellXfs`.
+- Style CRUD: `cell.style = { font, fill, border, alignment, num_fmt }` via `serde_json::Value` setter (§6.9, ADR-26).
+- Column-level style: `column.style = {...}` as default for cells in that column with no explicit cell-level style.
+- ARGB hex (8 chars) or RGB hex (6 chars) colors. No theme color references in v0.2.0 (ADR-25).
+- Built-in "Normal" remains index 0. `cell.style = null` resets to Normal.
+
+**Explicitly out of scope (deferred to v0.3.0, see §9.2.1):**
+
+- Style *read* — styled `.xlsx` is read as Normal-only on round-trip.
 - `Worksheet.mergeCells`.
-- `Worksheet.getColumn` / `Worksheet.getRow` with style accessors.
+- Cell-level interior mutability for `cell.value = 42` to persist on a `getCell` clone.
 - `Hyperlink`, `RichText`, `Merge` CellValue variants reintroduced with reader/writer support.
-- Interior mutability for chainable mutation (`ws.getCell('A1').value = 42`).
+- Theme color references.
+
+**Test budget:** ~22 new Rust + ~13 new JS. v0.1.0 ends at 73+42; v0.2.0 targets **95+55** total.
+
+### 9.2.1 v0.3.0 candidate
+
+The following items are explicitly **deferred from v0.2.0 to keep the v0.2.0 release a focused, small-scope change**. Each has a one-line rationale:
+
+| Deferred item | Rationale |
+|---------------|-----------|
+| Style *read* (parse `xl/styles.xml` on read; attach style ref to each `Cell`) | Style table parsing on the reader path adds significant complexity; v0.2.0 keeps the reader untouched. Round-trip of a styled `.xlsx` drops the styles. |
+| `Worksheet.mergeCells(range)` | Requires `<mergeCells>` element, non-master cell handling, and read-side parsing. Independent of the style system. |
+| Cell-level interior mutability | `Arc<Mutex<Cell>>` in `Worksheet.rows` so `ws.getCell('A1').value = 42` persists. v0.1.0/0.2.0 keep clone-on-read; row-level interior mutability is already in place. |
+| `Hyperlink`, `RichText`, `Merge` CellValue variants | Reintroduce with reader/writer support. `Hyperlink` needs `<hyperlinks>` part; `RichText` needs inline string parsing on read; `Merge` is a marker set when a cell is inside a merge range. |
+| Theme color references | Reading `xl/theme1.xml` and supporting `theme="N"` color refs. ARGB hex covers the common case. |
+
+These five items are the headline v0.3.0 work units. They were intentionally not bundled into v0.2.0.
 
 ### 9.3 Future (v0.3+)
 
@@ -1147,6 +1249,10 @@ These are capabilities that excelrs will **not** implement, now or in the future
 | 21 | `#[napi(setter)]` not `#[napi(set)]` | Correct napi v3 attribute name for property setters |
 | 22 | `napi-build = "3"` in build-dependencies | Matches napi v3 toolchain; note: `napi-build = "2"` also works with napi v3 — the scaffold uses v2 for build-deps |
 | 23 | Release binary ~440KB (darwin-arm64) | Acceptable size for a platform-specific native addon |
+| 24 | Style write-only in v0.2.0 | Reading styles adds calamine style-table parsing complexity on the reader path. v0.2.0 ships a clean writer; reading a styled `.xlsx` yields Normal-only on round-trip. This is the headline v0.2.0 scope decision (Q1.a). |
+| 25 | ARGB / RGB hex colors, no theme colors | Theme color references require parsing `xl/theme1.xml` and resolving `theme="N"` indexes. ARGB hex strings (8 chars) and RGB hex strings (6 chars) cover 95%+ of real-world styling. Theme support deferred to v0.3.0 (Q3). |
+| 26 | Style setter via `serde_json::Value` | Same napi v3 `serde-json` feature pattern as the `cell.value` setter (ADR-13). JS objects nest freely; Rust dispatches by JSON shape (one `set_style` method, branches on object presence). Avoids the napi-rs enum variant-data limitation (ADR-11). |
+| 27 | `cellXfs` dedup with `BTreeMap` for stable indices | `HashMap` dedup produces non-deterministic style indices across runs (Rust `HashMap` randomization), breaking round-trip stability. `BTreeMap` (sorted by serialized style fields) gives stable indices and deterministic output. |
 
 ## Appendix B: exceljs → excelrs API Mapping
 
@@ -1172,4 +1278,4 @@ These are capabilities that excelrs will **not** implement, now or in the future
 
 ---
 
-*Spec version: 1.2.0. Last updated: 2026-06-29. Updated per second-pass architecture review — napi-rs FFI return types, Row.getCell, WorkbookXlsx, calamine version, glue.ts path.*
+*Spec version: 1.3.0. Last updated: 2026-06-29. v0.2.0 (Style System, write-only) — see §6.8, §6.9, §9.2; deferred items in §9.2.1.*
