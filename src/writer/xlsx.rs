@@ -11,7 +11,7 @@
 //! - `xl/workbook.xml` + `xl/_rels/workbook.xml.rels`
 //! - `xl/worksheets/sheet{N}.xml` (one per sheet, with `<dimension>` and `<sheetData>`)
 //! - `xl/sharedStrings.xml` (deduplicated string table)
-//! - `xl/styles.xml` (Normal-only minimal)
+//! - `xl/styles.xml` (v0.2.0: full dedup'd style table; see `styles.rs`)
 //!
 //! # v0.1 limitations (per spec)
 //! - No column width/properties preserved
@@ -26,8 +26,11 @@ use std::path::Path;
 use quick_xml::escape::escape;
 
 use crate::error::ExcelrsError;
+use crate::model::style::Style;
 use crate::model::workbook_inner::WorkbookInner;
 use crate::model::worksheet::Worksheet;
+
+use super::styles;
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -72,9 +75,21 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
         start_file(&mut zip, "xl/sharedStrings.xml")?;
         write_shared_strings(&mut zip, &string_table)?;
 
-        // xl/styles.xml (Normal-only)
+        // xl/styles.xml (v0.2.0: full dedup'd style table)
         start_file(&mut zip, "xl/styles.xml")?;
-        write_styles_xml(&mut zip)?;
+        // Collect all cell-level styles across every worksheet
+        let all_styles: Vec<Option<Style>> = worksheets
+            .iter()
+            .flat_map(|ws| ws.rows())
+            .flat_map(|row| {
+                row.sorted_cells()
+                    .into_iter()
+                    .map(|c| c.style())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let style_table = styles::build_style_table(&all_styles);
+        styles::emit_styles_xml(&mut zip, &style_table)?;
 
         // xl/worksheets/sheet{N}.xml
         for (i, ws) in worksheets.iter().enumerate() {
@@ -295,44 +310,7 @@ fn write_shared_strings<W: Write>(w: &mut W, string_table: &[String]) -> Result<
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// xl/styles.xml (Normal-only minimal)
-// ---------------------------------------------------------------------------
 
-fn write_styles_xml<W: Write>(w: &mut W) -> Result<(), ExcelrsError> {
-    write_str(w, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#)?;
-    write_str(
-        w,
-        r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"#,
-    )?;
-    // Fonts: one default font
-    write_str(
-        w,
-        r#"<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>"#,
-    )?;
-    // Fills: none (minimum 2 required, but we'll provide default)
-    write_str(
-        w,
-        r#"<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>"#,
-    )?;
-    // Borders: one default border
-    write_str(
-        w,
-        r#"<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>"#,
-    )?;
-    // Cell style formats: one default
-    write_str(
-        w,
-        r#"<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>"#,
-    )?;
-    // Cell formats: one default
-    write_str(
-        w,
-        r#"<cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>"#,
-    )?;
-    write_str(w, "</styleSheet>")?;
-    Ok(())
-}
 
 // ---------------------------------------------------------------------------
 // xl/worksheets/sheet{N}.xml
