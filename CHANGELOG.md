@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Spec referred to the npm package as `excelrs` (unscoped). npm rejected the unscoped name as too similar to the existing `exceljs` package. The published v0.1.0 artifact is `@levu304/excelrs` (scoped). spec.md has been updated to use the scoped name in all install/import/require references; Cargo crate name `excelrs-core`, binary pattern `excelrs.<platform>.node`, and CLI argument `new excelrs` are intentionally untouched.
 
+### Security
+
+- Rotated the `NPM_TOKEN` GitHub secret after two legacy publish tokens were inadvertently exposed in the project's chat history. The replacement token has the same scopes (publish to `@levu304/*`, 2FA-bypass). The previous tokens have been revoked on npmjs.com and are no longer valid. No release was published between exposure and rotation; the only artifact published to npm under `@levu304/excelrs` remains v0.1.0.
+
 ## [0.1.0] — 2026-06-29
 
 ### Added
