@@ -2,6 +2,8 @@
 
 use napi_derive::napi;
 
+use crate::model::style::Style;
+
 /// A column definition in a worksheet.
 ///
 /// Mirrors the exceljs `Column` interface: header label, data-binding key,
@@ -13,6 +15,9 @@ pub struct Column {
     key: String,
     width: f64,
     hidden: bool,
+    /// Column-level style (default for cells in this column with no
+    /// explicit cell-level style). Write-only in v0.2.0.
+    style: Option<Style>,
 }
 
 #[napi]
@@ -24,6 +29,7 @@ impl Column {
             key,
             width,
             hidden: false,
+            style: None,
         }
     }
 
@@ -65,5 +71,31 @@ impl Column {
     #[napi(setter)]
     pub fn set_hidden(&mut self, val: bool) {
         self.hidden = val;
+    }
+
+    // -- style (getter + setter) --
+
+    #[napi(getter)]
+    pub fn style(&self) -> Option<Style> {
+        self.style.clone()
+    }
+
+    #[napi(setter)]
+    pub fn set_style(&mut self, val: serde_json::Value) -> napi::Result<()> {
+        if val.is_null() {
+            self.style = None;
+            return Ok(());
+        }
+        let style: Style = serde_json::from_value(val).map_err(|e| {
+            napi::Error::from_reason(format!("style: {e}"))
+        })?;
+        if style.is_empty() {
+            self.style = None;
+            return Ok(());
+        }
+        self.style = Some(style.validate().map_err(|e| {
+            napi::Error::from_reason(e.to_string())
+        })?);
+        Ok(())
     }
 }

@@ -559,7 +559,7 @@ mod tests {
 
         let a2 = ws.get_cell_by_address("A2".into());
         assert_eq!(a2.value().value_type, "Number");
-        assert_eq!(a2.value().number, Some(3.14));
+        assert_eq!(a2.value().number, Some(std::f64::consts::PI));
     }
 
     #[test]
@@ -719,7 +719,7 @@ mod tests {
             serde_json::json!("Hello"),
             serde_json::json!(true),
         ]);
-        ws.add_row(vec![serde_json::json!(3.14)]);
+        ws.add_row(vec![serde_json::json!(std::f64::consts::PI)]);
 
         let mut inner = WorkbookInner::new();
         inner.worksheets.push(ws);

@@ -130,7 +130,7 @@ mod tests {
         assert!(!buffer.is_empty(), "buffer should not be empty");
 
         // Verify the bytes produce a valid workbook
-        let re_read = crate::reader::xlsx::workbook_inner_from_bytes(&buffer.to_vec()).unwrap();
+        let re_read = crate::reader::xlsx::workbook_inner_from_bytes(&buffer[..]).unwrap();
         assert_eq!(re_read.worksheet_count(), 1);
         assert!(re_read.worksheets().iter().any(|ws| ws.name() == "WriteTest"));
     }
