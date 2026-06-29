@@ -9,10 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- v0.2.0 style system: write-only support for Font, Fill, Border, Alignment, NumFmt
-  (spec v1.3.0, ADR-24–27). Style CRUD via `cell.style = {...}` and `column.style = {...}`.
-  ARGB / RGB hex colors only. Round-trip of styled `.xlsx` reads as Normal (style read
-  deferred to v0.3.0).
+- v0.2.0 style system: write-only support for Font, Fill, Border, Alignment, and inline
+  `num_fmt: string` (spec v1.3.0, ADR-24–27). Style CRUD via `cell.style = {...}` and
+  `column.style = {...}` with full-replace semantics. ARGB / RGB hex colors only. Setter
+  validates color format, float finiteness, and enum values (Fill.kind, BorderStyle.style).
+  Round-trip of styled `.xlsx` reads as Normal (style read deferred to v0.3.0).
 
 ### Fixed
 

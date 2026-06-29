@@ -161,7 +161,6 @@ model/
      - Map calamine `Data` enum → `CellValue` struct.
      - Store formula strings — **calamine stores formulas in a separate API.** After iterating cell data, call `sheet.formulas()` for each sheet and iterate the formula iterator to obtain formula strings by cell reference. Merge them into the corresponding `Cell` model objects by address.
      - Build `Cell` with address, row, col, value, formula.
-   - Parse styles from calamine's style metadata (read-only in v0.1).
    - Detect date cells using calamine's number format metadata (built-in date format IDs 14–22, 27–36, 45–47, 50–81; custom formats resolved from styles table).
 3. Assemble `Workbook { worksheets }`.
 
@@ -820,7 +819,7 @@ pub struct Font {
 
 #[napi(object)]
 pub struct Fill {
-    pub kind: String,                   // "none" | "solid" | "pattern"
+    pub kind: String,                   // valid: "none" | "solid" | "pattern" (gradient rejected in v0.2.0; see §9.2.1)
     pub foreground: Option<String>,     // ARGB hex
     pub background: Option<String>,     // ARGB hex
     pub pattern: Option<String>,        // for kind="pattern"
@@ -828,7 +827,7 @@ pub struct Fill {
 
 #[napi(object)]
 pub struct BorderStyle {
-    pub style: String,                  // "thin" | "medium" | "thick" | "dashed" | "dotted" | "double" | "none"
+    pub style: String,                  // valid: "thin" | "medium" | "thick" | "dashed" | "dotted" | "double" ("none" rejected; use Border.top = None for no border)
     pub color: Option<String>,          // ARGB hex
 }
 
@@ -849,27 +848,39 @@ pub struct Alignment {
 }
 
 #[napi(object)]
-pub struct NumFmt {
-    pub format_code: String,            // e.g., "0.00%", "$#,##0.00", "yyyy-mm-dd"
-}
-
-#[napi(object)]
 pub struct Style {
     pub font: Option<Font>,
     pub fill: Option<Fill>,
     pub border: Option<Border>,
     pub alignment: Option<Alignment>,
-    pub num_fmt: Option<NumFmt>,
+    pub num_fmt: Option<String>,        // format code, e.g. "0.00%", "$#,##0.00", "yyyy-mm-dd"
 }
 ```
 
-**v0.1→v0.2.0 migration note:** The v0.1 spec had a single `CellStyle` struct with 10 `Option` fields (replaced in v1.3.0; see §6.2 `Cell.style` which now uses the nested `Style` aggregate). It is removed in v0.2.0 in favor of the nested `Style` aggregate. Any v0.1 callers using `cell.style` (read-only) must migrate. _Example:_ `cell.style = { font_color: "FF0000" }` (v0.1) → `cell.style = { font: { color: "FFFF0000" } }` (v0.2).
+**v0.1→v0.2.0 migration note:** The v0.1 spec had a single `CellStyle` struct with 10 `Option` fields (replaced in v1.3.0; see §6.2 `Cell.style` which now uses the nested `Style` aggregate). It is removed in v0.2.0 in favor of the nested `Style` aggregate. Any v0.1 callers using `cell.style` (read-only) must migrate. _Examples:_ `cell.style = { font_color: "FF0000" }` (v0.1) → `cell.style = { font: { color: "FFFF0000" } }` (v0.2). `cell.style = { number_format: "0.00%" }` (v0.1) → `cell.style = { num_fmt: "0.00%" }` (v0.2; `num_fmt` is now an inline string, not a nested object).
 
-**Defaults:** A cell with no `Style` set has index 0 in the written `cellXfs` table — the built-in "Normal" style. `cell.style = null` (or `undefined` from JS) also resolves to Normal.
+**Defaults:** A cell with no `Style` set has index 0 in the written `cellXfs` table — the built-in "Normal" style. `cell.style = null | undefined | {}` all resolve to Normal (index 0).
+
+**Setter validation (canonical serialization rules):**
+- **Color strings** (used in `Font.color`, `Fill.foreground`, `Fill.background`, `BorderStyle.color`): must match `^[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$` (6-char RGB or 8-char ARGB). Setter rejects invalid input with `ExcelrsError::InvalidStyle`. Valid input is uppercased before storing; the canonical form is uppercase ARGB or RGB.
+- **Float fields** (`Font.size`): must be finite. Setter rejects `NaN` and `±Infinity` with `ExcelrsError::InvalidStyle`.
+- **String fields** (`Font.name`, `Fill.pattern`): preserved as-given. `name: "calibri"` and `name: "Calibri"` produce distinct dedup keys. Excel preserves case in font names.
+- **Optional fields** (`Some(v)` vs `None`): `None` is omitted from the canonical key. `Some("")` is a real value (empty string), distinct from `None`. Callers must explicitly set `null`/`undefined` to clear a field.
+- **`Fill.kind`**: must be one of `"none" | "solid" | "pattern"`. Any other value (including `"gradient"`) is rejected with `ExcelrsError::InvalidStyle("fill.kind: '<x>' is not supported in v0.2.0")` (see §9.2.1).
+- **`BorderStyle.style`**: must be one of `"thin" | "medium" | "thick" | "dashed" | "dotted" | "double"`. `"none"` is rejected; use `Border.top = None` (or omit the field from the JS object) to express "no top border."
+
+These rules ensure the canonical key passed to `BTreeMap` is deterministic and the dedup is round-trip stable (see ADR-27).
 
 ### 6.9 Style setter API contract
 
 Style is set via a JS object through the napi v3 `serde-json` feature (same pattern as the `cell.value` setter, ADR-13/ADR-26). Rust receives `serde_json::Value` and dispatches on JSON shape.
+
+**Semantics: full-replace.** Assigning a new style object **replaces** the existing style entirely. To preserve specific fields (e.g. keep the fill but change the font), read the current style first and spread it:
+```typescript
+const current = cell.style ?? {};
+cell.style = { ...current, font: { bold: true } };
+```
+Full-replace matches the OOXML `cellXfs` model (a style is a complete XF record) and exceljs's setter behavior. Partial-merge would silently drop fields the user didn't think to repeat.
 
 **Cell-level setter:**
 
@@ -882,7 +893,7 @@ cell.style = {
     bottom: { style: "thin", color: "FF000000" },
   },
   alignment: { horizontal: "center", vertical: "middle" },
-  num_fmt:   { format_code: "0.00%" },
+  num_fmt:   "0.00%",
 };
 // cell.style = null | undefined | {}  → resets to Normal (index 0)
 ```
@@ -1158,7 +1169,7 @@ cargo fmt -- --check
 
 **In scope:**
 
-- Full style model in Rust: `Font`, `Fill`, `Border`, `Alignment`, `NumFmt`, `Style` (§6.8).
+- Full style model in Rust: `Font`, `Fill`, `Border`, `Alignment`, plus inline `num_fmt: string` on `Style` (§6.8).
 - `xl/styles.xml` writer: dedup `numFmts`/`fonts`/`fills`/`borders`, emit `cellXfs` index. `BTreeMap`-backed dedup (ADR-27) for stable round-trip indices.
 - `s="<idx>"` attribute on every written `<c>` element pointing into `cellXfs`.
 - Style CRUD: `cell.style = { font, fill, border, alignment, num_fmt }` via `serde_json::Value` setter (§6.9, ADR-26).
@@ -1166,7 +1177,7 @@ cargo fmt -- --check
 - ARGB hex (8 chars) or RGB hex (6 chars) colors. No theme color references in v0.2.0 (ADR-25).
 - Built-in "Normal" remains index 0. `cell.style = null` resets to Normal.
 
-**Explicitly out of scope (deferred to v0.3.0, see §9.2.1):** five items — style read, `Worksheet.mergeCells`, cell-level interior mutability, `Hyperlink`/`RichText`/`Merge` CellValue variants, theme color references.
+**Explicitly out of scope (deferred to v0.3.0, see §9.2.1):** eight items — style read, `Worksheet.mergeCells`, cell-level interior mutability, `Hyperlink`/`RichText`/`Merge` CellValue variants, theme color references, row-level style, gradient fills, diagonal borders.
 
 **Test budget:** ~22 new Rust + ~13 new JS. v0.1.0 ends at 73+42; v0.2.0 targets **95+55** total.
 
@@ -1181,8 +1192,11 @@ The following items are explicitly **deferred from v0.2.0 to keep the v0.2.0 rel
 | Cell-level interior mutability | `Arc<Mutex<Cell>>` in `Worksheet.rows` so `ws.getCell('A1').value = 42` persists. v0.1.0/0.2.0 keep clone-on-read; row-level interior mutability is already in place. |
 | `Hyperlink`, `RichText`, `Merge` CellValue variants | Reintroduce with reader/writer support. `Hyperlink` needs `<hyperlinks>` part; `RichText` needs inline string parsing on read; `Merge` is a marker set when a cell is inside a merge range. |
 | Theme color references | Reading `xl/theme1.xml` and supporting `theme="N"` color refs. ARGB hex covers the common case. |
+| Row-level style (`Row.style: Option<Style>`) | OOXML's `<row>` element supports `s="<idx>"` for row-default formatting. Adds one field on `Row`, one writer branch, and a reader parse. v0.2.0 ships cell + column style only. |
+| Gradient fills (`Fill.kind = "gradient"`) | OOXML's `<gradientFill>` requires angle and color-stop fields. Rare in spreadsheet styling. Rejected in v0.2.0 setter with `ExcelrsError::InvalidStyle`. |
+| Diagonal borders (`Border.diagonal` + `diagonalUp` + `diagonalDown`) | OOXML's `<border>` element supports a diagonal line used for strike-through cells. Three more fields; <1% of real-world styling. |
 
-These five items are the headline v0.3.0 work units. They were intentionally not bundled into v0.2.0.
+These eight items are the headline v0.3.0 work units. They were intentionally not bundled into v0.2.0.
 
 ### 9.3 Future (v0.3+)
 
@@ -1247,7 +1261,7 @@ These are capabilities that excelrs will **not** implement, now or in the future
 | 24 | Style write-only in v0.2.0 | Reading styles adds calamine style-table parsing complexity on the reader path. v0.2.0 ships a clean writer; reading a styled `.xlsx` yields Normal-only on round-trip. This is the headline v0.2.0 scope decision (Q1.a). |
 | 25 | ARGB / RGB hex colors, no theme colors | Theme color references require parsing `xl/theme1.xml` and resolving `theme="N"` indexes. ARGB hex strings (8 chars) and RGB hex strings (6 chars) cover 95%+ of real-world styling. Theme support deferred to v0.3.0 (Q3). |
 | 26 | Style setter via `serde_json::Value` | Same napi v3 `serde-json` feature pattern as the `cell.value` setter (ADR-13). JS objects nest freely; Rust dispatches by JSON shape (one `set_style` method, branches on object presence). Avoids the napi-rs enum variant-data limitation (ADR-11). |
-| 27 | `cellXfs` dedup with `BTreeMap` for stable indices | `HashMap` dedup produces non-deterministic style indices across runs (Rust `HashMap` randomization), breaking round-trip stability. `BTreeMap` (sorted by serialized style fields) gives stable indices and deterministic output. |
+| 27 | `cellXfs` dedup with `BTreeMap` for stable indices | `HashMap` dedup produces non-deterministic style indices across runs (Rust `HashMap` randomization), breaking round-trip stability. `BTreeMap` (sorted by canonical serialized form per §6.8 "Setter validation" rules) gives stable indices and deterministic output. **Alternatives considered:** (1) explicit per-cell index — rejected, requires pre-allocating XF slots before the dedup pass; (2) sorted `Vec<Style>` with binary-search insertion — rejected, O(n²) on large style sets. |
 
 ## Appendix B: exceljs → excelrs API Mapping
 
@@ -1273,4 +1287,4 @@ These are capabilities that excelrs will **not** implement, now or in the future
 
 ---
 
-*Spec version: 1.3.1. Last updated: 2026-06-29. v0.2.0 (Style System, write-only) — see §6.8, §6.9, §9.2; deferred items in §9.2.1. Updated per architect-reviewer feedback: §6.2 Cell.style type fix, §4.4 numFmt ID range, §6.7 Column.style, §9.2 cross-ref cleanup, setter semantics, migration example.*
+*Spec version: 1.3.2. Last updated: 2026-06-29. v0.2.0 (Style System, write-only) — see §6.8, §6.9, §9.2; deferred items in §9.2.1. v1.3.2: design decisions A-H resolved — NumFmt inlined as `Option<String>`, Fill.kind enum tightened, BorderStyle.style tightened, setter full-replace, reader path simplified, row-level style / gradient fills / diagonal borders deferred to v0.3.0, ADR-27 expanded with alternatives + canonical serialization rules.*
