@@ -101,7 +101,7 @@ excelrs/
 User builds Workbook in JS (calls Rust methods via napi)
   → Rust model types hold all state
   → writer::xlsx traverses model
-  → style table built (dedup numFmts/fonts/fills/borders → cellXfs index; v0.2.0+)
+  → style table built (dedup numFmts/fonts/fills/borders → cellXfs index; v0.2.0+; dedup keyed by serialized style fields per ADR-27)
   → quick-xml generates OOXML XML fragments
   → zip crate assembles .xlsx archive (in-memory)
   → Buffer returned to JS
@@ -190,7 +190,7 @@ model/
    - Handle shared strings: deduplicate strings, write `xl/sharedStrings.xml`, reference by index.
    - Write formula strings (preserved, not evaluated) as `<f>SUM(A1:A10)</f>`.
    - **Shared formula handling in v0.1:** If calamine read shared formulas, excelrs writes them as regular formulas (expanded per-cell). This preserves the formula text but may produce larger files than the original.
-6. Write `xl/styles.xml` with the style table. **v0.2.0+:** dedup `numFmts`/`fonts`/`fills`/`borders`, emit `cellXfs` index (see §6.8). Each written cell `<c>` gets an `s="<idx>"` attribute pointing into `cellXfs`. **v0.1:** table is minimal ("Normal" only).
+6. Write `xl/styles.xml`. **v0.2.0+:** full style table — dedup `numFmts`/`fonts`/`fills`/`borders`, emit `cellXfs` index (see §6.8, ADR-27). Each written cell `<c>` gets an `s="<idx>"` attribute pointing into `cellXfs` (Normal = index 0). **v0.1 (historical):** table is minimal ("Normal" only); see v0.1 limitations list below.
 7. Write `xl/_rels/workbook.xml.rels` with worksheet relationships.
 8. Flush zip to `Vec<u8>`.
 
@@ -244,7 +244,7 @@ Errors are annotated with `#[napi]` for automatic JS `Error` subclass mapping.
 
 Excel stores dates as numeric serial values with a number format ID (numFmtId) indicating date formatting. The mapping involves several edge cases:
 
-- **Built-in date format IDs:** 14–22, 27–36, 45–47, 50–81 (varying by locale). Custom date formats have IDs ≥ 164.
+- **Built-in date format IDs:** 14–22, 27–36, 45–47. **Excel/calamine-extended built-ins:** 50–81 (varying by locale). **Custom date formats** start at ID 82 (standard custom range 82–163; IDs ≥ 164 are non-standard).
 - **1900 vs 1904 date system:** Workbooks can use either the 1900 date system (default on Windows) or the 1904 date system (default on Mac). The system is stored in workbook metadata and affects serial number interpretation. calamine handles this via `ExcelDateTime`, but the `types.rs` conversion functions must be aware of the system.
 - **1900 leap-year bug:** Excel's 1900 date system includes Feb 29, 1900 (serial day 60), which does not exist in the Gregorian calendar. This means serial dates < 61 in the 1900 system need a 1-day offset adjustment. calamine's `ExcelDateTime` handles this internally. excelrs should delegate to calamine's conversion for read and use a verified offset-correct implementation for write.
 - **Fractional serials:** Fractional parts represent time (0.5 = noon, 0.75 = 6 PM).
@@ -530,7 +530,7 @@ pub struct Cell {
     pub col: u32,                 // 1-indexed
     value: CellValue,             // current value (private field, accessed via getter/setter)
     pub formula: Option<String>,  // read-only formula string
-    pub style: Option<CellStyle>, // v0.1: parsed but not writable
+    pub style: Option<Style>,     // v0.2.0+: writable via cell.style = {...}; null/undefined/{} → Normal
 }
 
 #[napi]
@@ -772,6 +772,7 @@ pub struct Column {
     pub key: String,
     pub width: f64,          // characters
     pub hidden: bool,
+    pub style: Option<Style>, // v0.2.0+: column-level default style (see §6.9)
 }
 
 #[napi]
@@ -862,7 +863,7 @@ pub struct Style {
 }
 ```
 
-**v0.1→v0.2.0 migration note:** The v0.1 spec had a single `CellStyle` struct with 10 `Option` fields (lines replaced in v1.3.0). It is removed in v0.2.0 in favor of the nested `Style` aggregate. Any v0.1 callers using `cell.style` (read-only) must migrate.
+**v0.1→v0.2.0 migration note:** The v0.1 spec had a single `CellStyle` struct with 10 `Option` fields (replaced in v1.3.0; see §6.2 `Cell.style` which now uses the nested `Style` aggregate). It is removed in v0.2.0 in favor of the nested `Style` aggregate. Any v0.1 callers using `cell.style` (read-only) must migrate. _Example:_ `cell.style = { font_color: "FF0000" }` (v0.1) → `cell.style = { font: { color: "FFFF0000" } }` (v0.2).
 
 **Defaults:** A cell with no `Style` set has index 0 in the written `cellXfs` table — the built-in "Normal" style. `cell.style = null` (or `undefined` from JS) also resolves to Normal.
 
@@ -883,7 +884,7 @@ cell.style = {
   alignment: { horizontal: "center", vertical: "middle" },
   num_fmt:   { format_code: "0.00%" },
 };
-// cell.style = null  → resets to Normal (index 0)
+// cell.style = null | undefined | {}  → resets to Normal (index 0)
 ```
 
 **Column-level setter:**
@@ -1165,13 +1166,7 @@ cargo fmt -- --check
 - ARGB hex (8 chars) or RGB hex (6 chars) colors. No theme color references in v0.2.0 (ADR-25).
 - Built-in "Normal" remains index 0. `cell.style = null` resets to Normal.
 
-**Explicitly out of scope (deferred to v0.3.0, see §9.2.1):**
-
-- Style *read* — styled `.xlsx` is read as Normal-only on round-trip.
-- `Worksheet.mergeCells`.
-- Cell-level interior mutability for `cell.value = 42` to persist on a `getCell` clone.
-- `Hyperlink`, `RichText`, `Merge` CellValue variants reintroduced with reader/writer support.
-- Theme color references.
+**Explicitly out of scope (deferred to v0.3.0, see §9.2.1):** five items — style read, `Worksheet.mergeCells`, cell-level interior mutability, `Hyperlink`/`RichText`/`Merge` CellValue variants, theme color references.
 
 **Test budget:** ~22 new Rust + ~13 new JS. v0.1.0 ends at 73+42; v0.2.0 targets **95+55** total.
 
@@ -1242,7 +1237,7 @@ These are capabilities that excelrs will **not** implement, now or in the future
 | 14 | napi v3 + `@napi-rs/cli@3` | The scaffold generates v3 crates with `serde-json` feature support and modern build tooling |
 | 15 | calamine `worksheet_formula()` for formula read | calamine stores formulas in a separate API from cell data. Reader must call both `rows()` and `formulas()` iterators |
 | 16 | `<dimension ref="..."/>` in sheet XML | Declares used cell range for correct Excel scroll bounds and print area |
-| 17 | Remove `Merge`, `RichText`, `Hyperlink`, `SharedString` from v0.1 | Dead variants — no calamine source for them on the read path, no write support in v0.1. Reintroduce in v0.2 |
+| 17 | Remove `Merge`, `RichText`, `Hyperlink`, `SharedString` from v0.1 | Dead variants — no calamine source for them on the read path, no write support in v0.1. Reintroduce in v0.3.0 (deferred per §9.2.1) |
 | 18 | Date detection via calamine's built-in date format IDs | IDs 14–22 and custom formats with date tokens; calamine handles 1900/1904 system internally |
 | 19 | Clone-on-read mutation semantics (known limitation) | napi-rs passes structs by value/clone. `ws.getCell('A1').value = 42` mutates a clone. v0.1 uses explicit setters; v0.2 explores interior mutability |
 | 20 | `#[napi(constructor)]` on `new()` methods | napi v3 requires `#[napi(constructor)]` explicitly on constructor functions, not bare `#[napi]` |
@@ -1278,4 +1273,4 @@ These are capabilities that excelrs will **not** implement, now or in the future
 
 ---
 
-*Spec version: 1.3.0. Last updated: 2026-06-29. v0.2.0 (Style System, write-only) — see §6.8, §6.9, §9.2; deferred items in §9.2.1.*
+*Spec version: 1.3.1. Last updated: 2026-06-29. v0.2.0 (Style System, write-only) — see §6.8, §6.9, §9.2; deferred items in §9.2.1. Updated per architect-reviewer feedback: §6.2 Cell.style type fix, §4.4 numFmt ID range, §6.7 Column.style, §9.2 cross-ref cleanup, setter semantics, migration example.*

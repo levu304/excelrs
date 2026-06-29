@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- v0.2.0 style system: write-only support for Font, Fill, Border, Alignment, NumFmt
+  (spec v1.3.0, ADR-24–27). Style CRUD via `cell.style = {...}` and `column.style = {...}`.
+  ARGB / RGB hex colors only. Round-trip of styled `.xlsx` reads as Normal (style read
+  deferred to v0.3.0).
+
 ### Fixed
 
 - `CHANGELOG.md` v0.1.0 entry incorrectly stated "4 targets (macOS ARM64/Intel, Linux x64, Windows x64)". The actual release.yml matrix is **3 targets** (macOS ARM64, Linux x64, Windows x64). The `x86_64-apple-darwin` (Intel macOS) target was dropped during release prep when the `macos-13` runner hung. Historical release note is left intact for record; the spec at the time matched the build configuration.
