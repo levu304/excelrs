@@ -5,6 +5,9 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
@@ -68,6 +71,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          registry-url: 'https://registry.npmjs.org'
 
       - name: Install pnpm
         run: corepack enable
@@ -80,10 +84,22 @@ jobs:
         with:
           path: npm
 
-      - name: Publish to npm
+      - name: Create platform package.json files
         run: |
-          npx napi prepublish -t npm/
-          npm publish --access public
+          VERSION=$(node -p "require('./package.json').version")
+          cat > npm/darwin-arm64/package.json <<EOF
+          { "name": "excelrs-darwin-arm64", "version": "$VERSION", "os": ["darwin"], "cpu": ["arm64"], "main": "excelrs.darwin-arm64.node" }
+          EOF
+          cat > npm/linux-x64-gnu/package.json <<EOF
+          { "name": "excelrs-linux-x64-gnu", "version": "$VERSION", "os": ["linux"], "cpu": ["x64"], "main": "excelrs.linux-x64-gnu.node" }
+          EOF
+          cat > npm/win32-x64-msvc/package.json <<EOF
+          { "name": "excelrs-win32-x64-msvc", "version": "$VERSION", "os": ["win32"], "cpu": ["x64"], "main": "excelrs.win32-x64-msvc.node" }
+          EOF
+          echo "Platform package.json files created"
+
+      - name: Publish to npm
+        run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
