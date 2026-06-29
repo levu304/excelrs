@@ -1,0 +1,22 @@
+# Rust
+target/
+Cargo.lock
+
+# Node
+node_modules/
+.pnpm-store/
+
+# Native binaries
+*.node
+npm/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Environment
+.env
+.env.local
