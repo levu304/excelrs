@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `CHANGELOG.md` v0.1.0 entry incorrectly stated "4 targets (macOS ARM64/Intel, Linux x64, Windows x64)". The actual release.yml matrix is **3 targets** (macOS ARM64, Linux x64, Windows x64). The `x86_64-apple-darwin` (Intel macOS) target was dropped during release prep when the `macos-13` runner hung. Historical release note is left intact for record; the spec at the time matched the build configuration.
+
+### Changed
+
+- Spec referred to the npm package as `excelrs` (unscoped). npm rejected the unscoped name as too similar to the existing `exceljs` package. The published v0.1.0 artifact is `@levu304/excelrs` (scoped). spec.md has been updated to use the scoped name in all install/import/require references; Cargo crate name `excelrs-core`, binary pattern `excelrs.<platform>.node`, and CLI argument `new excelrs` are intentionally untouched.
+
 ## [0.1.0] — 2026-06-29
 
 ### Added

@@ -1,6 +1,6 @@
 # excelrs — Specification
 
-**Package:** `excelrs` (unscoped npm)
+**Package:** `@levu304/excelrs` (scoped npm — unscoped name `excelrs` blocked as too similar to `exceljs`)
 **Version:** 0.1.0 (MVP)
 **License:** MIT OR Apache-2.0
 **Author:** Solo maintainer (open source)
@@ -14,7 +14,7 @@
 
 **Target audience:** Node.js developers who use exceljs today and want 10–100x speed on XLSX read/write without rewriting their application code. Also: developers building spreadsheet tooling who need a type-safe, async-native API.
 
-**npm package:** `excelrs`. Install: `npm install excelrs`.
+**npm package:** `@levu304/excelrs`. Install: `npm install @levu304/excelrs`.
 
 ---
 
@@ -24,7 +24,7 @@ These principles govern every design decision. They are non-negotiable.
 
 ### P1. Drop-in API compatibility
 
-The TypeScript public API mirrors exceljs. Method names, signatures, and the conceptual model (Workbook → Worksheet → Row → Cell) remain identical. A user should be able to swap `require('exceljs')` for `require('excelrs')` with minimal code changes. Breaking changes from exceljs behavior must be justified and documented.
+The TypeScript public API mirrors exceljs. Method names, signatures, and the conceptual model (Workbook → Worksheet → Row → Cell) remain identical. A user should be able to swap `require('exceljs')` for `require('@levu304/excelrs')` with minimal code changes. Breaking changes from exceljs behavior must be justified and documented.
 
 ### P2. Rust core, minimal JS glue
 
@@ -444,7 +444,7 @@ type CellValueInput = any;
 ### 5.7 Usage example
 
 ```typescript
-import { Workbook } from 'excelrs';
+import { Workbook } from '@levu304/excelrs';
 
 // Read
 const wb = new Workbook();
@@ -948,7 +948,7 @@ npm test
 # Run benchmarks (Rust core)
 cargo bench
 
-# Run benchmarks (JS end-to-end, exceljs vs excelrs)
+# Run benchmarks (JS end-to-end, exceljs vs @levu304/excelrs)
 npm run bench
 
 # Type-check TypeScript declarations
@@ -971,8 +971,8 @@ cargo fmt -- --check
 - `mockall` for mocking the reader/writer in unit tests.
 
 **JS end-to-end tests (`vitest`):**
-- Round-trip: write with excelrs → read with exceljs, verify identical content.
-- Round-trip: write with exceljs → read with excelrs, verify identical content.
+- Round-trip: write with `@levu304/excelrs` → read with exceljs, verify identical content.
+- Round-trip: write with exceljs → read with `@levu304/excelrs`, verify identical content.
 - Ported exceljs test cases (~300 files, incrementally).
 - Performance: baseline timing on known fixtures.
 
@@ -984,8 +984,8 @@ cargo fmt -- --check
 - Cell access: random access patterns (getCell on a 100K-cell worksheet).
 
 **JS benchmarks (vitest bench or mitata):**
-- Compare exceljs `readFile` vs excelrs `readFile` on the same file.
-- Compare exceljs `writeFile` vs excelrs `writeFile` for the same data.
+- Compare exceljs `readFile` vs `@levu304/excelrs` `readFile` on the same file.
+- Compare exceljs `writeFile` vs `@levu304/excelrs` `writeFile` for the same data.
 - Report: wall-clock time, memory usage (RSS), file size.
 
 ---
@@ -1028,7 +1028,7 @@ cargo fmt -- --check
 
 - [ ] All Rust tests pass (`cargo test`).
 - [ ] All JS tests pass (`npm test`).
-- [ ] Round-trip tests pass (exceljs ↔ excelrs).
+- [ ] Round-trip tests pass (exceljs ↔ `@levu304/excelrs`).
 - [ ] `cargo clippy -- -D warnings` clean.
 - [ ] `cargo fmt -- --check` clean.
 - [ ] TypeScript declarations compile (`tsc --noEmit`).
@@ -1150,13 +1150,13 @@ These are capabilities that excelrs will **not** implement, now or in the future
 
 ## Appendix B: exceljs → excelrs API Mapping
 
-| exceljs method | excelrs equivalent | Notes |
+| exceljs method | `@levu304/excelrs` equivalent | Notes |
 |---------------|-------------------|-------|
 | `new Workbook()` | `new Workbook()` | Identical |
 | `wb.addWorksheet(name)` | `wb.addWorksheet(name)` | Identical |
 | `wb.getWorksheet(name)` | `wb.getWorksheet(name)` | Identical |
-| `wb.xlsx.readFile(path)` | `wb.xlsx.readFile(path)` | Returns Promise in excelrs (async Rust) |
-| `wb.xlsx.writeFile(path)` | `wb.xlsx.writeFile(path)` | Returns Promise in excelrs |
+| `wb.xlsx.readFile(path)` | `wb.xlsx.readFile(path)` | Returns Promise in `@levu304/excelrs` (async Rust) |
+| `wb.xlsx.writeFile(path)` | `wb.xlsx.writeFile(path)` | Returns Promise in `@levu304/excelrs` |
 | `ws.getCell('A1')` | `ws.getCell('A1')` | JS glue dispatches to `getCellByAddress` |
 | `ws.getCell(1, 2)` | `ws.getCell(1, 2)` | JS glue dispatches to `getCellByRC` |
 | `ws.getRow(1)` | `ws.getRow(1)` | Identical |
@@ -1164,7 +1164,7 @@ These are capabilities that excelrs will **not** implement, now or in the future
 | `cell.value = 42` | `cell.value = 42` | Rust setter takes `serde_json::Value`, dispatches to Number variant |
 | `cell.value = 'hello'` | `cell.value = 'hello'` | Rust setter dispatches to String variant |
 | `cell.value = true` | `cell.value = true` | Rust setter dispatches to Boolean variant |
-| `cell.formula` | `cell.formula` | Read-only in v0.1 for excelrs |
+| `cell.formula` | `cell.formula` | Read-only in v0.1 for `@levu304/excelrs` |
 | `row.height` | `row.height` | Via `#[napi(getter)]` / `#[napi(setter)]` |
 | `row.getCell(3)` | `row.getCell(3)` | JS glue dispatches to `getCellByColNum` |
 | `row.getCell('C')` | `row.getCell('C')` | JS glue dispatches to `getCellByColLetter` |
