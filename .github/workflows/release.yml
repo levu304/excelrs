@@ -14,14 +14,11 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-14
             npm_dir: darwin-arm64
-          - target: x86_64-apple-darwin
-            os: macos-13
-            npm_dir: darwin-x64
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-22.04
             npm_dir: linux-x64-gnu
           - target: x86_64-pc-windows-msvc
-            os: windows-2019
+            os: windows-2022
             npm_dir: win32-x64-msvc
 
     runs-on: ${{ matrix.os }}
