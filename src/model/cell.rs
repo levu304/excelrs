@@ -301,4 +301,25 @@ mod tests {
         assert_eq!(Cell::compute_address(42, 27), "AA42");
         assert_eq!(Cell::compute_address(1048576, 16384), "XFD1048576");
     }
+
+    #[test]
+    fn test_set_style_raw_sets_style_field() {
+        use crate::model::style::{Font, Style};
+
+        let mut cell = Cell::new("A1".into(), 1, 1);
+        let style = Style {
+            font: Some(Font {
+                bold: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        cell.set_style_raw(Some(style));
+        assert!(cell.style().is_some());
+        assert_eq!(cell.style().unwrap().font.unwrap().bold, Some(true));
+
+        // Clear with None
+        cell.set_style_raw(None);
+        assert!(cell.style().is_none());
+    }
 }

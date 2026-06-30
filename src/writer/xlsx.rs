@@ -958,6 +958,50 @@ mod tests {
         }
     }
 
+    // -- End-to-end style round-trip (v0.3.1) --
+
+    /// Write a styled cell with excelrs, read back with excelrs, verify the
+    /// style is preserved end-to-end.  Catches the "napi setter unreachable"
+    /// class of bug for non-alignment styles and any silent style loss
+    /// through the write-then-parse cycle.
+    #[test]
+    fn test_round_trip_style_preserved() {
+        use crate::reader::xlsx::workbook_inner_from_bytes;
+
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("RoundTrip".into());
+        ws.add_row(vec![serde_json::json!("hello")]);
+
+        // Set a style with font + fill + alignment + num_fmt
+        ws.set_cell_style(
+            1,
+            1,
+            serde_json::json!({
+                "font": { "bold": true, "color": "FFFF0000" },
+                "fill": { "kind": "solid", "foreground": "FFFFFF00" },
+                "alignment": { "horizontal": "center", "vertical": "middle" },
+                "num_fmt": "0.00%",
+            }),
+        )
+        .unwrap();
+
+        // Write with excelrs
+        let bytes = crate::writer::xlsx::workbook_to_bytes(&inner).unwrap();
+
+        // Read back with excelrs
+        let read_back = workbook_inner_from_bytes(&bytes).unwrap();
+        let ws = &read_back.worksheets()[0];
+        let cell = ws.get_cell_by_address("A1".into());
+
+        let style = cell.style().expect("style should round-trip");
+        assert_eq!(style.font.as_ref().unwrap().bold, Some(true));
+        assert_eq!(style.font.as_ref().unwrap().color.as_deref(), Some("FFFF0000"));
+        assert_eq!(style.fill.as_ref().unwrap().foreground.as_deref(), Some("FFFFFF00"));
+        assert_eq!(style.alignment.as_ref().unwrap().horizontal.as_deref(), Some("center"));
+        assert_eq!(style.alignment.as_ref().unwrap().vertical.as_deref(), Some("middle"));
+        assert_eq!(style.num_fmt.as_deref(), Some("0.00%"));
+    }
+
     fn build_test_worksheet() -> Worksheet {
         let mut ws = Worksheet::new("Test".into());
         ws.set_id(1);
