@@ -16,8 +16,12 @@
 //! - **Gradient fills** (`<gradientFill>`)      → skipped (fill = default Normal).
 //! - **Diagonal borders** (diagonal/diagonalUp/diagonalDown) → skipped.
 //! - **cellStyleXfs inheritance** (xfId)        → ignored; cellXf is used
-//!   directly. The `applyX` flags are respected: a field with `applyX="0"`
-//!   (or index 0, per our writer's convention) maps to `None` in the `Style`.
+//!   directly.  The `applyX` flags *are* parsed and honored: when `applyFont="0"`
+//!   (or any `applyX="0"`), the corresponding sub-field resolves to `None`
+//!   (the caller inherits the Normal default).  cellStyleXfs parent values
+//!   are *not* inherited — `applyX="0"` means "Normal for this field".
+//! - **Built-in numFmt IDs** (0-49) resolve via a static table
+//!   ([`BUILTIN_NUMFMTS`]); custom IDs (≥164) via the `<numFmts>` element.
 //! - **cellStyleXfs**, **dxfs**, **tableStyles**, **extLst** → skipped.
 
 use std::collections::HashMap;
@@ -32,6 +36,31 @@ use crate::types;
 
 /// Per-sheet cell-to-style-index map: (1-indexed row, col) → cellXfs index.
 pub type SheetStyleMap = HashMap<(u32, u32), u32>;
+
+/// Built-in numFmt codes 0-49 from ECMA-376 §18.8.30.
+/// A common subset covering the most-used Excel format codes.
+/// Custom format codes (≥164) are parsed from `<numFmts>` at runtime.
+const BUILTIN_NUMFMTS: &[(u32, &str)] = &[
+    (0, "General"),
+    (1, "0"),
+    (2, "0.00"),
+    (3, "#,##0"),
+    (4, "#,##0.00"),
+    (9, "0%"),
+    (10, "0.00%"),
+    (11, "0.00E+00"),
+    (12, "# ?/?"),
+    (13, "# ??/??"),
+    (14, "m/d/yyyy"),
+    (15, "d-mmm-yy"),
+    (16, "d-mmm"),
+    (17, "mmm-yy"),
+    (18, "h:mm AM/PM"),
+    (19, "h:mm:ss AM/PM"),
+    (20, "h:mm"),
+    (21, "h:mm:ss"),
+    (22, "m/d/yyyy h:mm"),
+];
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -52,12 +81,21 @@ pub struct StyleTableRead {
 }
 
 /// One parsed `<xf>` record from `<cellXfs>`.
+///
+/// `apply_*` fields are `Option<bool>` because the attribute may be absent from
+/// the XML (OOXML default is "1" when omitted).  `resolve_style` uses
+/// `unwrap_or(true)` to implement the OOXML default.
 #[derive(Debug, Clone, Default)]
 pub struct ParsedCellXf {
     pub num_fmt_id: u32,
     pub font_id: u32,
     pub fill_id: u32,
     pub border_id: u32,
+    pub apply_number_format: Option<bool>,
+    pub apply_font: Option<bool>,
+    pub apply_fill: Option<bool>,
+    pub apply_border: Option<bool>,
+    pub apply_alignment: Option<bool>,
     pub alignment: Option<Alignment>,
 }
 
@@ -75,35 +113,55 @@ impl StyleTableRead {
 
     /// Resolve a cellXfs index (the `s` attribute on a `<c>` element) to a
     /// model `Style`.  Returns `None` (Normal) for index 0 or out-of-range.
+    ///
+    /// Built-in numFmt IDs (0-49) are resolved from a static table
+    /// ([`BUILTIN_NUMFMTS`]); custom IDs (≥164) are looked up from
+    /// `self.num_fmts`.  Each sub-field is gated by its `applyX` flag:
+    /// when `applyX` is `0` (or missing, defaulting to true) the field
+    /// resolves to `None` — the caller inherits the Normal default.
     pub fn resolve_style(&self, xf_index: u32) -> Option<Style> {
         if xf_index == 0 {
             return None;
         }
         let xf = self.cell_xfs.get(xf_index as usize)?;
 
-        let num_fmt = if xf.num_fmt_id != 0 {
-            self.num_fmts
-                .iter()
-                .find(|(id, _)| *id == xf.num_fmt_id)
-                .map(|(_, code)| code.clone())
+        // numFmt: applyNumberFormat gate, then built-in table or custom lookup
+        let num_fmt = if xf.apply_number_format.unwrap_or(true) && xf.num_fmt_id != 0 {
+            if xf.num_fmt_id < 50 {
+                BUILTIN_NUMFMTS
+                    .iter()
+                    .find(|(id, _)| *id == xf.num_fmt_id)
+                    .map(|(_, code)| code.to_string())
+            } else {
+                self.num_fmts
+                    .iter()
+                    .find(|(id, _)| *id == xf.num_fmt_id)
+                    .map(|(_, code)| code.clone())
+            }
         } else {
             None
         };
 
-        let font = if xf.font_id != 0 {
+        let font = if xf.apply_font.unwrap_or(true) && xf.font_id != 0 {
             self.fonts.get(xf.font_id as usize).cloned()
         } else {
             None
         };
 
-        let fill = if xf.fill_id != 0 {
+        let fill = if xf.apply_fill.unwrap_or(true) && xf.fill_id != 0 {
             self.fills.get(xf.fill_id as usize).cloned()
         } else {
             None
         };
 
-        let border = if xf.border_id != 0 {
+        let border = if xf.apply_border.unwrap_or(true) && xf.border_id != 0 {
             self.borders.get(xf.border_id as usize).cloned()
+        } else {
+            None
+        };
+
+        let alignment = if xf.apply_alignment.unwrap_or(true) {
+            xf.alignment.clone()
         } else {
             None
         };
@@ -112,7 +170,7 @@ impl StyleTableRead {
             font,
             fill,
             border,
-            alignment: xf.alignment.clone(),
+            alignment,
             num_fmt,
         };
 
@@ -364,6 +422,11 @@ pub fn parse_style_table(data: &[u8]) -> Result<StyleTableRead, ExcelrsError> {
                             font_id: u32_attr(&attrs, b"fontId").unwrap_or(0),
                             fill_id: u32_attr(&attrs, b"fillId").unwrap_or(0),
                             border_id: u32_attr(&attrs, b"borderId").unwrap_or(0),
+                            apply_number_format: bool_attr(&attrs, b"applyNumberFormat"),
+                            apply_font: bool_attr(&attrs, b"applyFont"),
+                            apply_fill: bool_attr(&attrs, b"applyFill"),
+                            apply_border: bool_attr(&attrs, b"applyBorder"),
+                            apply_alignment: bool_attr(&attrs, b"applyAlignment"),
                             alignment: None,
                         };
                         // Push immediately (handles both Start and Empty events).
@@ -830,6 +893,247 @@ mod tests {
         assert!(map.get(&(2, 2)).is_none()); // B2 = no s attr, excluded
     }
 
-    // -- parse_styles_and_sheet_maps integration test --
-    // (requires building a real .xlsx; tested via the writer round-trip)
+    // -- Built-in numFmt resolution (Bug 1) --
+
+    fn make_builtin_numfmt_table(numfmt_id: u32) -> StyleTableRead {
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+  <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+  <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+  <cellXfs count="2">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="{numfmt_id}" fontId="0" fillId="0" borderId="0" xfId="0"/>
+  </cellXfs>
+</styleSheet>"#
+        );
+        parse_style_table(xml.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn test_resolve_builtin_numfmt_14() {
+        let table = make_builtin_numfmt_table(14);
+        let style = table.resolve_style(1).unwrap();
+        assert_eq!(style.num_fmt.as_deref(), Some("m/d/yyyy"));
+    }
+
+    #[test]
+    fn test_resolve_builtin_numfmt_9() {
+        let table = make_builtin_numfmt_table(9);
+        let style = table.resolve_style(1).unwrap();
+        assert_eq!(style.num_fmt.as_deref(), Some("0%"));
+    }
+
+    #[test]
+    fn test_resolve_builtin_numfmt_22() {
+        let table = make_builtin_numfmt_table(22);
+        let style = table.resolve_style(1).unwrap();
+        assert_eq!(style.num_fmt.as_deref(), Some("m/d/yyyy h:mm"));
+    }
+
+    #[test]
+    fn test_resolve_builtin_numfmt_10() {
+        let table = make_builtin_numfmt_table(10);
+        let style = table.resolve_style(1).unwrap();
+        assert_eq!(style.num_fmt.as_deref(), Some("0.00%"));
+    }
+
+    #[test]
+    fn test_resolve_numfmt_zero_is_none() {
+        let table = make_builtin_numfmt_table(0);
+        let style = table.resolve_style(1);
+        assert!(style.is_none()); // numFmtId=0 → whole style empty → None
+    }
+
+    #[test]
+    fn test_resolve_unknown_custom_numfmt_is_none() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+          <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+          <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+          <cellXfs count="2">
+            <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+            <xf numFmtId="999" fontId="0" fillId="0" borderId="0" xfId="0"/>
+          </cellXfs>
+        </styleSheet>"#;
+        let table = parse_style_table(xml).unwrap();
+        let style = table.resolve_style(1);
+        assert!(style.is_none()); // 999 doesn't exist → whole style empty → None
+    }
+
+    // -- applyX flag tests (Bug 2) --
+
+    #[test]
+    fn test_apply_number_format_zero_ignores_numfmt() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+          <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+          <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+          <numFmts count="1"><numFmt numFmtId="164" formatCode="0.00%"/></numFmts>
+          <cellXfs count="2">
+            <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+            <xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="0"/>
+          </cellXfs>
+        </styleSheet>"#;
+        let table = parse_style_table(xml).unwrap();
+        // numFmt was the only non-default field; suppressing it leaves
+        // an empty style → resolve_style returns None (Normal).
+        assert!(
+            table.resolve_style(1).is_none(),
+            "applyNumberFormat=0 makes the whole style Normal"
+        );
+    }
+
+    #[test]
+    fn test_apply_font_zero_ignores_font() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <fonts count="2">
+            <font><sz val="11"/><name val="Calibri"/></font>
+            <font><b/><sz val="14"/></font>
+          </fonts>
+          <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+          <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+          <cellXfs count="2">
+            <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+            <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="0"/>
+          </cellXfs>
+        </styleSheet>"#;
+        let table = parse_style_table(xml).unwrap();
+        // Font was the only non-default field; suppressing it → Normal.
+        assert!(
+            table.resolve_style(1).is_none(),
+            "applyFont=0 makes the whole style Normal"
+        );
+    }
+
+    #[test]
+    fn test_apply_fill_zero_ignores_fill() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+          <fills count="2">
+            <fill><patternFill patternType="none"/></fill>
+            <fill><patternFill patternType="solid"><fgColor rgb="FFFF0000"/></patternFill></fill>
+          </fills>
+          <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+          <cellXfs count="2">
+            <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+            <xf numFmtId="0" fontId="0" fillId="1" borderId="0" xfId="0" applyFill="0"/>
+          </cellXfs>
+        </styleSheet>"#;
+        let table = parse_style_table(xml).unwrap();
+        // Fill was the only non-default field; suppressing it → Normal.
+        assert!(
+            table.resolve_style(1).is_none(),
+            "applyFill=0 makes the whole style Normal"
+        );
+    }
+
+    #[test]
+    fn test_apply_border_zero_ignores_border() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+          <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+          <borders count="2">
+            <border><left/><right/><top/><bottom/><diagonal/></border>
+            <border><top style="thin"><color rgb="FF000000"/></top></border>
+          </borders>
+          <cellXfs count="2">
+            <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+            <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="0"/>
+          </cellXfs>
+        </styleSheet>"#;
+        let table = parse_style_table(xml).unwrap();
+        // Border was the only non-default field; suppressing it leaves an
+        // empty style → resolve_style returns None (Normal).
+        assert!(
+            table.resolve_style(1).is_none(),
+            "applyBorder=0 makes the whole style Normal"
+        );
+    }
+
+    #[test]
+    fn test_apply_alignment_zero_ignores_alignment() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+          <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+          <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+          <cellXfs count="2">
+            <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+            <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="0">
+              <alignment horizontal="center" vertical="center"/>
+            </xf>
+          </cellXfs>
+        </styleSheet>"#;
+        let table = parse_style_table(xml).unwrap();
+        // Alignment was the only non-default field; suppressing it leaves an
+        // empty style → resolve_style returns None (Normal).
+        assert!(
+            table.resolve_style(1).is_none(),
+            "applyAlignment=0 makes the whole style Normal"
+        );
+    }
+
+    /// applyFont=0 with a persistent fill: font is suppressed but fill is kept.
+    /// This proves the applyX mechanism works without collapsing the whole style.
+    #[test]
+    fn test_apply_font_zero_keeps_other_fields() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <fonts count="2">
+            <font><sz val="11"/><name val="Calibri"/></font>
+            <font><b/><sz val="14"/></font>
+          </fonts>
+          <fills count="2">
+            <fill><patternFill patternType="none"/></fill>
+            <fill><patternFill patternType="solid"><fgColor rgb="FF0000FF"/></patternFill></fill>
+          </fills>
+          <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+          <cellXfs count="2">
+            <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+            <xf numFmtId="0" fontId="1" fillId="1" borderId="0" xfId="0" applyFont="0"/>
+          </cellXfs>
+        </styleSheet>"#;
+        let table = parse_style_table(xml).unwrap();
+        let style = table.resolve_style(1).unwrap();
+        // applyFont=0 → font suppressed
+        assert!(style.font.is_none(), "applyFont=0 should suppress font");
+        // Fill is still applied independently
+        assert!(style.fill.is_some(), "fill should survive applyFont=0");
+        assert_eq!(style.fill.as_ref().unwrap().foreground.as_deref(), Some("FF0000FF"));
+    }
+
+    /// No applyX attributes: defaults to true for all fields.
+    #[test]
+    fn test_apply_x_default_is_true() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <fonts count="2">
+            <font><sz val="11"/><name val="Calibri"/></font>
+            <font><b/><sz val="14"/></font>
+          </fonts>
+          <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+          <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+          <cellXfs count="2">
+            <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+            <xf numFmtId="14" fontId="1" fillId="0" borderId="0" xfId="0"/>
+          </cellXfs>
+        </styleSheet>"#;
+        let table = parse_style_table(xml).unwrap();
+        let style = table.resolve_style(1).unwrap();
+        // No applyX attrs → defaults are true → both fields present
+        assert_eq!(
+            style.num_fmt.as_deref(),
+            Some("m/d/yyyy"),
+            "built-in 14 resolves with no applyNumberFormat attr"
+        );
+        assert!(style.font.is_some(), "fontId=1 resolves with no applyFont attr");
+        assert_eq!(style.font.as_ref().unwrap().bold, Some(true));
+    }
 }
