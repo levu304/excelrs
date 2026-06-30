@@ -19,7 +19,7 @@
 //! - No custom styles beyond Normal
 //! - Formula cells write the formula string but no cached value
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{Seek, Write};
 use std::path::Path;
 
@@ -83,16 +83,13 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
         let all_styles: Vec<Option<Style>> = worksheets
             .iter()
             .flat_map(|ws| {
-                let col_styles: Vec<Option<Style>> = ws
-                    .columns()
-                    .iter()
-                    .map(|c| c.style())
-                    .collect();
+                let col_style_map: BTreeMap<u32, Option<Style>> =
+                    ws.columns().iter().map(|c| (c.col_num(), c.style())).collect();
                 ws.rows().into_iter().flat_map(move |row| {
-                    let col_styles = &col_styles;
+                    let col_style_map = &col_style_map;
                     row.sorted_cells()
                         .into_iter()
-                        .map(move |c| effective_cell_style_with_fallback(c, col_styles))
+                        .map(move |c| effective_cell_style_with_fallback(c, col_style_map))
                         .collect::<Vec<_>>()
                 })
             })
@@ -107,13 +104,8 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
             start_file(&mut zip, &sheet_path)?;
 
             // Count cells in this worksheet for the style-indices slice
-            let cell_count: usize = ws
-                .rows()
-                .iter()
-                .map(|r| r.sorted_cells().len())
-                .sum();
-            let ws_indices =
-                &style_table.cell_indices[style_offset..style_offset + cell_count];
+            let cell_count: usize = ws.rows().iter().map(|r| r.sorted_cells().len()).sum();
+            let ws_indices = &style_table.cell_indices[style_offset..style_offset + cell_count];
             style_offset += cell_count;
 
             write_sheet_xml(&mut zip, ws, &string_indices, ws_indices)?;
@@ -158,18 +150,12 @@ fn make_default_sheet() -> Worksheet {
 /// Resolve the effective style for a cell: cell-style wins; else column-style;
 /// else None (Normal).
 ///
-/// Takes a pre-computed column-styles slice to avoid calling `ws.columns()`
-/// per cell.  `col_styles[i]` is the style for column `i+1` (A=0, B=1, …).
-fn effective_cell_style_with_fallback(
-    cell: &Cell,
-    col_styles: &[Option<Style>],
-) -> Option<Style> {
+/// Takes a pre-computed column-style map keyed by `col_num` to avoid calling
+/// `ws.columns()` per cell.  Cells with no matching column entry get Normal.
+fn effective_cell_style_with_fallback(cell: &Cell, col_style_map: &BTreeMap<u32, Option<Style>>) -> Option<Style> {
     match cell.style() {
         Some(s) if !s.is_empty() => Some(s),
-        _ => {
-            let idx = (cell.col() as usize).checked_sub(1)?;
-            col_styles.get(idx)?.clone()
-        }
+        _ => col_style_map.get(&cell.col()).and_then(|s| s.clone()),
     }
 }
 
@@ -353,8 +339,6 @@ fn write_shared_strings<W: Write>(w: &mut W, string_table: &[String]) -> Result<
     Ok(())
 }
 
-
-
 // ---------------------------------------------------------------------------
 // xl/worksheets/sheet{N}.xml
 // ---------------------------------------------------------------------------
@@ -379,18 +363,34 @@ fn write_sheet_xml<W: Write>(
 
     write_str(w, "<sheetData>")?;
 
+    write_cells_with_styles(w, ws, string_indices, style_indices)?;
+
+    write_str(w, "</sheetData>")?;
+    write_str(w, "</worksheet>")?;
+    Ok(())
+}
+
+/// Iterate a worksheet's cells in order, writing `<row>` and `<c>` elements
+/// with the style index at each cell.  Returns `Err` if `style_indices` is
+/// exhausted before the last cell (writer internal invariant).
+fn write_cells_with_styles<W: Write>(
+    w: &mut W,
+    ws: &Worksheet,
+    string_indices: &HashMap<String, u32>,
+    style_indices: &[u32],
+) -> Result<(), ExcelrsError> {
     let mut si = style_indices.iter();
     for row in ws.rows() {
         write!(w, r#"<row r="{}">"#, row.number())?;
         for cell in row.sorted_cells() {
-            let style_idx = *si.next().expect("style_indices length matches cell count");
+            let style_idx = si
+                .next()
+                .copied()
+                .ok_or_else(|| ExcelrsError::Write("style_indices exhausted mid-sheet (writer bug)".into()))?;
             write_cell_xml(w, cell, string_indices, style_idx)?;
         }
         write_str(w, "</row>")?;
     }
-
-    write_str(w, "</sheetData>")?;
-    write_str(w, "</worksheet>")?;
     Ok(())
 }
 
@@ -527,6 +527,7 @@ mod tests {
     use crate::model::cell::CellValue;
     use crate::model::workbook_inner::WorkbookInner;
     use crate::reader::xlsx::workbook_inner_from_bytes;
+    use std::collections::BTreeMap;
 
     // ---- writer unit tests ----
 
@@ -763,18 +764,15 @@ mod tests {
     /// Direct test: write_cell_xml emits s="<idx>" with the given style index.
     #[test]
     fn test_write_cell_xml_emits_style_index() {
-        use std::collections::HashMap;
         use crate::model::cell::Cell;
+        use std::collections::HashMap;
 
         let mut buf = Vec::new();
         let cell = Cell::new("A1".into(), 1, 1);
         let string_indices = HashMap::new();
         write_cell_xml(&mut buf, &cell, &string_indices, 42).unwrap();
         let xml = String::from_utf8(buf).unwrap();
-        assert!(
-            xml.contains(r#"s="42""#),
-            "expected s=\"42\" in cell XML, got: {xml}"
-        );
+        assert!(xml.contains(r#"s="42""#), "expected s=\"42\" in cell XML, got: {xml}");
     }
 
     // ---- A7: column-level style fallback tests ----
@@ -810,10 +808,14 @@ mod tests {
             .unwrap();
 
         // Both cells share the same column-style cellXfs (index 1)
-        assert!(sheet_xml.contains(r#"<c r="A1" s="1""#),
-            "A1 should get column-style s=1");
-        assert!(sheet_xml.contains(r#"<c r="A2" s="1""#),
-            "A2 should get column-style s=1, same index as A1");
+        assert!(
+            sheet_xml.contains(r#"<c r="A1" s="1""#),
+            "A1 should get column-style s=1"
+        );
+        assert!(
+            sheet_xml.contains(r#"<c r="A2" s="1""#),
+            "A2 should get column-style s=1, same index as A1"
+        );
     }
 
     /// Cell-level style overrides column-level style — verify via helper directly.
@@ -821,18 +823,19 @@ mod tests {
     fn test_effective_cell_style_precedence() {
         use crate::model::style::{Font, Style};
 
-        // Cell with explicit style → wins over column
-        let mut cell = Cell::new("A1".into(), 1, 1);
-        cell.set_style(serde_json::json!({ "num_fmt": "0.00%" }))
-            .unwrap();
-        let col_styles = vec![Some(Style {
+        let bold_col = Style {
             font: Some(Font {
                 bold: Some(true),
                 ..Default::default()
             }),
             ..Default::default()
-        })];
-        let result = effective_cell_style_with_fallback(&cell, &col_styles);
+        };
+
+        // Cell with explicit style → wins over column
+        let mut cell = Cell::new("A1".into(), 1, 1);
+        cell.set_style(serde_json::json!({ "num_fmt": "0.00%" })).unwrap();
+        let map: BTreeMap<u32, Option<Style>> = [(1u32, Some(bold_col.clone()))].into();
+        let result = effective_cell_style_with_fallback(&cell, &map);
         assert!(result.is_some());
         assert_eq!(
             result.unwrap().num_fmt,
@@ -840,9 +843,9 @@ mod tests {
             "cell style should win over column style"
         );
 
-        // Cell with no style → falls back to column
+        // Cell with no style → falls back to column (col=1 matched)
         let cell2 = Cell::new("A1".into(), 1, 1);
-        let result2 = effective_cell_style_with_fallback(&cell2, &col_styles);
+        let result2 = effective_cell_style_with_fallback(&cell2, &map);
         assert!(result2.is_some());
         assert_eq!(
             result2.unwrap().font.unwrap().bold,
@@ -852,14 +855,14 @@ mod tests {
 
         // Cell with no style, column also no style → None (Normal)
         let cell3 = Cell::new("A1".into(), 1, 1);
-        let empty_cols = vec![None; 3];
-        let result3 = effective_cell_style_with_fallback(&cell3, &empty_cols);
+        let empty_map: BTreeMap<u32, Option<Style>> = [(1u32, None), (2u32, None), (3u32, None)].into();
+        let result3 = effective_cell_style_with_fallback(&cell3, &empty_map);
         assert!(result3.is_none(), "no cell or column style → Normal");
 
-        // Cell in column 2, only column 0 defined → no column fallback
+        // Cell in column 2, but map only has col_num=1 → no column fallback
         let cell4 = Cell::new("B1".into(), 1, 2);
-        let result4 = effective_cell_style_with_fallback(&cell4, &col_styles);
-        assert!(result4.is_none(), "column 1 out of range → no fallback");
+        let result4 = effective_cell_style_with_fallback(&cell4, &map);
+        assert!(result4.is_none(), "column 2 missing from map → no fallback");
     }
 
     /// Cell outside the defined columns array gets Normal (s="0").
@@ -933,9 +936,29 @@ mod tests {
         assert!(sheet_xml.contains(r#"<c r="A1" s="0""#));
     }
 
-    // ---- helpers ----
+    /// write_cells_with_styles returns Err when style_indices is exhausted early.
+    #[test]
+    fn test_write_cells_with_styles_exhaustion() {
+        let ws = build_test_worksheet();
 
-    fn build_test_workbook() -> WorkbookInner {
+        let mut buf = Vec::new();
+        let string_indices = HashMap::new();
+        // worksheet has 4 cells but slice is length 1 → should error, not panic
+        let style_indices = vec![0u32];
+
+        let result = write_cells_with_styles(&mut buf, &ws, &string_indices, &style_indices);
+        match result {
+            Err(ExcelrsError::Write(msg)) => {
+                assert!(
+                    msg.contains("style_indices"),
+                    "error should mention style_indices: {msg}"
+                );
+            }
+            other => panic!("expected Err(Write), got {other:?}"),
+        }
+    }
+
+    fn build_test_worksheet() -> Worksheet {
         let mut ws = Worksheet::new("Test".into());
         ws.set_id(1);
         ws.add_row(vec![
@@ -944,9 +967,14 @@ mod tests {
             serde_json::json!(true),
         ]);
         ws.add_row(vec![serde_json::json!(std::f64::consts::PI)]);
+        ws
+    }
 
+    // ---- helpers ----
+
+    fn build_test_workbook() -> WorkbookInner {
         let mut inner = WorkbookInner::new();
-        inner.worksheets.push(ws);
+        inner.worksheets.push(build_test_worksheet());
         inner
     }
 

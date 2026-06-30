@@ -231,23 +231,56 @@ impl Worksheet {
     /// Accepts a JS array of column descriptor objects (header, key, width,
     /// optional hidden, optional style). Parsed server-side via serde.
     /// Each column's style is validated (matching `Cell.set_style` behavior).
+    /// Replace the worksheet's column definitions.
+    ///
+    /// Accepts a JS array of column descriptor objects (header, key, width,
+    /// optional `colNum`, optional hidden, optional style).  Parsed
+    /// server-side via serde.  Each column's style is validated (matching
+    /// `Cell.set_style` behavior).
+    ///
+    /// `colNum` auto-assignment: columns with `colNum == 0` get sequential
+    /// numbers starting from `max(existing col_nums) + 1` (or 1 if none
+    /// exist).  Duplicate `colNum` values across the same call are rejected.
     #[napi]
     pub fn set_columns(&self, cols: serde_json::Value) -> napi::Result<()> {
         let mut columns = self.columns.lock().expect("Worksheet columns lock poisoned");
-        let mut parsed: Vec<Column> = serde_json::from_value(cols).map_err(|e| {
-            napi::Error::from_reason(format!("columns: {e}"))
-        })?;
+        let mut parsed: Vec<Column> =
+            serde_json::from_value(cols).map_err(|e| napi::Error::from_reason(format!("columns: {e}")))?;
+
+        // Auto-assign col_num for entries with col_num == 0
+        let next_col_num = columns.iter().map(|c| c.col_num()).max().unwrap_or(0) + 1;
+        let mut next_auto = next_col_num;
+        for col in &mut parsed {
+            if col.col_num() == 0 {
+                col.col_num = next_auto;
+                next_auto += 1;
+            }
+        }
+
+        // Validate uniqueness
+        {
+            let mut seen = std::collections::HashSet::new();
+            for col in &parsed {
+                if !seen.insert(col.col_num()) {
+                    return Err(napi::Error::from_reason(format!(
+                        "columns: duplicate col_num {}",
+                        col.col_num()
+                    )));
+                }
+            }
+        }
+
+        // Validate styles (matching Cell.set_style behavior)
         for col in &mut parsed {
             if let Some(style) = col.style.take() {
                 if style.is_empty() {
                     col.style = None;
                 } else {
-                    col.style = Some(style.validate().map_err(|e| {
-                        napi::Error::from_reason(e.to_string())
-                    })?);
+                    col.style = Some(style.validate().map_err(|e| napi::Error::from_reason(e.to_string()))?);
                 }
             }
         }
+
         *columns = parsed;
         Ok(())
     }

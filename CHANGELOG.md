@@ -7,26 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-06-30
+
 ### Added
 
-- v0.2.0 style system: write-only support for Font, Fill, Border, Alignment, and inline
-  `num_fmt: string` (spec v1.3.0, ADR-24–27). Style CRUD via `cell.style = {...}` and
-  `column.style = {...}` with full-replace semantics. ARGB / RGB hex colors only. Setter
-  validates color format, float finiteness, and enum values (Fill.kind, BorderStyle.style).
-  Round-trip of styled `.xlsx` reads as Normal (style read deferred to v0.3.0).
+- **Style system (write only)** — Font, Fill, Border, Alignment, and inline `num_fmt: string`
+  on cells and columns. Full style table emitted in `xl/styles.xml` via `BTreeMap`-backed
+  dedup of `numFmts`, `fonts`, `fills`, `borders`, and `cellXfs` (spec v1.3.0, ADR-24–27).
+  2,294 lines added across 18 files (src/writer/styles.rs: 716 lines — the largest single
+  file; src/model/style.rs: 603 lines; 14 new JS integration tests).
+- `cell.style = {...}` — getter/setter with full-replace semantics (§6.9). Validates
+  ARGB/RGB hex, float finiteness, and enum values (Fill.kind, BorderStyle.style).
+- `column.style = {...}` — column-level default style (§6.9). Cells in a column without
+  an explicit `cell.style` inherit the column's style at write time.
+- `Worksheet.setColumns(cols)` — bulk set column definitions + styles from JS.
+  Columns use `Arc<Mutex<Vec<Column>>>` for interior mutability (shared across clones).
+- `Worksheet.setCellStyle(row, col, style)` — bypasses clone-on-read to set a cell's
+  style through the locked row map.
+- `s="<idx>"` attribute on every written `<c>` element (§4.3 step 6). Normal is always
+  seeded at index 0. The `s` attribute is never omitted.
+- 56 JS integration tests (42 v0.1.0 baseline + 14 new) — round-trip verified against
+  exceljs v4.4.0 as the reference reader.
 
 ### Fixed
 
 - `CHANGELOG.md` v0.1.0 entry incorrectly stated "4 targets (macOS ARM64/Intel, Linux x64, Windows x64)". The actual release.yml matrix is **3 targets** (macOS ARM64, Linux x64, Windows x64). The `x86_64-apple-darwin` (Intel macOS) target was dropped during release prep when the `macos-13` runner hung. Historical release note is left intact for record; the spec at the time matched the build configuration.
+- Writer emitted `<fgColor>` / `<bgColor>` as siblings of `<patternFill>` instead of children. Exceljs silently ignored fills with this OOXML-invalid structure.
+- Writer emitted `argb` as the color attribute; OOXML uses `rgb`. Exceljs reads `rgb`.
+- `cellXfs` entries were missing `applyFont`/`applyFill`/`applyBorder` flags. Without these, exceljs ignores the referenced sub-table indices.
+- Writer applied the wrong column's style to cells when `setColumns` was used with
+  sparse column definitions (e.g. defining only column B caused A1 to inherit
+  B's style). Fixed by adding `col_num: u32` to `Column` and looking up by column
+  number. Sparse usage requires the new `colNum` field; contiguous A/B/C usage
+  is unchanged. C14 added.
+- `si.next().expect(...)` replaced with typed `ExcelrsError::Write` on
+  style-indices exhaustion. The writer now surfaces this internal invariant
+  failure as a normal error instead of crashing the process. Unit test added.
 
 ### Changed
 
-- Spec v1.3.3 (post-architect-reviewer pass-2): `num_fmt: Some("")` is rejected with `ExcelrsError::InvalidStyle`; common-pitfall callout added to §6.9 documenting that `cell.style = {...}` silently replaces the column-level style (use spread to merge); §4.3 step 6 now states explicitly that every written `<c>` carries `s="<idx>"` including Normal at `s="0"` (the `s` attribute is never omitted); §1 Overview gains a one-line v0.2.0 scope callout pointing to §6.8/§6.9/§9.2; §9.2 test budget is broken down per task; §9.2 notes that the v0.2.0 README update is part of A11 release prep. No code-affecting changes; all nits are doc-quality only.
-- Spec referred to the npm package as `excelrs` (unscoped). npm rejected the unscoped name as too similar to the existing `exceljs` package. The published v0.1.0 artifact is `@levu304/excelrs` (scoped). spec.md has been updated to use the scoped name in all install/import/require references; Cargo crate name `excelrs-core`, binary pattern `excelrs.<platform>.node`, and CLI argument `new excelrs` are intentionally untouched.
+- **Alignment emission deferred to v0.3.0** (spec §9.2.1). The `alignment` field is
+  accepted in the `Style` JS object with full validation, but is silently dropped at
+  write time — `<alignment>` child emission in `cellXf` requires non-trivial layout
+  work and is bundled with the broader style-read v0.3.0 scope.
+- Spec v1.3.3 (post-architect-reviewer pass-2): `num_fmt: Some("")` is rejected with
+  `ExcelrsError::InvalidStyle`; common-pitfall callout added to §6.9; §4.3 step 6
+  now states explicitly that every written `<c>` carries `s="<idx>"`; §9.2 test budget
+  broken down per task; §9.2 notes that the v0.2.0 README update is part of this
+  release. No code-affecting changes.
+- Spec referred to the npm package as `excelrs` (unscoped). The published v0.1.0
+  artifact is `@levu304/excelrs` (scoped). spec.md has been updated everywhere.
+- Columns use `Arc<Mutex<Vec<Column>>>` for interior mutability (matching the existing
+  `Arc<Mutex<BTreeMap<u32, Row>>>` pattern for rows).
+
+### Notes
+
+- v0.2.0 ships with **3 platform targets**: macOS ARM64, Linux x64, Windows x64.
+  The `x86_64-apple-darwin` (Intel macOS) target was dropped in v0.1.0 release prep.
+- See spec §9.2 for the full v0.3.0 deferred items list and §9.2.1 for rationale.
 
 ### Security
 
-- Rotated the `NPM_TOKEN` GitHub secret after two legacy publish tokens were inadvertently exposed in the project's chat history. The replacement token has the same scopes (publish to `@levu304/*`, 2FA-bypass). The previous tokens have been revoked on npmjs.com and are no longer valid. No release was published between exposure and rotation; the only artifact published to npm under `@levu304/excelrs` remains v0.1.0.
+- Rotated the `NPM_TOKEN` GitHub secret after two legacy publish tokens were inadvertently
+  exposed in the project's chat history. The replacement token has the same scopes (publish
+  to `@levu304/*`, 2FA-bypass). No release was published between exposure and rotation.
 
 ## [0.1.0] — 2026-06-29
 
@@ -52,4 +96,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and GitHub Release on tag push.
 - **Documentation** — complete spec (docs/spec.md), two architecture reviews.
 
+[0.2.0]: https://github.com/levu304/excelrs/releases/tag/v0.2.0
 [0.1.0]: https://github.com/levu304/excelrs/releases/tag/v0.1.0

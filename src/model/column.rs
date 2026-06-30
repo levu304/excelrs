@@ -7,10 +7,19 @@ use crate::model::style::Style;
 /// A column definition in a worksheet.
 ///
 /// Mirrors the exceljs `Column` interface: header label, data-binding key,
-/// width in characters, and hidden state.
+/// width in characters, hidden state, and 1-indexed column number.
+///
+/// `col_num` is optional in the JS object. If omitted (or 0), it is
+/// auto-assigned sequentially in `Worksheet.setColumns` — the first column
+/// gets col_num=1, the second gets col_num=2, etc.  For sparse definitions
+/// (e.g. defining only column B), pass the `colNum` explicitly.
 #[napi]
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct Column {
+    /// 1-indexed column number. 0 = auto-assign in set_columns.
+    /// Accepts `colNum` (camelCase) from JS serde deserialization.
+    #[serde(default, rename = "colNum")]
+    pub(crate) col_num: u32,
     header: String,
     key: String,
     width: f64,
@@ -27,6 +36,7 @@ impl Column {
     #[napi(constructor)]
     pub fn new(header: String, key: String, width: f64) -> Self {
         Column {
+            col_num: 0,
             header,
             key,
             width,
@@ -88,16 +98,19 @@ impl Column {
             self.style = None;
             return Ok(());
         }
-        let style: Style = serde_json::from_value(val).map_err(|e| {
-            napi::Error::from_reason(format!("style: {e}"))
-        })?;
+        let style: Style = serde_json::from_value(val).map_err(|e| napi::Error::from_reason(format!("style: {e}")))?;
         if style.is_empty() {
             self.style = None;
             return Ok(());
         }
-        self.style = Some(style.validate().map_err(|e| {
-            napi::Error::from_reason(e.to_string())
-        })?);
+        self.style = Some(style.validate().map_err(|e| napi::Error::from_reason(e.to_string()))?);
         Ok(())
+    }
+
+    // -- col_num (read-only) --
+
+    #[napi(getter)]
+    pub fn col_num(&self) -> u32 {
+        self.col_num
     }
 }

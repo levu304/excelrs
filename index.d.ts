@@ -35,7 +35,12 @@ export declare class Cell {
  * A column definition in a worksheet.
  *
  * Mirrors the exceljs `Column` interface: header label, data-binding key,
- * width in characters, and hidden state.
+ * width in characters, hidden state, and 1-indexed column number.
+ *
+ * `col_num` is optional in the JS object. If omitted (or 0), it is
+ * auto-assigned sequentially in `Worksheet.setColumns` — the first column
+ * gets col_num=1, the second gets col_num=2, etc.  For sparse definitions
+ * (e.g. defining only column B), pass the `colNum` explicitly.
  */
 export declare class Column {
   constructor(header: string, key: string, width: number)
@@ -49,6 +54,7 @@ export declare class Column {
   set hidden(val: boolean)
   get style(): Style | null
   set style(val: any)
+  get colNum(): number
 }
 
 /**
@@ -194,6 +200,16 @@ export declare class Worksheet {
    * Accepts a JS array of column descriptor objects (header, key, width,
    * optional hidden, optional style). Parsed server-side via serde.
    * Each column's style is validated (matching `Cell.set_style` behavior).
+   * Replace the worksheet's column definitions.
+   *
+   * Accepts a JS array of column descriptor objects (header, key, width,
+   * optional `colNum`, optional hidden, optional style).  Parsed
+   * server-side via serde.  Each column's style is validated (matching
+   * `Cell.set_style` behavior).
+   *
+   * `colNum` auto-assignment: columns with `colNum == 0` get sequential
+   * numbers starting from `max(existing col_nums) + 1` (or 1 if none
+   * exist).  Duplicate `colNum` values across the same call are rejected.
    */
   setColumns(cols: any): void
 }

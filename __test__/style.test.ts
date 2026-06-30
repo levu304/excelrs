@@ -240,10 +240,32 @@ test('C13: column.style = null clears the column style', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Group D — Regression: A7 bugfix (1 test)
+// Group D — Column index fix (C14)
 // ---------------------------------------------------------------------------
 
-test('D14: Normal is always at cellXfs[0] even when no Normal cells exist', async () => {
+test('D14: column with explicit colNum applies only to that column', async () => {
+  const wb = new Workbook()
+  const ws = wb.addWorksheet('Sparse')
+  // Define only column B (colNum=2)
+  ws.setColumns([
+    { colNum: 2, header: 'B', key: 'b', width: 10, style: { font: { bold: true } } },
+  ])
+  ws.addRow(['a', 'b', 'c'])
+
+  const wbjs = await writeThenReadWithExceljs(wb)
+  const wsjs = wbjs.getWorksheet('Sparse')!
+  // A1 and C1 should be Normal (no bold)
+  expect(wsjs.getCell('A1').font?.bold).toBeFalsy()
+  expect(wsjs.getCell('C1').font?.bold).toBeFalsy()
+  // B1 should have the column's bold style
+  expect(wsjs.getCell('B1').font?.bold).toBe(true)
+})
+
+// ---------------------------------------------------------------------------
+// Group E — Regression: A7 bugfix (1 test)
+// ---------------------------------------------------------------------------
+
+test('E15: Normal is always at cellXfs[0] even when no Normal cells exist', async () => {
   const wb = new Workbook()
   const ws = wb.addWorksheet('NormalZero')
   ws.addRow(['a', 'b', 'c'])
