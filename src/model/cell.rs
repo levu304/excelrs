@@ -224,6 +224,12 @@ impl Cell {
         self.value = value;
     }
 
+    /// Internal: set the style directly (used by reader, set_columns).
+    /// Skips the serde_json::Value dispatch.
+    pub fn set_style_raw(&mut self, style: Option<Style>) {
+        self.style = style;
+    }
+
     /// Internal: set the formula string (used by reader).
     pub fn set_formula(&mut self, formula: Option<String>) {
         self.formula = formula;

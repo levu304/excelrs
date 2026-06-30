@@ -16,12 +16,14 @@
 use std::io::{Cursor, Read, Seek};
 use std::path::Path;
 
-use calamine::{open_workbook_auto, open_workbook_auto_from_rs, Data, Reader, Sheets};
+use calamine::{open_workbook_auto_from_rs, Data, Reader, Sheets};
 
 use crate::error::ExcelrsError;
 use crate::model::cell::CellValue;
 use crate::model::workbook::Workbook;
 use crate::model::workbook_inner::WorkbookInner;
+
+use super::styles::{self, SheetStyleMap, StyleTableRead};
 
 // ---------------------------------------------------------------------------
 // Public API — WorkbookInner variants (for WorkbookXlsx)
@@ -31,19 +33,26 @@ use crate::model::workbook_inner::WorkbookInner;
 ///
 /// Used internally by `WorkbookXlsx::read`.
 pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsError> {
+    // Step 1: open calamine (for sheet count + cell data)
     let cursor = Cursor::new(data.to_vec());
     let mut workbook: Sheets<_> = open_workbook_auto_from_rs(cursor)
         .map_err(|e| ExcelrsError::Parse(format!("Failed to open workbook from buffer: {e}")))?;
-    workbook_to_inner_model(&mut workbook)
+    let sheet_names = workbook.sheet_names().to_owned();
+    let sheet_count = sheet_names.len();
+
+    // Step 2: parse styles + sheet cell-style maps from the same buffer via zip
+    let (style_table, sheet_style_maps) = styles::parse_styles_and_sheet_maps(data, sheet_count)?;
+
+    // Step 3: convert calamine model → excelrs model with styles
+    workbook_to_inner_model(&mut workbook, &style_table, &sheet_style_maps)
 }
 
 /// Read an .xlsx file from disk, returning a `WorkbookInner`.
 ///
 /// Used internally by `WorkbookXlsx::readFile`.
 pub fn workbook_inner_from_path(path: &Path) -> Result<WorkbookInner, ExcelrsError> {
-    let mut workbook: Sheets<_> = open_workbook_auto(path)
-        .map_err(|e| ExcelrsError::Parse(format!("Failed to open workbook from '{:}': {e}", path.display())))?;
-    workbook_to_inner_model(&mut workbook)
+    let data = std::fs::read(path)?;
+    workbook_inner_from_bytes(&data)
 }
 
 // ---------------------------------------------------------------------------
@@ -66,14 +75,29 @@ pub fn read_from_file(path: &Path) -> Result<Workbook, ExcelrsError> {
 
 /// Convert a calamine `Sheets<R>` workbook into a `WorkbookInner`.
 ///
-/// Two-pass algorithm per sheet:
+/// Three passes per sheet:
 /// 1. **Data pass:** iterate `worksheet_range().used_cells()` → set `Cell.value`
-/// 2. **Formula pass:** iterate `worksheet_formula().used_cells()` → set `Cell.formula`
+/// 2. **Style pass:** look up cellXfs index from pre-parsed sheet-style map →
+///    resolve to `Style` → set on `Cell`
+/// 3. **Formula pass:** iterate `worksheet_formula().used_cells()` → set `Cell.formula`
 ///
-/// This separation is required because calamine stores formulas in a different
-/// data structure from cell values. If the formula API call fails, the sheet
-/// is still populated with its cell values — formulas are best-effort.
-fn workbook_to_inner_model<R: Read + Seek>(calamine_wb: &mut Sheets<R>) -> Result<WorkbookInner, ExcelrsError> {
+/// The formula pass is separate because calamine stores formulas in a different
+/// data structure from cell values.  The style pass is separate because calamine
+/// does not expose the `s` attribute on cells — styles are parsed from the zip
+/// archive directly (see [`styles::parse_sheet_cell_styles`]).
+///
+/// `sheet_style_maps` is indexed by sheet index (0-based, matching the iteration
+/// order of `calamine_wb.sheet_names()`).
+///
+/// ponytail: sheet-style-map indexing assumes sequential `sheet{N}.xml` numbering
+/// matching the workbook's sheet order.  This holds for all files we write and
+/// for most third-party files.  A correct fix would parse `xl/workbook.xml` to
+/// map rId → file number; defer that until a real-world counterexample appears.
+fn workbook_to_inner_model<R: Read + Seek>(
+    calamine_wb: &mut Sheets<R>,
+    style_table: &StyleTableRead,
+    sheet_style_maps: &[SheetStyleMap],
+) -> Result<WorkbookInner, ExcelrsError> {
     let sheet_names = calamine_wb.sheet_names().to_owned();
     let mut worksheets = Vec::with_capacity(sheet_names.len());
 
@@ -96,6 +120,15 @@ fn workbook_to_inner_model<R: Read + Seek>(calamine_wb: &mut Sheets<R>) -> Resul
                 };
                 let cell_value = map_data(cell_data);
                 ws.insert_cell_value(row, col, cell_value);
+
+                // --- Pass 2: cell style (attached during the same cell walk) ---
+                if let Some(map) = sheet_style_maps.get(id) {
+                    if let Some(&xf_idx) = map.get(&(row, col)) {
+                        if let Some(style) = style_table.resolve_style(xf_idx) {
+                            ws.insert_cell_style(row, col, style);
+                        }
+                    }
+                }
             }
         }
 
