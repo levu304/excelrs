@@ -107,7 +107,17 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish to npm (main package)
-        run: npm publish --access public
+        run: |
+          node -e "
+            const pkg = require('./package.json');
+            pkg.optionalDependencies = {
+              '@levu304/excelrs-darwin-arm64': pkg.version,
+              '@levu304/excelrs-linux-x64-gnu': pkg.version,
+              '@levu304/excelrs-win32-x64-msvc': pkg.version
+            };
+            require('fs').writeFileSync('./package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+          npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
