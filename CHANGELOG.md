@@ -25,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   archive for `xl/styles.xml` and per-sheet `s="N"` attributes, merged at
   cell-creation time. cellStyleXfs inheritance is deferred (v0.3.0 uses cellXf
   directly); theme colors and gradient fills are silently skipped.
-- 131 Rust tests (was 127) + 60 JS tests (was 57) = **191 total**.
+- 146 Rust tests (was 127, +15 in PR #2 review follow-up) + 60 JS tests (was 57) = **206 total**.
 
 ### Changed
 
@@ -36,6 +36,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docs/spec.md` §9.2.1: Removed "Style *read*" and "Alignment emission (writer)"
   rows from the deferred-items table. Updated §1 to v0.3.0 scope. Added
   vertical middle→center mapping note to §6.8.
+
+### Fixed
+
+- **Built-in numFmt IDs 0-49 now resolve to format codes** — `resolve_style`
+  matches `numFmtId < 50` against a `BUILTIN_NUMFMTS` const table (~19 entries
+  for date, percentage, currency, etc.) before falling through to custom IDs.
+  Previously all IDs < 50 silently resolved to `None`. (PR #2 review.)
+- **applyX flags now honored** — `<xf>` attributes `applyFont`, `applyFill`,
+  `applyBorder`, `applyAlignment`, and `applyNumberFormat` are parsed and gate
+  sub-field application in `resolve_style`. Previously only the `xf_index != 0`
+  check was used, causing third-party files with `applyX="0"` to incorrectly
+  apply sub-fields. (PR #2 review.)
+- **Module doc rewritten** — `src/reader/styles.rs` module doc now accurately
+  reflects that applyX flags are parsed and respected. (PR #2 review.)
 
 ## [0.2.2] — 2026-06-30
 
