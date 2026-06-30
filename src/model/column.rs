@@ -9,15 +9,17 @@ use crate::model::style::Style;
 /// Mirrors the exceljs `Column` interface: header label, data-binding key,
 /// width in characters, and hidden state.
 #[napi]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct Column {
     header: String,
     key: String,
     width: f64,
+    #[serde(default)]
     hidden: bool,
     /// Column-level style (default for cells in this column with no
     /// explicit cell-level style). Write-only in v0.2.0.
-    style: Option<Style>,
+    #[serde(default)]
+    pub(crate) style: Option<Style>,
 }
 
 #[napi]

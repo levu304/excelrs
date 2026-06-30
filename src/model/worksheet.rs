@@ -1,11 +1,12 @@
 //! Worksheet: a single sheet in a workbook, containing rows and columns.
 //!
-//! Rows use `Arc<Mutex<BTreeMap<u32, Row>>>` for **interior mutability**:
+//! Rows and columns both use `Arc<Mutex<>>` for **interior mutability**:
 //! when a `Worksheet` is cloned (which happens every time napi-rs returns
 //! one to JS), both the original and the clone share the same underlying
-//! row map.  Mutations through *any* clone propagate to the one that lives
-//! inside the `WorkbookInner` — so `ws.addRow([42])` works even when `ws`
-//! was obtained from `wb.addWorksheet("Sheet1")`.
+//! row map and column vector.  Mutations through *any* clone propagate to
+//! the one that lives inside the `WorkbookInner` — so `ws.addRow([42])` and
+//! `ws.setColumns([...])` work even when `ws` was obtained from
+//! `wb.addWorksheet("Sheet1")`.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -28,7 +29,7 @@ pub struct Worksheet {
     name: String,
     id: u32,
     rows: Arc<Mutex<BTreeMap<u32, Row>>>,
-    columns: Vec<Column>,
+    columns: Arc<Mutex<Vec<Column>>>,
 }
 
 #[napi]
@@ -39,7 +40,7 @@ impl Worksheet {
             name,
             id: 1,
             rows: Arc::new(Mutex::new(BTreeMap::new())),
-            columns: Vec::new(),
+            columns: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -212,7 +213,43 @@ impl Worksheet {
 
     #[napi(getter)]
     pub fn columns(&self) -> Vec<Column> {
-        self.columns.clone()
+        self.columns.lock().expect("Worksheet columns lock poisoned").clone()
+    }
+
+    /// Set the style of a cell at (row, col).  Bypasses clone-on-read:
+    /// the cell is mutated inside the locked row map.
+    #[napi]
+    pub fn set_cell_style(&self, row: u32, col: u32, style: serde_json::Value) -> napi::Result<()> {
+        let mut rows = self.rows.lock().expect("Worksheet rows lock poisoned");
+        let ws_row = rows.entry(row).or_insert_with(|| Row::new(row));
+        let cell = ws_row.get_or_create_cell_mut(col);
+        cell.set_style(style)
+    }
+
+    /// Replace the worksheet's column definitions.
+    ///
+    /// Accepts a JS array of column descriptor objects (header, key, width,
+    /// optional hidden, optional style). Parsed server-side via serde.
+    /// Each column's style is validated (matching `Cell.set_style` behavior).
+    #[napi]
+    pub fn set_columns(&self, cols: serde_json::Value) -> napi::Result<()> {
+        let mut columns = self.columns.lock().expect("Worksheet columns lock poisoned");
+        let mut parsed: Vec<Column> = serde_json::from_value(cols).map_err(|e| {
+            napi::Error::from_reason(format!("columns: {e}"))
+        })?;
+        for col in &mut parsed {
+            if let Some(style) = col.style.take() {
+                if style.is_empty() {
+                    col.style = None;
+                } else {
+                    col.style = Some(style.validate().map_err(|e| {
+                        napi::Error::from_reason(e.to_string())
+                    })?);
+                }
+            }
+        }
+        *columns = parsed;
+        Ok(())
     }
 }
 
@@ -228,11 +265,6 @@ impl Worksheet {
         let mut rows = self.rows.lock().expect("Worksheet rows lock poisoned");
         let ws_row = rows.entry(row).or_insert_with(|| Row::new(row));
         ws_row.set_cell_value(col, value);
-    }
-
-    /// Replace the worksheet's column definitions.
-    pub fn set_columns(&mut self, cols: Vec<Column>) {
-        self.columns = cols;
     }
 
     /// Set a formula string on a cell at (row, col) — used by the reader.

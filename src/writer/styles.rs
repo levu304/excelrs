@@ -277,7 +277,7 @@ fn emit_fonts<W: Write>(w: &mut W, fonts: &[Font]) -> Result<(), ExcelrsError> {
             write_str(w, r#"<u/>"#)?;
         }
         if let Some(ref color) = f.color {
-            write_str(w, &format!(r#"<color argb="{}"/>"#, color))?;
+            write_str(w, &format!(r#"<color rgb="{}"/>"#, color))?;
         }
         write_str(w, "</font>")?;
     }
@@ -294,13 +294,19 @@ fn emit_fills<W: Write>(w: &mut W, fills: &[Fill]) -> Result<(), ExcelrsError> {
 
     for f in fills {
         write_str(w, "<fill>")?;
-        let pattern = if f.kind == "none" { "none" } else { "solid" };
-        write_str(w, &format!(r#"<patternFill patternType="{}"/>"#, pattern))?;
-        if let Some(ref fg) = f.foreground {
-            write_str(w, &format!(r#"<fgColor argb="{}"/>"#, fg))?;
-        }
-        if let Some(ref bg) = f.background {
-            write_str(w, &format!(r#"<bgColor argb="{}"/>"#, bg))?;
+        let has_fg = f.foreground.is_some();
+        let has_bg = f.background.is_some();
+        if has_fg || has_bg {
+            write_str(w, &format!(r#"<patternFill patternType="{}">"#, f.kind))?;
+            if let Some(ref fg) = f.foreground {
+                write_str(w, &format!(r#"<fgColor rgb="{}"/>"#, fg))?;
+            }
+            if let Some(ref bg) = f.background {
+                write_str(w, &format!(r#"<bgColor rgb="{}"/>"#, bg))?;
+            }
+            write_str(w, "</patternFill>")?;
+        } else {
+            write_str(w, &format!(r#"<patternFill patternType="{}"/>"#, f.kind))?;
         }
         write_str(w, "</fill>")?;
     }
@@ -336,7 +342,7 @@ fn emit_border_side<W: Write>(
         Some(b) => {
             let style_attr = &b.style;
             let color = match &b.color {
-                Some(c) => format!(r#"<color argb="{}"/>"#, c),
+                Some(c) => format!(r#"<color rgb="{}"/>"#, c),
                 None => String::new(),
             };
             write_str(w, &format!("<{side} style=\"{style_attr}\">{color}</{side}>"))
@@ -357,6 +363,25 @@ fn emit_cell_xfs<W: Write>(
 
     for xf in cell_xfs {
         let apply_number_fmt = xf.num_fmt_id != 0 && custom_numfmt.contains(&xf.num_fmt_id);
+        let apply_font = xf.font_id != 0;
+        let apply_fill = xf.fill_id != 0;
+        let apply_border = xf.border_id != 0;
+        let apply_alignment = false; // alignment tracking deferred to v0.2.1+
+
+        // Build comma-separated list of apply-X attributes (only when true)
+        let mut apply_parts: Vec<&str> = Vec::new();
+        if apply_number_fmt { apply_parts.push(r#"applyNumberFormat="1""#); }
+        if apply_font       { apply_parts.push(r#"applyFont="1""#); }
+        if apply_fill       { apply_parts.push(r#"applyFill="1""#); }
+        if apply_border     { apply_parts.push(r#"applyBorder="1""#); }
+        if apply_alignment  { apply_parts.push(r#"applyAlignment="1""#); }
+
+        let apply_str = if apply_parts.is_empty() {
+            String::new()
+        } else {
+            format!(" {}", apply_parts.join(" "))
+        };
+
         write_str(
             w,
             &format!(
@@ -365,7 +390,7 @@ fn emit_cell_xfs<W: Write>(
                 xf.font_id,
                 xf.fill_id,
                 xf.border_id,
-                if apply_number_fmt { r#" applyNumberFormat="1""# } else { "" },
+                apply_str,
             ),
         )?;
     }
@@ -545,14 +570,14 @@ mod tests {
 
         // Verify font content
         assert!(xml.contains("<b val=\"1\"/>"));
-        assert!(xml.contains(r#"color argb="FFFF0000""#));
+        assert!(xml.contains(r#"color rgb="FFFF0000""#));
 
         // Verify fill content
-        assert!(xml.contains(r#"fgColor argb="FFFFFF00""#));
+        assert!(xml.contains(r#"fgColor rgb="FFFFFF00""#));
 
         // Verify border content
         assert!(xml.contains(r#"style="thin""#));
-        assert!(xml.contains(r#"color argb="FF000000""#));
+        assert!(xml.contains(r#"color rgb="FF000000""#));
     }
 
     /// XML output parses as valid well-formed XML with quick_xml.

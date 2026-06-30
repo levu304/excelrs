@@ -19,6 +19,16 @@ export declare class Cell {
   get row(): number
   get col(): number
   get formula(): string | null
+  /** Returns the cell's style, or `None` if Normal (index 0). */
+  get style(): Style | null
+  /**
+   * Set the cell's style from a JS object. Full-replace semantics
+   * (spec §6.9): assigning a new style replaces the existing one.
+   *
+   * - `null | undefined | {}` → resets to Normal (None).
+   * - Throws `ExcelrsError::InvalidStyle` on validation failure.
+   */
+  set style(val: any)
 }
 
 /**
@@ -37,6 +47,8 @@ export declare class Column {
   set width(val: number)
   get hidden(): boolean
   set hidden(val: boolean)
+  get style(): Style | null
+  set style(val: any)
 }
 
 /**
@@ -171,6 +183,49 @@ export declare class Worksheet {
   /** All rows with content, sorted by row number. */
   get rows(): Array<Row>
   get columns(): Array<Column>
+  /**
+   * Set the style of a cell at (row, col).  Bypasses clone-on-read:
+   * the cell is mutated inside the locked row map.
+   */
+  setCellStyle(row: number, col: number, style: any): void
+  /**
+   * Replace the worksheet's column definitions.
+   *
+   * Accepts a JS array of column descriptor objects (header, key, width,
+   * optional hidden, optional style). Parsed server-side via serde.
+   * Each column's style is validated (matching `Cell.set_style` behavior).
+   */
+  setColumns(cols: any): void
+}
+
+/** Cell content alignment and text wrapping. */
+export interface Alignment {
+  /** Horizontal: `"left"` | `"center"` | `"right"` | `"fill"` | `"justify"`. */
+  horizontal?: string
+  /** Vertical: `"top"` | `"middle"` | `"bottom"`. */
+  vertical?: string
+  wrapText?: boolean
+  indent?: number
+}
+
+/** All four cell-border sides. Each side is optional; `None` means no border. */
+export interface Border {
+  top?: BorderStyle
+  right?: BorderStyle
+  bottom?: BorderStyle
+  left?: BorderStyle
+}
+
+/** Border line style and color for one side of a cell border. */
+export interface BorderStyle {
+  /**
+   * Border style: `"thin"` | `"medium"` | `"thick"` | `"dashed"` |
+   * `"dotted"` | `"double"`. `"none"` is rejected; use `None` for
+   * the border side (e.g. `Border.top = None`) to express no border.
+   */
+  style: string
+  /** Line color (ARGB hex). Default: black (`"FF000000"` in exceljs). */
+  color?: string
 }
 
 /**
@@ -196,4 +251,52 @@ export interface CellValue {
   boolean?: boolean
   formula?: string
   errorValue?: string
+}
+
+/** Cell fill: kind, foreground, background, and pattern. */
+export interface Fill {
+  /**
+   * Fill kind: `"none"` | `"solid"` | `"pattern"`.
+   * `"gradient"` is rejected in v0.2.0 (see spec §9.2.1).
+   */
+  kind: string
+  /** Foreground color (ARGB hex). Default: None. */
+  foreground?: string
+  /** Background color (ARGB hex). Default: None. */
+  background?: string
+  /** Pattern name (for `kind="pattern"`). Default: None. */
+  pattern?: string
+}
+
+/** Font properties: name, size (points), weight, style, and color. */
+export interface Font {
+  /** Font name (e.g. "Calibri", "Arial"). Default: "Calibri". */
+  name?: string
+  /** Font size in points. Default: 11. Must be finite. */
+  size?: number
+  bold?: boolean
+  italic?: boolean
+  underline?: boolean
+  /** ARGB hex (8 chars) or RGB hex (6 chars). Default: None. */
+  color?: string
+}
+
+/**
+ * Aggregate style object. Each sub-field is optional; `None` means
+ * that aspect of formatting is left at the built-in "Normal" default.
+ *
+ * **Semantics: full-replace.** Assigning a new `Style` replaces the
+ * existing style entirely. Use the spread idiom (spec §6.9) to preserve
+ * specific fields.
+ */
+export interface Style {
+  font?: Font
+  fill?: Fill
+  border?: Border
+  alignment?: Alignment
+  /**
+   * Format code string, e.g. `"0.00%"`, `"$#,##0.00"`, `"yyyy-mm-dd"`.
+   * `None` means no format (Normal). `Some("")` is rejected.
+   */
+  numFmt?: string
 }
