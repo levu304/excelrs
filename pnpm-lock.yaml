@@ -7,16 +7,6 @@ settings:
 importers:
 
   .:
-    optionalDependencies:
-      '@levu304/excelrs-darwin-arm64':
-        specifier: 0.2.1
-        version: 0.2.1
-      '@levu304/excelrs-linux-x64-gnu':
-        specifier: 0.2.1
-        version: 0.2.1
-      '@levu304/excelrs-win32-x64-msvc':
-        specifier: 0.2.1
-        version: 0.2.1
     devDependencies:
       '@napi-rs/cli':
         specifier: ^3.2.0
@@ -184,21 +174,6 @@ packages:
 
   '@jridgewell/sourcemap-codec@1.5.5':
     resolution: {integrity: sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og==}
-
-  '@levu304/excelrs-darwin-arm64@0.2.1':
-    resolution: {integrity: sha512-GREb61pvIsPD8vblo8kljVO8F154pI3EtFeTc713hVFRIDC1uEdgTa1zVDyUvYYyt7PADUmdw2xJAWZwFftVUQ==}
-    cpu: [arm64]
-    os: [darwin]
-
-  '@levu304/excelrs-linux-x64-gnu@0.2.1':
-    resolution: {integrity: sha512-ejPNcNpPK2AsZfnlrEmnVd7V/pJuywlncxwm+hhY3hRQyeQurDNRuyLLzrg3u3orFhSVuzTRQ+M9V4fsWvW8fw==}
-    cpu: [x64]
-    os: [linux]
-
-  '@levu304/excelrs-win32-x64-msvc@0.2.1':
-    resolution: {integrity: sha512-w/4JOHi3e3Zwc7GX+y8g0lEBcr3I/uKriNIO+fNuE4YNBySXtf808fh4aE8K3cndlbTI35PtiPQBHZGhfXV3SA==}
-    cpu: [x64]
-    os: [win32]
 
   '@napi-rs/cli@3.7.2':
     resolution: {integrity: sha512-shDW0Td/XZQpP04Yy+OsMt1ILMKGGkoLcy1zVAsSAK0fLfWm0Upgkmfs/NOV2ZhMQwkgpR3ZEdyHmTwgrUDQuA==}
@@ -1491,15 +1466,6 @@ snapshots:
   '@inquirer/type@4.0.7': {}
 
   '@jridgewell/sourcemap-codec@1.5.5': {}
-
-  '@levu304/excelrs-darwin-arm64@0.2.1':
-    optional: true
-
-  '@levu304/excelrs-linux-x64-gnu@0.2.1':
-    optional: true
-
-  '@levu304/excelrs-win32-x64-msvc@0.2.1':
-    optional: true
 
   '@napi-rs/cli@3.7.2(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)':
     dependencies:
