@@ -16,6 +16,7 @@ use napi_derive::napi;
 use super::cell::{Cell, CellValue};
 use super::column::Column;
 use super::row::Row;
+use crate::model::style::Style;
 use crate::types;
 
 /// A single worksheet (sheet) in a workbook.
@@ -223,7 +224,22 @@ impl Worksheet {
         let mut rows = self.rows.lock().expect("Worksheet rows lock poisoned");
         let ws_row = rows.entry(row).or_insert_with(|| Row::new(row));
         let cell = ws_row.get_or_create_cell_mut(col);
-        cell.set_style(style)
+        // Use the raw setter to bypass the napi-rs setter codegen
+        // (#[napi(setter)] renames the function, making it unreachable
+        // when called from another Rust method).
+        if style.is_null() {
+            cell.set_style_raw(None);
+            return Ok(());
+        }
+        let parsed: crate::model::style::Style =
+            serde_json::from_value(style).map_err(|e| napi::Error::from_reason(format!("style: {e}")))?;
+        if parsed.is_empty() {
+            cell.set_style_raw(None);
+            return Ok(());
+        }
+        let validated = parsed.validate().map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        cell.set_style_raw(Some(validated));
+        Ok(())
     }
 
     /// Replace the worksheet's column definitions.
@@ -306,6 +322,14 @@ impl Worksheet {
         let ws_row = rows.entry(row).or_insert_with(|| Row::new(row));
         let cell = ws_row.get_or_create_cell_mut(col);
         cell.set_formula(Some(formula));
+    }
+
+    /// Set the style on a cell at (row, col) — used by the reader.
+    pub fn insert_cell_style(&self, row: u32, col: u32, style: Style) {
+        let mut rows = self.rows.lock().expect("Worksheet rows lock poisoned");
+        let ws_row = rows.entry(row).or_insert_with(|| Row::new(row));
+        let cell = ws_row.get_or_create_cell_mut(col);
+        cell.set_style_raw(Some(style));
     }
 }
 

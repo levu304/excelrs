@@ -224,6 +224,12 @@ impl Cell {
         self.value = value;
     }
 
+    /// Internal: set the style directly (used by reader, set_columns).
+    /// Skips the serde_json::Value dispatch.
+    pub fn set_style_raw(&mut self, style: Option<Style>) {
+        self.style = style;
+    }
+
     /// Internal: set the formula string (used by reader).
     pub fn set_formula(&mut self, formula: Option<String>) {
         self.formula = formula;
@@ -294,5 +300,26 @@ mod tests {
         assert_eq!(Cell::compute_address(1, 1), "A1");
         assert_eq!(Cell::compute_address(42, 27), "AA42");
         assert_eq!(Cell::compute_address(1048576, 16384), "XFD1048576");
+    }
+
+    #[test]
+    fn test_set_style_raw_sets_style_field() {
+        use crate::model::style::{Font, Style};
+
+        let mut cell = Cell::new("A1".into(), 1, 1);
+        let style = Style {
+            font: Some(Font {
+                bold: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        cell.set_style_raw(Some(style));
+        assert!(cell.style().is_some());
+        assert_eq!(cell.style().unwrap().font.unwrap().bold, Some(true));
+
+        // Clear with None
+        cell.set_style_raw(None);
+        assert!(cell.style().is_none());
     }
 }

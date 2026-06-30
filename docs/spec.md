@@ -16,7 +16,7 @@
 
 **npm package:** `@levu304/excelrs`. Install: `npm install @levu304/excelrs`.
 
-**v0.2.0 scope:** write-only style system (cell + column). See §6.8, §6.9, §9.2 for the full contract. Round-trip of a styled `.xlsx` drops styles; style *read* is deferred to v0.3.0.
+**v0.3.0 scope:** style read + alignment emission (writer). See §6.8, §6.9, §9.2 for the style model. Reading a styled `.xlsx` now preserves Font, Fill, Border, Alignment, and numFmt via parsed `xl/styles.xml`. Alignment is emitted as an inline `<alignment>` child of `<xf>` in `cellXfs`.
 
 ---
 
@@ -868,6 +868,7 @@ pub struct Style {
 - **Float fields** (`Font.size`): must be finite. Setter rejects `NaN` and `±Infinity` with `ExcelrsError::InvalidStyle`.
 - **String fields** (`Font.name`, `Fill.pattern`): preserved as-given. `name: "calibri"` and `name: "Calibri"` produce distinct dedup keys. Excel preserves case in font names.
 - **Optional fields** (`Some(v)` vs `None`): `None` is omitted from the canonical key. `Some("")` is a real value (empty string), distinct from `None`. Callers must explicitly set `null`/`undefined` to clear a field.
+- **Vertical alignment mapping:** The model stores `vertical: "middle"` (matching exceljs); the writer emits OOXML `vertical="center"`. The reader maps `vertical="center"` → `"middle"`. Other values (`"top"`, `"bottom"`, `"distributed"`, etc.) pass through unchanged.
 - **`Fill.kind`**: must be one of `"none" | "solid" | "pattern"`. Any other value (including `"gradient"`) is rejected with `ExcelrsError::InvalidStyle("fill.kind: '<x>' is not supported in v0.2.0")` (see §9.2.1).
 - **`BorderStyle.style`**: must be one of `"thin" | "medium" | "thick" | "dashed" | "dotted" | "double"`. `"none"` is rejected; use `Border.top = None` (or omit the field from the JS object) to express "no top border."
 - **`num_fmt`**: must be `None` or a non-empty format-code string. `Some("")` is rejected with `ExcelrsError::InvalidStyle("num_fmt: empty string is not a valid format code; use null for no format")`. In JS, set `null`/`undefined` (or omit the field) to express "no format." The format code itself is otherwise passed through unchanged to OOXML (Excel/calamine will sort it out on read).
@@ -1188,23 +1189,21 @@ cargo fmt -- --check
 
 **Release prep (A11):** `README.md` updates for v0.2.0 are part of release prep (A11), not A2–A10. The new section lists the style CRUD API with a worked example; the limitations block is updated from `No style CRUD` to `No style read (round-trip of a styled .xlsx drops styles; deferred to v0.3.0)`.
 
-### 9.2.1 v0.3.0 candidate
+### 9.2.1 v0.4.0 candidate
 
 The following items are explicitly **deferred from v0.2.0 to keep the v0.2.0 release a focused, small-scope change**. Each has a one-line rationale:
 
 | Deferred item | Rationale |
 |---------------|-----------|
-| Style *read* (parse `xl/styles.xml` on read; attach style ref to each `Cell`) | Style table parsing on the reader path adds significant complexity; v0.2.0 keeps the reader untouched. Round-trip of a styled `.xlsx` drops the styles. |
 | `Worksheet.mergeCells(range)` | Requires `<mergeCells>` element, non-master cell handling, and read-side parsing. Independent of the style system. |
 | Cell-level interior mutability | `Arc<Mutex<Cell>>` in `Worksheet.rows` so `ws.getCell('A1').value = 42` persists. v0.1.0/0.2.0 keep clone-on-read; row-level interior mutability is already in place. |
 | `Hyperlink`, `RichText`, `Merge` CellValue variants | Reintroduce with reader/writer support. `Hyperlink` needs `<hyperlinks>` part; `RichText` needs inline string parsing on read; `Merge` is a marker set when a cell is inside a merge range. |
 | Theme color references | Reading `xl/theme1.xml` and supporting `theme="N"` color refs. ARGB hex covers the common case. |
-| Row-level style (`Row.style: Option<Style>`) | OOXML's `<row>` element supports `s="<idx>"` for row-default formatting. Adds one field on `Row`, one writer branch, and a reader parse. v0.2.0 ships cell + column style only. |
+| Row-level style (`Row.style: Option<Style>`) | OOXML's `<row>` element supports `s="<idx>"` for row-default formatting. Adds one field on `Row`, one writer branch, and a reader parse. Currently shipped: cell + column style only. |
 | Gradient fills (`Fill.kind = "gradient"`) | OOXML's `<gradientFill>` requires angle and color-stop fields. Rare in spreadsheet styling. Rejected in v0.2.0 setter with `ExcelrsError::InvalidStyle`. |
 | Diagonal borders (`Border.diagonal` + `diagonalUp` + `diagonalDown`) | OOXML's `<border>` element supports a diagonal line used for strike-through cells. Three more fields; <1% of real-world styling. |
-| Alignment emission (writer) | Writer-side `<alignment>` child in `cellXf` requires non-trivial layout work. The `alignment` field is accepted in the `Style` JS object with full validation but silently dropped at write time. Reader-side support is bundled with the broader style-read v0.3.0 work. |
 
-These nine items are the headline v0.3.0 work units. They were intentionally not bundled into v0.2.0.
+These seven items are the headline v0.4.0 work units.
 
 ### 9.3 Future (v0.3+)
 
@@ -1295,4 +1294,4 @@ These are capabilities that excelrs will **not** implement, now or in the future
 
 ---
 
-*Spec version: 1.3.3. Last updated: 2026-06-29. v0.2.0 (Style System, write-only) — see §6.8, §6.9, §9.2; deferred items in §9.2.1. v1.3.3: review nits folded in — `num_fmt: Some("")` rejected, cell/column merge pitfall called out, `s="0"` always written for Normal, §1 v0.2.0 scope callout, test budget breakdown, README update noted as A11. v1.3.2: design decisions A-H resolved.*
+*Spec version: 1.4.0. Last updated: 2026-06-30. v0.3.0 (Style read + alignment emission) — full end-to-end style round-trip; see §9.2 for v0.2.0+ style model, §9.2.1 for remaining deferred items. v1.4.0: §9.2.1 removed Style read and Alignment emission rows; §1 updated to v0.3.0 scope; §6.8 added vertical middle→center mapping note.*

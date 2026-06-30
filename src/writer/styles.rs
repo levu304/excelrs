@@ -13,7 +13,7 @@ use std::io::Write;
 use quick_xml::escape::escape;
 
 use crate::error::ExcelrsError;
-use crate::model::style::{Border, Fill, Font, Style};
+use crate::model::style::{Alignment, Border, Fill, Font, Style};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -22,11 +22,14 @@ use crate::model::style::{Border, Fill, Font, Style};
 /// Deduplicated sub-tables plus the cell-level style-index table.
 ///
 /// Every sub-table has index 0 as the "Normal" entry (empty/font Calibri 11).
+/// Alignment index 0 is the default (no explicit alignment).
 pub struct StyleTable {
     pub fonts: Vec<Font>,
     pub fills: Vec<Fill>,
     pub borders: Vec<Border>,
     pub num_fmts: Vec<(u32, String)>,
+    /// Deduplicated alignment entries. Index 0 is the default (None).
+    pub alignments: Vec<Alignment>,
     /// Unique cell-level formats (cellXfs) — the OOXML `<cellXfs>` table.
     /// Index 0 is always Normal.
     pub cell_xfs: Vec<CellXf>,
@@ -46,6 +49,8 @@ pub struct CellXf {
     pub fill_id: u32,
     /// Index into [`StyleTable::borders`].
     pub border_id: u32,
+    /// Index into [`StyleTable::alignments`]. 0 means default (no alignment).
+    pub alignment_id: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -79,34 +84,39 @@ pub fn build_style_table(styles: &[Option<Style>]) -> StyleTable {
     let mut fill_map: BTreeMap<String, u32> = BTreeMap::new();
     let mut border_map: BTreeMap<String, u32> = BTreeMap::new();
     let mut numfmt_map: BTreeMap<String, u32> = BTreeMap::new();
+    let mut alignment_map: BTreeMap<String, u32> = BTreeMap::new();
 
     let mut fonts: Vec<Font> = Vec::new();
     let mut fills: Vec<Fill> = Vec::new();
     let mut borders: Vec<Border> = Vec::new();
     let mut num_fmts: Vec<(u32, String)> = Vec::new();
+    let mut alignments: Vec<Alignment> = Vec::new();
 
     // Always seed index 0 with Normal defaults
     let normal_font = Font::default();
     let normal_fill = Fill::default();
     let normal_border = Border::default();
+    let normal_alignment = Alignment::default();
 
     font_map.insert(canonical_key(&normal_font), 0);
     fill_map.insert(canonical_key(&normal_fill), 0);
     border_map.insert(canonical_key(&normal_border), 0);
+    alignment_map.insert(canonical_key(&normal_alignment), 0);
 
     fonts.push(normal_font);
     fills.push(normal_fill);
     borders.push(normal_border);
+    alignments.push(normal_alignment);
 
     let mut next_numfmt_id = 164u32;
 
-    // First pass: build (num_fmt_id, font_id, fill_id, border_id) tuples
-    // for each input cell, stored in input order.
+    // First pass: build (num_fmt_id, font_id, fill_id, border_id, alignment_id)
+    // tuples for each input cell, stored in input order.
     let mut tuples: Vec<CellXf> = Vec::with_capacity(styles.len());
 
     for opt in styles {
-        let (num_fmt_id, font_id, fill_id, border_id) = if is_normal(opt) {
-            (0u32, 0, 0, 0)
+        let (num_fmt_id, font_id, fill_id, border_id, alignment_id) = if is_normal(opt) {
+            (0u32, 0, 0, 0, 0)
         } else {
             let style = opt.as_ref().unwrap();
 
@@ -151,7 +161,17 @@ pub fn build_style_table(styles: &[Option<Style>]) -> StyleTable {
                 None => 0,
             };
 
-            (num_fmt_id, font_id, fill_id, border_id)
+            // Alignment (v0.3.0)
+            let alignment_id = match &style.alignment {
+                Some(a) => *alignment_map.entry(canonical_key(a)).or_insert_with(|| {
+                    let id = alignments.len() as u32;
+                    alignments.push(a.clone());
+                    id
+                }),
+                None => 0,
+            };
+
+            (num_fmt_id, font_id, fill_id, border_id, alignment_id)
         };
 
         tuples.push(CellXf {
@@ -159,6 +179,7 @@ pub fn build_style_table(styles: &[Option<Style>]) -> StyleTable {
             font_id,
             fill_id,
             border_id,
+            alignment_id,
         });
     }
 
@@ -173,6 +194,7 @@ pub fn build_style_table(styles: &[Option<Style>]) -> StyleTable {
         font_id: 0,
         fill_id: 0,
         border_id: 0,
+        alignment_id: 0,
     };
     xf_set.insert(normal, 0);
     cell_xfs.push(normal);
@@ -191,6 +213,7 @@ pub fn build_style_table(styles: &[Option<Style>]) -> StyleTable {
         fills,
         borders,
         num_fmts,
+        alignments,
         cell_xfs,
         cell_indices,
     }
@@ -226,7 +249,7 @@ pub fn emit_styles_xml<W: Write>(w: &mut W, table: &StyleTable) -> Result<(), Ex
     )?;
 
     // cellXfs (the main cell-format table)
-    emit_cell_xfs(w, &table.cell_xfs, &table.num_fmts)?;
+    emit_cell_xfs(w, &table.cell_xfs, &table.num_fmts, &table.alignments)?;
 
     // cellStyles (Normal only)
     write_str(
@@ -350,7 +373,12 @@ fn emit_border_side<W: Write>(
     }
 }
 
-fn emit_cell_xfs<W: Write>(w: &mut W, cell_xfs: &[CellXf], num_fmts: &[(u32, String)]) -> Result<(), ExcelrsError> {
+fn emit_cell_xfs<W: Write>(
+    w: &mut W,
+    cell_xfs: &[CellXf],
+    num_fmts: &[(u32, String)],
+    alignments: &[Alignment],
+) -> Result<(), ExcelrsError> {
     write_str(w, &format!(r#"<cellXfs count="{}">"#, cell_xfs.len()))?;
 
     // Build a set of which numFmt IDs are custom (so we can emit applyNumberFormat)
@@ -361,7 +389,7 @@ fn emit_cell_xfs<W: Write>(w: &mut W, cell_xfs: &[CellXf], num_fmts: &[(u32, Str
         let apply_font = xf.font_id != 0;
         let apply_fill = xf.fill_id != 0;
         let apply_border = xf.border_id != 0;
-        let apply_alignment = false; // alignment tracking deferred to v0.2.1+
+        let apply_alignment = xf.alignment_id != 0;
 
         // Build comma-separated list of apply-X attributes (only when true)
         let mut apply_parts: Vec<&str> = Vec::new();
@@ -387,15 +415,67 @@ fn emit_cell_xfs<W: Write>(w: &mut W, cell_xfs: &[CellXf], num_fmts: &[(u32, Str
             format!(" {}", apply_parts.join(" "))
         };
 
-        write_str(
-            w,
-            &format!(
-                r#"<xf numFmtId="{}" fontId="{}" fillId="{}" borderId="{}" xfId="0"{}/>"#,
-                xf.num_fmt_id, xf.font_id, xf.fill_id, xf.border_id, apply_str,
-            ),
-        )?;
+        let has_children = apply_alignment;
+
+        if has_children {
+            write_str(
+                w,
+                &format!(
+                    r#"<xf numFmtId="{}" fontId="{}" fillId="{}" borderId="{}" xfId="0"{}>"#,
+                    xf.num_fmt_id, xf.font_id, xf.fill_id, xf.border_id, apply_str,
+                ),
+            )?;
+            // Emit alignment child (v0.3.0)
+            emit_alignment_child(w, xf, alignments)?;
+            write_str(w, "</xf>")?;
+        } else {
+            write_str(
+                w,
+                &format!(
+                    r#"<xf numFmtId="{}" fontId="{}" fillId="{}" borderId="{}" xfId="0"{}/>"#,
+                    xf.num_fmt_id, xf.font_id, xf.fill_id, xf.border_id, apply_str,
+                ),
+            )?;
+        }
     }
     write_str(w, "</cellXfs>")?;
+    Ok(())
+}
+
+/// Emit the `<alignment>` child element for a cellXf that has a non-default
+/// alignment.  OOXML vertical value "center" is emitted for model "middle".
+fn emit_alignment_child<W: Write>(w: &mut W, xf: &CellXf, alignments: &[Alignment]) -> Result<(), ExcelrsError> {
+    let alignment = match alignments.get(xf.alignment_id as usize) {
+        Some(a) => a,
+        None => return Ok(()),
+    };
+
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(ref h) = alignment.horizontal {
+        parts.push(format!(r##"horizontal="{}""##, h));
+    }
+    if let Some(ref v) = alignment.vertical {
+        // OOXML uses "center"; excelrs API uses "middle"
+        let ooxml = if v == "middle" { "center" } else { v.as_str() };
+        parts.push(format!(r##"vertical="{}""##, ooxml));
+    }
+    if let Some(wt) = alignment.wrap_text {
+        if wt {
+            parts.push(r#"wrapText="1""#.to_string());
+        }
+    }
+    if let Some(indent) = alignment.indent {
+        if indent > 0 {
+            parts.push(format!(r#"indent="{}""#, indent));
+        }
+    }
+
+    if parts.is_empty() {
+        // No meaningful alignment attributes — don't emit an empty element
+        return Ok(());
+    }
+
+    write_str(w, &format!("<alignment {}/>", parts.join(" ")))?;
     Ok(())
 }
 
@@ -430,7 +510,8 @@ mod tests {
                 num_fmt_id: 0,
                 font_id: 0,
                 fill_id: 0,
-                border_id: 0
+                border_id: 0,
+                alignment_id: 0,
             }
         );
         assert_eq!(table.fonts.len(), 1); // Normal
@@ -678,6 +759,113 @@ mod tests {
         // Style A and Style B are different
         assert_ne!(table.cell_indices[1], table.cell_indices[2]);
         assert_ne!(table.cell_indices[2], table.cell_indices[3]);
+    }
+
+    // -- Alignment dedup tests (v0.3.0) --
+
+    /// Alignment dedup: same alignment → same alignment_id.
+    #[test]
+    fn dedup_alignment_same() {
+        let s = Style {
+            alignment: Some(crate::model::style::Alignment {
+                horizontal: Some("center".into()),
+                vertical: Some("middle".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let styles = vec![Some(s.clone()), Some(s)];
+        let table = build_style_table(&styles);
+        // Both get same cellXfs (Normal + 1 unique = 2)
+        assert_eq!(table.cell_xfs.len(), 2);
+        assert_eq!(table.cell_indices[0], table.cell_indices[1]);
+        assert_eq!(table.cell_indices[0], 1); // index 1 = the non-Normal style
+    }
+
+    /// Alignment emit: alignments section and applyAlignment="1" present.
+    #[test]
+    fn emit_alignment() {
+        let styles = vec![Some(Style {
+            alignment: Some(crate::model::style::Alignment {
+                horizontal: Some("center".into()),
+                vertical: Some("middle".into()),
+                wrap_text: Some(true),
+                indent: Some(2),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })];
+        let table = build_style_table(&styles);
+        let mut buf = Vec::new();
+        emit_styles_xml(&mut buf, &table).unwrap();
+        let xml = String::from_utf8(buf).unwrap();
+
+        // alignment element present with correct attributes
+        assert!(xml.contains(r#"applyAlignment="1""#));
+        assert!(xml.contains(r##"horizontal="center""##));
+        // OOXML "center" not API "middle"
+        assert!(xml.contains(r##"vertical="center""##));
+        assert!(xml.contains(r##"wrapText="1""##));
+        assert!(xml.contains(r##"indent="2""##));
+    }
+
+    /// Alignment vertical: model "middle" → OOXML "center".
+    #[test]
+    fn emit_alignment_vertical_mapping() {
+        let styles = vec![Some(Style {
+            alignment: Some(crate::model::style::Alignment {
+                vertical: Some("middle".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })];
+        let table = build_style_table(&styles);
+        let mut buf = Vec::new();
+        emit_styles_xml(&mut buf, &table).unwrap();
+        let xml = String::from_utf8(buf).unwrap();
+
+        // Must NOT contain vertical="middle"
+        assert!(!xml.contains(r##"vertical="middle""##));
+        // Must contain vertical="center"
+        assert!(xml.contains(r##"vertical="center""##));
+    }
+
+    /// Integration: alignment style set via `set_cell_style` produces
+    /// a second cellXfs entry with alignment, and the cell references it.
+    #[test]
+    fn integration_alignment_emitted_via_set_cell_style() {
+        use crate::model::workbook_inner::WorkbookInner;
+        use std::io::{Cursor, Read};
+
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("Debug".into());
+        ws.add_row(vec![serde_json::json!("hello")]);
+        ws.set_cell_style(
+            1,
+            1,
+            serde_json::json!({
+                "alignment": { "horizontal": "center", "vertical": "middle" }
+            }),
+        )
+        .unwrap();
+
+        let bytes = crate::writer::xlsx::workbook_to_bytes(&inner).unwrap();
+        let mut archive = zip::read::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut styles_xml = String::new();
+        archive
+            .by_name("xl/styles.xml")
+            .unwrap()
+            .read_to_string(&mut styles_xml)
+            .unwrap();
+        let mut sheet_xml = String::new();
+        archive
+            .by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut sheet_xml)
+            .unwrap();
+
+        assert!(styles_xml.contains(r#"cellXfs count="2""#));
+        assert!(sheet_xml.contains(r#"s="1""#));
     }
 
     /// Multiple distinct numFmt codes each get their own ID starting at 164.

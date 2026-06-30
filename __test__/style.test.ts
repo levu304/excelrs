@@ -118,12 +118,12 @@ test('B6: full font + fill + border + alignment + num_fmt round-trips', async ()
   expect(cell.border?.top?.style).toBe('thin')
   expect(cell.border?.bottom?.style).toBe('thin')
 
-  // Alignment — skipped: emission deferred to v0.2.1+
+  // Alignment (v0.3.0)
+  expect(cell.alignment?.horizontal).toBe('center')
+  expect(cell.alignment?.vertical).toBe('middle') // OOXML "center" → API "middle"
 
   // numFmt
   expect(cell.numFmt).toBe('0.00%')
-
-  // ponytail: alignment emission deferred to v0.2.1+ (need <alignment> child in cellXf)
 })
 
 test('B7: color is uppercased in canonical form', () => {
@@ -280,4 +280,42 @@ test('E15: Normal is always at cellXfs[0] even when no Normal cells exist', asyn
   expect(wsjs.getCell('A1').font?.bold).toBe(true)
   expect(wsjs.getCell('B1').font?.italic).toBe(true)
   expect(wsjs.getCell('C1').font?.underline).toBe(true)
+})
+
+// ---------------------------------------------------------------------------
+// Group F — Alignment emission (v0.3.0)
+// ---------------------------------------------------------------------------
+
+test('F16: wrap_text round-trips through exceljs', async () => {
+  const wb = new Workbook()
+  const ws = wb.addWorksheet('Wrap')
+  ws.addRow(['long text'])
+  ws.setCellStyle(1, 1, { alignment: { wrap_text: true } })
+
+  const wbjs = await writeThenReadWithExceljs(wb)
+  const wsjs = wbjs.getWorksheet('Wrap')!
+  expect(wsjs.getCell('A1').alignment?.wrapText).toBe(true)
+})
+
+test('F17: indent round-trips through exceljs', async () => {
+  const wb = new Workbook()
+  const ws = wb.addWorksheet('Indent')
+  ws.addRow(['indented'])
+  ws.setCellStyle(1, 1, { alignment: { indent: 3 } })
+
+  const wbjs = await writeThenReadWithExceljs(wb)
+  const wsjs = wbjs.getWorksheet('Indent')!
+  expect(wsjs.getCell('A1').alignment?.indent).toBe(3)
+})
+
+test('F18: vertical middle round-trips through exceljs', async () => {
+  const wb = new Workbook()
+  const ws = wb.addWorksheet('Vert')
+  ws.addRow(['hello'])
+  ws.setCellStyle(1, 1, { alignment: { vertical: 'middle', horizontal: 'center' } })
+
+  const wbjs = await writeThenReadWithExceljs(wb)
+  const wsjs = wbjs.getWorksheet('Vert')!
+  expect(wsjs.getCell('A1').alignment?.vertical).toBe('middle')
+  expect(wsjs.getCell('A1').alignment?.horizontal).toBe('center')
 })

@@ -8,6 +8,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-06-30
+
+### Added
+
+- **Style read** — `xl/styles.xml` is now parsed on read via `src/reader/styles.rs`.
+  Font, Fill, Border, Alignment, and numFmt are resolved to model `Style` objects
+  and attached to each `Cell`. Round-trip of a styled `.xlsx` preserves styles
+  end-to-end (v0.3.0 scope, previously `style: None` on every cell). 7 new Rust
+  unit tests for the parser; 4 new JS round-trip tests (F16–F18).
+- **Alignment emission (writer)** — `<alignment>` child elements in `cellXfs` are
+  now emitted for Font, Fill, Border, and numFmt-aligned cells. The `applyAlignment`
+  flag is set when `alignment_id != 0`. The vertical "middle" → OOXML "center"
+  mapping is handled in the emit function. 3 new Rust tests for dedup/emit/mapping.
+- **Style read architecture:** 3-pass reader — calamine for values/formulas, zip
+  archive for `xl/styles.xml` and per-sheet `s="N"` attributes, merged at
+  cell-creation time. cellStyleXfs inheritance is deferred (v0.3.0 uses cellXf
+  directly); theme colors and gradient fills are silently skipped.
+- 146 Rust tests (was 127, +15 in PR #2 review follow-up) + 60 JS tests (was 57) = **206 total**.
+
+### Changed
+
+- `Worksheet::set_cell_style` now uses the raw style setter (`set_style_raw`)
+  instead of the `#[napi(setter)]` method, which was unreachable from Rust code.
+  (Napi-rs generates wrapper code for `#[napi(setter)]` that doesn't dispatch
+  when called as a Rust method.)
+- `docs/spec.md` §9.2.1: Removed "Style *read*" and "Alignment emission (writer)"
+  rows from the deferred-items table. Updated §1 to v0.3.0 scope. Added
+  vertical middle→center mapping note to §6.8.
+
+### Fixed
+
+- **Built-in numFmt IDs 0-49 now resolve to format codes** — `resolve_style`
+  matches `numFmtId < 50` against a `BUILTIN_NUMFMTS` const table (~19 entries
+  for date, percentage, currency, etc.) before falling through to custom IDs.
+  Previously all IDs < 50 silently resolved to `None`. (PR #2 review.)
+- **applyX flags now honored** — `<xf>` attributes `applyFont`, `applyFill`,
+  `applyBorder`, `applyAlignment`, and `applyNumberFormat` are parsed and gate
+  sub-field application in `resolve_style`. Previously only the `xf_index != 0`
+  check was used, causing third-party files with `applyX="0"` to incorrectly
+  apply sub-fields. (PR #2 review.)
+- **Module doc rewritten** — `src/reader/styles.rs` module doc now accurately
+  reflects that applyX flags are parsed and respected. (PR #2 review.)
+
 ## [0.2.2] — 2026-06-30
 
 ### Fixed
@@ -120,5 +163,7 @@ first fully working release; v0.2.0 and v0.2.1 are superseded.
   and GitHub Release on tag push.
 - **Documentation** — complete spec (docs/spec.md), two architecture reviews.
 
+[0.3.0]: https://github.com/levu304/excelrs/releases/tag/v0.3.0
+[0.2.2]: https://github.com/levu304/excelrs/releases/tag/v0.2.2
 [0.2.0]: https://github.com/levu304/excelrs/releases/tag/v0.2.0
 [0.1.0]: https://github.com/levu304/excelrs/releases/tag/v0.1.0
