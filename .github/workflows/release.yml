@@ -119,12 +119,20 @@ jobs:
                      @levu304/excelrs-darwin-arm64 \
                      @levu304/excelrs-linux-x64-gnu \
                      @levu304/excelrs-win32-x64-msvc; do
+            for attempt in 1 2 3 4 5; do
+              published=$(npm view "$pkg@$VERSION" version 2>/dev/null || echo "MISSING")
+              if [ "$published" = "$VERSION" ]; then
+                echo "OK: $pkg@$VERSION"
+                break
+              fi
+              echo "  [attempt $attempt] $pkg@$VERSION not yet visible (got: $published)"
+              sleep 3
+            done
             published=$(npm view "$pkg@$VERSION" version 2>/dev/null || echo "MISSING")
             if [ "$published" != "$VERSION" ]; then
-              echo "FAIL: $pkg@$VERSION not on npm (got: $published)"
+              echo "FAIL: $pkg@$VERSION not on npm after 5 retries (got: $published)"
               exit 1
             fi
-            echo "OK: $pkg@$VERSION"
           done
 
       - name: Functional smoke test
