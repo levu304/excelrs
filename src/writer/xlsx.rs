@@ -26,6 +26,7 @@ use std::path::Path;
 use quick_xml::escape::escape;
 
 use crate::error::ExcelrsError;
+use crate::model::cell::Cell;
 use crate::model::style::Style;
 use crate::model::workbook_inner::WorkbookInner;
 use crate::model::worksheet::Worksheet;
@@ -77,15 +78,23 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
 
         // xl/styles.xml (v0.2.0: full dedup'd style table)
         start_file(&mut zip, "xl/styles.xml")?;
-        // Collect all cell-level styles across every worksheet
+        // Collect effective styles across every worksheet
+        // Precedence: cell-level wins, then column-level, then Normal (None).
         let all_styles: Vec<Option<Style>> = worksheets
             .iter()
-            .flat_map(|ws| ws.rows())
-            .flat_map(|row| {
-                row.sorted_cells()
-                    .into_iter()
+            .flat_map(|ws| {
+                let col_styles: Vec<Option<Style>> = ws
+                    .columns()
+                    .iter()
                     .map(|c| c.style())
-                    .collect::<Vec<_>>()
+                    .collect();
+                ws.rows().into_iter().flat_map(move |row| {
+                    let col_styles = &col_styles;
+                    row.sorted_cells()
+                        .into_iter()
+                        .map(move |c| effective_cell_style_with_fallback(c, col_styles))
+                        .collect::<Vec<_>>()
+                })
             })
             .collect();
         let style_table = styles::build_style_table(&all_styles);
@@ -140,6 +149,28 @@ fn make_default_sheet() -> Worksheet {
     let mut ws = Worksheet::new("Sheet1".into());
     ws.set_id(1);
     ws
+}
+
+// ---------------------------------------------------------------------------
+// Column-style helpers (A7)
+// ---------------------------------------------------------------------------
+
+/// Resolve the effective style for a cell: cell-style wins; else column-style;
+/// else None (Normal).
+///
+/// Takes a pre-computed column-styles slice to avoid calling `ws.columns()`
+/// per cell.  `col_styles[i]` is the style for column `i+1` (A=0, B=1, …).
+fn effective_cell_style_with_fallback(
+    cell: &Cell,
+    col_styles: &[Option<Style>],
+) -> Option<Style> {
+    match cell.style() {
+        Some(s) if !s.is_empty() => Some(s),
+        _ => {
+            let idx = (cell.col() as usize).checked_sub(1)?;
+            col_styles.get(idx)?.clone()
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -744,6 +775,162 @@ mod tests {
             xml.contains(r#"s="42""#),
             "expected s=\"42\" in cell XML, got: {xml}"
         );
+    }
+
+    // ---- A7: column-level style fallback tests ----
+
+    /// Column style applies to cells in that column that have no explicit style.
+    #[test]
+    fn test_column_style_applies_to_cells() {
+        use crate::model::column::Column;
+
+        let mut ws = Worksheet::new("Col".into());
+        ws.set_id(1);
+
+        // Column A has its own style
+        let mut col_a = Column::new("A".into(), "a".into(), 10.0);
+        col_a.set_style(serde_json::json!({ "num_fmt": "0.00%" })).unwrap();
+        ws.set_columns(vec![col_a]);
+
+        ws.add_row(vec![serde_json::json!(0.123)]); // A1, gets column style
+        ws.add_row(vec![serde_json::json!(0.456)]); // A2, gets column style
+
+        let mut inner = WorkbookInner::new();
+        inner.worksheets.push(ws);
+        let bytes = workbook_to_bytes(&inner).unwrap();
+
+        use std::io::Cursor;
+        use std::io::Read;
+        let mut archive = zip::read::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut sheet_xml = String::new();
+        archive
+            .by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut sheet_xml)
+            .unwrap();
+
+        // Both cells share the same column-style cellXfs (index 1)
+        assert!(sheet_xml.contains(r#"<c r="A1" s="1""#),
+            "A1 should get column-style s=1");
+        assert!(sheet_xml.contains(r#"<c r="A2" s="1""#),
+            "A2 should get column-style s=1, same index as A1");
+    }
+
+    /// Cell-level style overrides column-level style — verify via helper directly.
+    #[test]
+    fn test_effective_cell_style_precedence() {
+        use crate::model::style::{Font, Style};
+
+        // Cell with explicit style → wins over column
+        let mut cell = Cell::new("A1".into(), 1, 1);
+        cell.set_style(serde_json::json!({ "num_fmt": "0.00%" }))
+            .unwrap();
+        let col_styles = vec![Some(Style {
+            font: Some(Font {
+                bold: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })];
+        let result = effective_cell_style_with_fallback(&cell, &col_styles);
+        assert!(result.is_some());
+        assert_eq!(
+            result.unwrap().num_fmt,
+            Some("0.00%".into()),
+            "cell style should win over column style"
+        );
+
+        // Cell with no style → falls back to column
+        let cell2 = Cell::new("A1".into(), 1, 1);
+        let result2 = effective_cell_style_with_fallback(&cell2, &col_styles);
+        assert!(result2.is_some());
+        assert_eq!(
+            result2.unwrap().font.unwrap().bold,
+            Some(true),
+            "column style should apply when cell has no style"
+        );
+
+        // Cell with no style, column also no style → None (Normal)
+        let cell3 = Cell::new("A1".into(), 1, 1);
+        let empty_cols = vec![None; 3];
+        let result3 = effective_cell_style_with_fallback(&cell3, &empty_cols);
+        assert!(result3.is_none(), "no cell or column style → Normal");
+
+        // Cell in column 2, only column 0 defined → no column fallback
+        let cell4 = Cell::new("B1".into(), 1, 2);
+        let result4 = effective_cell_style_with_fallback(&cell4, &col_styles);
+        assert!(result4.is_none(), "column 1 out of range → no fallback");
+    }
+
+    /// Cell outside the defined columns array gets Normal (s="0").
+    #[test]
+    fn test_cell_outside_columns_uses_normal() {
+        let mut ws = Worksheet::new("Outside".into());
+        ws.set_id(1);
+        // Empty columns array — no column styles
+        ws.set_columns(vec![]);
+
+        ws.add_row(vec![
+            serde_json::json!(1),
+            serde_json::json!(2),
+            serde_json::json!(3),
+            serde_json::json!(4),
+            serde_json::json!(5), // E1 = col 5, beyond any column definitions
+        ]);
+
+        let mut inner = WorkbookInner::new();
+        inner.worksheets.push(ws);
+        let bytes = workbook_to_bytes(&inner).unwrap();
+
+        use std::io::Cursor;
+        use std::io::Read;
+        let mut archive = zip::read::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut sheet_xml = String::new();
+        archive
+            .by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut sheet_xml)
+            .unwrap();
+
+        // All cells should be Normal (empty column styles → no column-level fallback)
+        // Note: all 5 values are numbers, so no t="s" or t="b" attributes
+        assert!(sheet_xml.contains(r#"<c r="A1" s="0">"#));
+        assert!(sheet_xml.contains(r#"<c r="B1" s="0">"#));
+        assert!(sheet_xml.contains(r#"<c r="C1" s="0">"#));
+        assert!(sheet_xml.contains(r#"<c r="D1" s="0">"#));
+        assert!(sheet_xml.contains(r#"<c r="E1" s="0">"#));
+    }
+
+    /// Column with empty (default) style is treated as no column style.
+    #[test]
+    fn test_column_empty_style_is_normal() {
+        use crate::model::column::Column;
+
+        let mut ws = Worksheet::new("Empty".into());
+        ws.set_id(1);
+
+        // Column A with a Style::default() (all None)
+        let col_a = Column::new("A".into(), "a".into(), 10.0);
+        ws.set_columns(vec![col_a]);
+
+        ws.add_row(vec![serde_json::json!(42)]); // A1
+
+        let mut inner = WorkbookInner::new();
+        inner.worksheets.push(ws);
+        let bytes = workbook_to_bytes(&inner).unwrap();
+
+        use std::io::Cursor;
+        use std::io::Read;
+        let mut archive = zip::read::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut sheet_xml = String::new();
+        archive
+            .by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut sheet_xml)
+            .unwrap();
+
+        // Normal
+        assert!(sheet_xml.contains(r#"<c r="A1" s="0""#));
     }
 
     // ---- helpers ----

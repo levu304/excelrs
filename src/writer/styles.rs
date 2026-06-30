@@ -163,9 +163,19 @@ pub fn build_style_table(styles: &[Option<Style>]) -> StyleTable {
     }
 
     // Second pass: dedup the tuple list into the unique cellXfs table.
+    // Always seed Normal at index 0 (OOXML requires xfId="0" → Normal).
     let mut xf_set: BTreeMap<CellXf, u32> = BTreeMap::new();
     let mut cell_xfs: Vec<CellXf> = Vec::new();
     let mut cell_indices: Vec<u32> = Vec::with_capacity(tuples.len());
+
+    let normal = CellXf {
+        num_fmt_id: 0,
+        font_id: 0,
+        fill_id: 0,
+        border_id: 0,
+    };
+    xf_set.insert(normal, 0);
+    cell_xfs.push(normal);
 
     for xf in &tuples {
         let idx = *xf_set.entry(*xf).or_insert_with(|| {
@@ -387,11 +397,13 @@ mod tests {
     #[test]
     fn dedup_empty() {
         let table = build_style_table(&[]);
-        assert_eq!(table.cell_xfs.len(), 0);
+        assert_eq!(table.cell_xfs.len(), 1); // Normal is always seeded
+        assert_eq!(table.cell_xfs[0], CellXf { num_fmt_id: 0, font_id: 0, fill_id: 0, border_id: 0 });
         assert_eq!(table.fonts.len(), 1); // Normal
         assert_eq!(table.fills.len(), 1); // Normal (will be 1 + gray125 at emit)
         assert_eq!(table.borders.len(), 1); // Normal
         assert!(table.num_fmts.is_empty());
+        assert!(table.cell_indices.is_empty());
     }
 
     /// Single style → Normal + 1 cellXfs entry. Sub-table grows as needed.
@@ -413,7 +425,7 @@ mod tests {
         assert_eq!(xf.border_id, 0);
     }
 
-    /// Two distinct styles produce two distinct cellXfs entries.
+    /// Two distinct styles produce two distinct cellXfs entries (plus Normal).
     #[test]
     fn dedup_distinct() {
         let styles = vec![
@@ -430,21 +442,25 @@ mod tests {
             }),
         ];
         let table = build_style_table(&styles);
-        assert_eq!(table.cell_xfs.len(), 2);
+        assert_eq!(table.cell_xfs.len(), 3); // Normal + 2 distinct CellXf entries
 
-        // First: custom numFmt, Normal font
-        let xf0 = &table.cell_xfs[0];
-        assert!(xf0.num_fmt_id >= 164);
-        assert_eq!(xf0.font_id, 0); // Normal
-        assert_eq!(xf0.fill_id, 0);
-        assert_eq!(xf0.border_id, 0);
+        // cell_xfs[0] is Normal
+        assert_eq!(table.cell_xfs[0].num_fmt_id, 0);
+        assert_eq!(table.cell_xfs[0].font_id, 0);
 
-        // Second: custom font, Normal numFmt
+        // cell_xfs[1]: custom numFmt, Normal font
         let xf1 = &table.cell_xfs[1];
-        assert_eq!(xf1.num_fmt_id, 0); // Normal
-        assert!(xf1.font_id > 0); // custom font
+        assert!(xf1.num_fmt_id >= 164);
+        assert_eq!(xf1.font_id, 0);
         assert_eq!(xf1.fill_id, 0);
         assert_eq!(xf1.border_id, 0);
+
+        // cell_xfs[2]: custom font, Normal numFmt
+        let xf2 = &table.cell_xfs[2];
+        assert_eq!(xf2.num_fmt_id, 0);
+        assert!(xf2.font_id > 0);
+        assert_eq!(xf2.fill_id, 0);
+        assert_eq!(xf2.border_id, 0);
 
         // Distinct font entries
         assert_eq!(table.fonts.len(), 2);
@@ -459,10 +475,12 @@ mod tests {
         };
         let styles = vec![Some(s.clone()), Some(s.clone())];
         let table = build_style_table(&styles);
-        // Two inputs, but only one unique cellXfs entry
-        assert_eq!(table.cell_xfs.len(), 1);
+        // Two inputs, two unique cellXfs entries (Normal + the non-Normal style)
+        assert_eq!(table.cell_xfs.len(), 2);
         assert_eq!(table.cell_indices.len(), 2);
         assert_eq!(table.cell_indices[0], table.cell_indices[1]);
+        // Both map to index 1 (Normal is index 0)
+        assert_eq!(table.cell_indices[0], 1);
     }
 
     // -- 4 emit tests --
@@ -479,7 +497,7 @@ mod tests {
         assert!(xml.contains(r#"<fonts count="1">"#));
         assert!(xml.contains(r#"<fills count="2">"#)); // Normal + gray125
         assert!(xml.contains(r#"<borders count="1">"#));
-        assert!(xml.contains(r#"<cellXfs count="0">"#)); // no cells
+        assert!(xml.contains(r#"<cellXfs count="1">"#)); // Normal is always present
         assert!(xml.contains("</styleSheet>"));
 
         // Should not contain numFmts (no custom formats)
@@ -523,7 +541,7 @@ mod tests {
         assert!(xml.contains(r#"<borders count="2">"#)); // Normal + thin top
         assert!(xml.contains(r#"<numFmts count="1">"#));
         assert!(xml.contains(r#"formatCode="0.00%""#));
-        assert!(xml.contains(r#"<cellXfs count="1">"#));
+        assert!(xml.contains(r#"<cellXfs count="2">"#)); // Normal + 1 unique style
 
         // Verify font content
         assert!(xml.contains("<b val=\"1\"/>"));
@@ -597,9 +615,9 @@ mod tests {
         };
         let styles = vec![Some(s1), Some(s2)];
         let table = build_style_table(&styles);
-        // Same cellXfs index for both inputs
+        // Same cellXfs index for both inputs (at index 1, since Normal is index 0)
         assert_eq!(table.cell_indices[0], table.cell_indices[1]);
-        assert_eq!(table.cell_xfs.len(), 1);
+        assert_eq!(table.cell_xfs.len(), 2); // Normal + 1 dedup'd CellXf
     }
 
     /// cell_indices maps each input cell to its unique cellXfs index.
@@ -656,8 +674,8 @@ mod tests {
         assert_eq!(table.num_fmts[1].0, 165);
         assert_eq!(table.num_fmts[1].1, "yyyy-mm-dd");
 
-        // 3 inputs, 2 unique cellXfs entries
-        assert_eq!(table.cell_xfs.len(), 2);
+        // 3 inputs, 2 unique cellXfs entries + Normal = 3 total
+        assert_eq!(table.cell_xfs.len(), 3);
         assert_eq!(table.cell_indices.len(), 3);
         // Input 0 and 2 share the same cellXfs index
         assert_eq!(table.cell_indices[0], table.cell_indices[2]);

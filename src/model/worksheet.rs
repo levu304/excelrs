@@ -230,6 +230,11 @@ impl Worksheet {
         ws_row.set_cell_value(col, value);
     }
 
+    /// Replace the worksheet's column definitions.
+    pub fn set_columns(&mut self, cols: Vec<Column>) {
+        self.columns = cols;
+    }
+
     /// Set a formula string on a cell at (row, col) — used by the reader.
     pub fn insert_cell_formula(&self, row: u32, col: u32, formula: String) {
         let mut rows = self.rows.lock().expect("Worksheet rows lock poisoned");
