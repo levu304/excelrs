@@ -1,6 +1,6 @@
 {
   "name": "@levu304/excelrs",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Native XLSX spreadsheet library for Node.js (Rust port of exceljs)",
   "main": "index.js",
   "types": "index.d.ts",
@@ -22,9 +22,9 @@
     "lint": "cargo clippy -- -D warnings"
   },
   "optionalDependencies": {
-    "@levu304/excelrs-darwin-arm64": "0.2.1",
-    "@levu304/excelrs-linux-x64-gnu": "0.2.1",
-    "@levu304/excelrs-win32-x64-msvc": "0.2.1"
+    "@levu304/excelrs-darwin-arm64": "0.2.2",
+    "@levu304/excelrs-linux-x64-gnu": "0.2.2",
+    "@levu304/excelrs-win32-x64-msvc": "0.2.2"
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.2.0",
