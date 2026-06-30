@@ -32,27 +32,61 @@ const buf = await wb2.xlsx.write();
 require('fs').writeFileSync('output.xlsx', buf);
 ```
 
+## Style System (v0.2.0)
+
+Write-only support for cell and column styling. Font, Fill, Border, and
+Alignment properties with inline number formats — full-replace semantics.
+
+```typescript
+const wb = new Workbook();
+const ws = wb.addWorksheet('Sales');
+
+// Column-level default style
+ws.setColumns([
+  { header: 'Name', key: 'name', width: 20, style: { font: { bold: true } } },
+  { header: 'Amount', key: 'amount', width: 12 },
+]);
+
+ws.addRow(['Widget', 1250]);
+ws.addRow(['Gadget', 990]);
+
+// Cell-level override (full-replace — see spec §6.9)
+ws.setCellStyle(2, 2, {
+  font: { color: 'FF00FF00', bold: true },
+  fill: { kind: 'solid', foreground: 'FFFFFF00' },
+  numFmt: '"$"#,##0.00',
+});
+
+const buf = await wb.xlsx.write();
+```
+
 ## API Surface
 
 Workbook → Worksheet → Row → Cell — mirrors exceljs exactly.
 
 - **Workbook:** `constructor()`, `addWorksheet()`, `getWorksheet()`, `.xlsx` I/O handle
-- **Worksheet:** `getCell()`, `getRow()`, `addRow()`, `removeRow()`, `rowCount`, `columnCount`
+- **Worksheet:** `getCell()`, `getRow()`, `addRow()`, `removeRow()`, `setColumns()`,
+  `setCellStyle()`, `rowCount`, `columnCount`, `columns`, `rows`
 - **Row:** `getCell()`, `values`, `height`, `hidden`
-- **Cell:** `value` (Number | String | Boolean | Formula | Null), `address`, `formula`
+- **Cell:** `value` (Number | String | Boolean | Formula | Null), `address`, `formula`,
+  `style` (getter/setter, full-replace)
+- **Column:** `header`, `key`, `width`, `hidden`, `style` (getter/setter, column default)
 
 See [docs/spec.md](docs/spec.md) for the full API specification.
 
-## v0.1 — MVP
+## v0.2.0 — Style System (write only)
 
-Read and write `.xlsx` files with correct data fidelity.
+Read and write `.xlsx` files with correct data fidelity. Cell and column
+styling for Font, Fill, Border, Alignment, and number formats (write only).
 
-**Limitations (see [spec §9.1](docs/spec.md#91-v01--mvp) for full list):**
-- No style CRUD (cell styles are read-only)
-- No merged cells
-- No streaming read/write
-- No formula evaluation (preserved as strings)
-- No CSV / XLS / XLSB support
+**Limitations (see [spec §9.2.1](docs/spec.md#921-v030-candidate) for full deferred list):**
+- No style **read** — round-trip of a styled `.xlsx` drops styles (deferred to v0.3.0)
+- No cell-level interior mutability — `ws.getCell('A1').style = {...}` only persists
+  when the cell was just-created and not yet cloned; use `ws.setCellStyle()` for
+  reliable cell-level style setting
+- No `alignment` emission — accepted in the `Style` JS object but silently dropped
+  at write time (deferred to v0.3.0)
+- No merged cells, no streaming, no formula evaluation, no CSV / XLS / XLSB
 
 ## Development
 

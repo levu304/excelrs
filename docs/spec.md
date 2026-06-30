@@ -1202,8 +1202,9 @@ The following items are explicitly **deferred from v0.2.0 to keep the v0.2.0 rel
 | Row-level style (`Row.style: Option<Style>`) | OOXML's `<row>` element supports `s="<idx>"` for row-default formatting. Adds one field on `Row`, one writer branch, and a reader parse. v0.2.0 ships cell + column style only. |
 | Gradient fills (`Fill.kind = "gradient"`) | OOXML's `<gradientFill>` requires angle and color-stop fields. Rare in spreadsheet styling. Rejected in v0.2.0 setter with `ExcelrsError::InvalidStyle`. |
 | Diagonal borders (`Border.diagonal` + `diagonalUp` + `diagonalDown`) | OOXML's `<border>` element supports a diagonal line used for strike-through cells. Three more fields; <1% of real-world styling. |
+| Alignment emission (writer) | Writer-side `<alignment>` child in `cellXf` requires non-trivial layout work. The `alignment` field is accepted in the `Style` JS object with full validation but silently dropped at write time. Reader-side support is bundled with the broader style-read v0.3.0 work. |
 
-These eight items are the headline v0.3.0 work units. They were intentionally not bundled into v0.2.0.
+These nine items are the headline v0.3.0 work units. They were intentionally not bundled into v0.2.0.
 
 ### 9.3 Future (v0.3+)
 

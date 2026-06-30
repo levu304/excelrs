@@ -350,16 +350,11 @@ fn emit_border_side<W: Write>(
     }
 }
 
-fn emit_cell_xfs<W: Write>(
-    w: &mut W,
-    cell_xfs: &[CellXf],
-    num_fmts: &[(u32, String)],
-) -> Result<(), ExcelrsError> {
+fn emit_cell_xfs<W: Write>(w: &mut W, cell_xfs: &[CellXf], num_fmts: &[(u32, String)]) -> Result<(), ExcelrsError> {
     write_str(w, &format!(r#"<cellXfs count="{}">"#, cell_xfs.len()))?;
 
     // Build a set of which numFmt IDs are custom (so we can emit applyNumberFormat)
-    let custom_numfmt: std::collections::HashSet<u32> =
-        num_fmts.iter().map(|(id, _)| *id).collect();
+    let custom_numfmt: std::collections::HashSet<u32> = num_fmts.iter().map(|(id, _)| *id).collect();
 
     for xf in cell_xfs {
         let apply_number_fmt = xf.num_fmt_id != 0 && custom_numfmt.contains(&xf.num_fmt_id);
@@ -370,11 +365,21 @@ fn emit_cell_xfs<W: Write>(
 
         // Build comma-separated list of apply-X attributes (only when true)
         let mut apply_parts: Vec<&str> = Vec::new();
-        if apply_number_fmt { apply_parts.push(r#"applyNumberFormat="1""#); }
-        if apply_font       { apply_parts.push(r#"applyFont="1""#); }
-        if apply_fill       { apply_parts.push(r#"applyFill="1""#); }
-        if apply_border     { apply_parts.push(r#"applyBorder="1""#); }
-        if apply_alignment  { apply_parts.push(r#"applyAlignment="1""#); }
+        if apply_number_fmt {
+            apply_parts.push(r#"applyNumberFormat="1""#);
+        }
+        if apply_font {
+            apply_parts.push(r#"applyFont="1""#);
+        }
+        if apply_fill {
+            apply_parts.push(r#"applyFill="1""#);
+        }
+        if apply_border {
+            apply_parts.push(r#"applyBorder="1""#);
+        }
+        if apply_alignment {
+            apply_parts.push(r#"applyAlignment="1""#);
+        }
 
         let apply_str = if apply_parts.is_empty() {
             String::new()
@@ -386,11 +391,7 @@ fn emit_cell_xfs<W: Write>(
             w,
             &format!(
                 r#"<xf numFmtId="{}" fontId="{}" fillId="{}" borderId="{}" xfId="0"{}/>"#,
-                xf.num_fmt_id,
-                xf.font_id,
-                xf.fill_id,
-                xf.border_id,
-                apply_str,
+                xf.num_fmt_id, xf.font_id, xf.fill_id, xf.border_id, apply_str,
             ),
         )?;
     }
@@ -423,7 +424,15 @@ mod tests {
     fn dedup_empty() {
         let table = build_style_table(&[]);
         assert_eq!(table.cell_xfs.len(), 1); // Normal is always seeded
-        assert_eq!(table.cell_xfs[0], CellXf { num_fmt_id: 0, font_id: 0, fill_id: 0, border_id: 0 });
+        assert_eq!(
+            table.cell_xfs[0],
+            CellXf {
+                num_fmt_id: 0,
+                font_id: 0,
+                fill_id: 0,
+                border_id: 0
+            }
+        );
         assert_eq!(table.fonts.len(), 1); // Normal
         assert_eq!(table.fills.len(), 1); // Normal (will be 1 + gray125 at emit)
         assert_eq!(table.borders.len(), 1); // Normal
@@ -532,29 +541,27 @@ mod tests {
     /// Populated StyleTable with all sub-types.
     #[test]
     fn emit_full() {
-        let styles = vec![
-            Some(Style {
-                font: Some(crate::model::style::Font {
-                    bold: Some(true),
-                    color: Some("FFFF0000".into()),
-                    ..Default::default()
-                }),
-                fill: Some(Fill {
-                    kind: "solid".into(),
-                    foreground: Some("FFFFFF00".into()),
-                    ..Default::default()
-                }),
-                border: Some(crate::model::style::Border {
-                    top: Some(BorderStyle {
-                        style: "thin".into(),
-                        color: Some("FF000000".into()),
-                    }),
-                    ..Default::default()
-                }),
-                num_fmt: Some("0.00%".into()),
+        let styles = vec![Some(Style {
+            font: Some(crate::model::style::Font {
+                bold: Some(true),
+                color: Some("FFFF0000".into()),
                 ..Default::default()
             }),
-        ];
+            fill: Some(Fill {
+                kind: "solid".into(),
+                foreground: Some("FFFFFF00".into()),
+                ..Default::default()
+            }),
+            border: Some(crate::model::style::Border {
+                top: Some(BorderStyle {
+                    style: "thin".into(),
+                    color: Some("FF000000".into()),
+                }),
+                ..Default::default()
+            }),
+            num_fmt: Some("0.00%".into()),
+            ..Default::default()
+        })];
         let table = build_style_table(&styles);
         let mut buf = Vec::new();
         emit_styles_xml(&mut buf, &table).unwrap();
@@ -583,12 +590,10 @@ mod tests {
     /// XML output parses as valid well-formed XML with quick_xml.
     #[test]
     fn emit_parses() {
-        let styles = vec![
-            Some(Style {
-                num_fmt: Some("0.00%".into()),
-                ..Default::default()
-            }),
-        ];
+        let styles = vec![Some(Style {
+            num_fmt: Some("0.00%".into()),
+            ..Default::default()
+        })];
         let table = build_style_table(&styles);
         let mut buf = Vec::new();
         emit_styles_xml(&mut buf, &table).unwrap();

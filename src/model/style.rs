@@ -379,10 +379,7 @@ mod tests {
         let style: Style = serde_json::from_value(raw).unwrap();
         let validated = style.validate().unwrap();
         assert_eq!(validated.num_fmt, Some("0.00%".into()));
-        assert_eq!(
-            validated.font.as_ref().unwrap().bold,
-            Some(true)
-        );
+        assert_eq!(validated.font.as_ref().unwrap().bold, Some(true));
     }
 
     /// Null → Normal reset.
@@ -436,10 +433,7 @@ mod tests {
         });
         let style: Style = serde_json::from_value(raw).unwrap();
         let validated = style.validate().unwrap();
-        assert_eq!(
-            validated.font.unwrap().color,
-            Some("FF0000".into())
-        );
+        assert_eq!(validated.font.unwrap().color, Some("FF0000".into()));
     }
 
     /// Float: NaN rejected.

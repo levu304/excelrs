@@ -207,16 +207,12 @@ impl Cell {
             self.style = None;
             return Ok(());
         }
-        let style: Style = serde_json::from_value(val).map_err(|e| {
-            napi::Error::from_reason(format!("style: {e}"))
-        })?;
+        let style: Style = serde_json::from_value(val).map_err(|e| napi::Error::from_reason(format!("style: {e}")))?;
         if style.is_empty() {
             self.style = None;
             return Ok(());
         }
-        self.style = Some(style.validate().map_err(|e| {
-            napi::Error::from_reason(e.to_string())
-        })?);
+        self.style = Some(style.validate().map_err(|e| napi::Error::from_reason(e.to_string()))?);
         Ok(())
     }
 }
