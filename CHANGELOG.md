@@ -1,4 +1,5 @@
 # Changelog
+<!-- Release process: tag-driven from main. `git tag -a vX.Y.Z -m "..."` then push the tag. -->
 
 All notable changes to this project will be documented in this file.
 
@@ -7,7 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.0] — 2026-06-30
+## [0.2.2] — 2026-06-30
+
+### Fixed
+
+- **Release pipeline now publishes platform-specific `.node` packages** — the CI
+  release workflow only published the JS wrapper; the 3 platform packages
+  (`darwin-arm64`, `linux-x64-gnu`, `win32-x64-msvc`) were created but never
+  pushed to npm. Fresh `npm install` would fail at runtime with a
+  native-binding error. Worked locally because `native.js` loads from the
+  repo root first.
+- **`optionalDependencies` injected at publish time** — the main package now
+  declares the platform packages as optional dependencies so npm installs
+  them automatically on the matching platform.
+- **GitHub Release auto-created** via `softprops/action-gh-release@v2`.
+- **Functional smoke test** runs after publish in CI: fresh install + round-trip.
+- **Verify step retries** on npm registry propagation delay.
+
+## [0.2.1] — 2026-06-30 (unpublished — CI pipeline fix)
+
+v0.2.0's release pipeline work was split into v0.2.1 → v0.2.2 when npm
+re-publish of the same version was blocked after unpublish. v0.2.2 is the
+first fully working release; v0.2.0 and v0.2.1 are superseded.
+
+## [0.2.0] — 2026-06-30 (unpublished — Style System scope)
 
 ### Added
 
