@@ -27,6 +27,10 @@ pub enum ExcelrsError {
     #[error("Invalid cell address: {0}")]
     InvalidAddress(String),
 
+    /// Invalid style value or combination (spec §6.8 validation rules).
+    #[error("{0}")]
+    InvalidStyle(String),
+
     /// Error during XLSX write.
     #[error("Write error: {0}")]
     Write(String),

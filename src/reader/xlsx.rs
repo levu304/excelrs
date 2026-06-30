@@ -185,9 +185,9 @@ mod tests {
 
     #[test]
     fn test_map_data_float() {
-        let result = map_data(&Data::Float(3.14));
+        let result = map_data(&Data::Float(std::f64::consts::PI));
         assert_eq!(result.value_type, "Number");
-        assert_eq!(result.number, Some(3.14));
+        assert_eq!(result.number, Some(std::f64::consts::PI));
     }
 
     #[test]

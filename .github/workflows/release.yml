@@ -98,10 +98,78 @@ jobs:
           EOF
           echo "Platform package.json files created"
 
-      - name: Publish to npm
-        run: npm publish --access public
+      - name: Publish platform packages
+        run: |
+          for dir in npm/*/; do
+            (cd "$dir" && npm publish --access public) || exit 1
+          done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish to npm (main package)
+        run: |
+          node -e "
+            const pkg = require('./package.json');
+            pkg.optionalDependencies = {
+              '@levu304/excelrs-darwin-arm64': pkg.version,
+              '@levu304/excelrs-linux-x64-gnu': pkg.version,
+              '@levu304/excelrs-win32-x64-msvc': pkg.version
+            };
+            require('fs').writeFileSync('./package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+          npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Verify all 4 packages on npm
+        run: |
+          set -e
+          VERSION=$(node -p "require('./package.json').version")
+          for pkg in @levu304/excelrs \
+                     @levu304/excelrs-darwin-arm64 \
+                     @levu304/excelrs-linux-x64-gnu \
+                     @levu304/excelrs-win32-x64-msvc; do
+            for attempt in 1 2 3 4 5; do
+              published=$(npm view "$pkg@$VERSION" version 2>/dev/null || echo "MISSING")
+              if [ "$published" = "$VERSION" ]; then
+                echo "OK: $pkg@$VERSION"
+                break
+              fi
+              echo "  [attempt $attempt] $pkg@$VERSION not yet visible (got: $published)"
+              sleep 3
+            done
+            published=$(npm view "$pkg@$VERSION" version 2>/dev/null || echo "MISSING")
+            if [ "$published" != "$VERSION" ]; then
+              echo "FAIL: $pkg@$VERSION not on npm after 5 retries (got: $published)"
+              exit 1
+            fi
+          done
+
+      - name: Functional smoke test
+        timeout-minutes: 2
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          SMOKE_DIR=$(mktemp -d)
+          cd "$SMOKE_DIR"
+          npm init -y > /dev/null 2>&1
+          npm install --no-save "@levu304/excelrs@$VERSION" 2>&1 | tail -3
+          node -e "
+            const { Workbook } = require('@levu304/excelrs');
+            const wb = new Workbook();
+            const ws = wb.addWorksheet('test');
+            ws.addRow([1, 2, 3]);
+            ws.setCellStyle(1, 2, { font: { bold: true } });
+            wb.xlsx.write()
+              .then(buf => {
+                if (buf.length < 100) throw new Error('xlsx too small: ' + buf.length);
+                console.log('✓ native binding works, xlsx size:', buf.length);
+              })
+              .catch(err => {
+                console.error('FAIL:', err.message);
+                process.exit(1);
+              });
+          "
+          rm -rf "$SMOKE_DIR"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

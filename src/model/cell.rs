@@ -12,6 +12,7 @@
 
 use napi_derive::napi;
 
+use crate::model::style::Style;
 use crate::types;
 
 // ---------------------------------------------------------------------------
@@ -108,6 +109,9 @@ pub struct Cell {
     col: u32,
     value: CellValue,
     formula: Option<String>,
+    /// Style reference. `None` = Normal (index 0). Write-only in v0.2.0.
+    /// Reading a styled `.xlsx` yields `None` (style read deferred to v0.3.0).
+    style: Option<Style>,
 }
 
 #[napi]
@@ -120,6 +124,7 @@ impl Cell {
             col,
             value: CellValue::default(),
             formula: None,
+            style: None,
         }
     }
 
@@ -181,6 +186,34 @@ impl Cell {
     #[napi(getter)]
     pub fn formula(&self) -> Option<String> {
         self.formula.clone()
+    }
+
+    // -- style (getter + setter) --
+
+    /// Returns the cell's style, or `None` if Normal (index 0).
+    #[napi(getter)]
+    pub fn style(&self) -> Option<Style> {
+        self.style.clone()
+    }
+
+    /// Set the cell's style from a JS object. Full-replace semantics
+    /// (spec §6.9): assigning a new style replaces the existing one.
+    ///
+    /// - `null | undefined | {}` → resets to Normal (None).
+    /// - Throws `ExcelrsError::InvalidStyle` on validation failure.
+    #[napi(setter)]
+    pub fn set_style(&mut self, val: serde_json::Value) -> napi::Result<()> {
+        if val.is_null() {
+            self.style = None;
+            return Ok(());
+        }
+        let style: Style = serde_json::from_value(val).map_err(|e| napi::Error::from_reason(format!("style: {e}")))?;
+        if style.is_empty() {
+            self.style = None;
+            return Ok(());
+        }
+        self.style = Some(style.validate().map_err(|e| napi::Error::from_reason(e.to_string()))?);
+        Ok(())
     }
 }
 
