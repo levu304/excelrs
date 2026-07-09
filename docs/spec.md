@@ -529,9 +529,8 @@ pub struct Cell {
     pub address: String,          // "A1", "B2", etc.
     pub row: u32,                 // 1-indexed
     pub col: u32,                 // 1-indexed
-    value: CellValue,             // current value (private field, accessed via getter/setter)
+    inner: Arc<Mutex<CellInner>>, // shared with the owning worksheet's cell map
     pub formula: Option<String>,  // read-only formula string
-    pub style: Option<Style>,     // v0.2.0+: writable via cell.style = {...}; null/undefined/{} → Normal
 }
 
 #[napi]
@@ -581,7 +580,37 @@ impl Cell {
 }
 ```
 
-**Note on mutation semantics (clone-on-read):** napi-rs structs are passed by value/clone across the FFI boundary. When `ws.getCell('A1')` is called, the returned `Cell` JS object is a clone of the Rust cell in the worksheet's internal map. Calling `cell.value = 42` on this clone does **not** mutate the worksheet's internal state. This is a fundamental constraint of napi-rs v3: `#[napi]` functions always return owned/copied types (`Cell`, `Row`, `Worksheet`), never references (`&Cell`, `&Row`, `&Worksheet`). Mutating a returned object has no effect on the internal model. To persist changes, use `ws.setCell('A1', cell)` or a dedicated setter on the worksheet. v0.2 will explore interior mutability patterns (`RefCell` or `Arc<Mutex<>>`) to achieve exceljs-compatible chainable mutation (`ws.getCell('A1').value = 42`).
+**Note on mutation semantics (v0.4.0 — resolved):** In v0.1.0–v0.3.0, `Cell` used a plain `Clone`-derive pattern: napi-rs structs are passed by value/clone across the FFI boundary, so `ws.getCell('A1')` returned a clone of the cell. Mutating that clone had no effect on the worksheet. **As of v0.4.0**, `Cell` holds `Arc<Mutex<CellInner>>` (matching the interior-mutability pattern already used by `Row` and `Column`). The cell returned by `ws.getCell(...)` / `row.getCell(...)` shares an `Arc` with the cell in the worksheet's internal map. `cell.value = 42` and `cell.style = {...}` now persist into the owning worksheet automatically. All getters/setters return owned copies (as napi requires) from behind the locked `Mutex`, so the public JS surface is unchanged.
+
+### Requirements
+
+#### Requirement: Cell-level value mutation persists to worksheet
+
+A `Cell` obtained via `Worksheet.getCell*` or `Row.getCell*` SHALL share mutable state with the owning worksheet. Assigning `cell.value = x` on such a cell MUST persist into the worksheet's internal model and be present after a write/read round-trip.
+
+##### Scenario: Set value on fetched cell, read back after round-trip
+- **WHEN** `ws.getCell('A1').value = 42` is assigned on a worksheet, then the workbook is written and read back
+- **THEN** `ws.getCell('A1').value.number` equals `42`
+
+##### Scenario: Set value chained from row
+- **WHEN** `ws.getRow(1).getCell(1).value = "hi"` is assigned
+- **THEN** `ws.getCell('A1').value.string` equals `"hi"`
+
+#### Requirement: Cell-level style mutation persists to worksheet
+
+A `Cell` obtained via `Worksheet.getCell*` or `Row.getCell*` SHALL share mutable state with the owning worksheet. Assigning `cell.style = {...}` on such a cell MUST persist into the worksheet's internal model and survive a write/read round-trip, matching exceljs chainable-mutation behavior.
+
+##### Scenario: Set style on fetched cell, read back after round-trip
+- **WHEN** `ws.getCell('B2').style = { font: { bold: true } }` is assigned, then the workbook is written and read back
+- **THEN** `ws.getCell('B2').style.font.bold` is `true`
+
+##### Scenario: Style set via getCell equals style set via setCellStyle
+- **WHEN** `ws.getCell('C3').style = { fill: { kind: 'solid', foreground: 'FFFF0000' } }` and separately `ws.setCellStyle(4, 4, { font: { italic: true } })` are applied
+- **THEN** both cells retain their respective styles after a write/read round-trip
+
+##### Scenario: Clearing style via assignment resets to Normal
+- **WHEN** a cell with style `{ font: { bold: true } }` has `cell.style = null` (or `{}`) assigned
+- **THEN** the cell's style is `None` (Normal) and is written without a style index
 
 ### 6.3 Row
 
@@ -617,18 +646,14 @@ impl Row {
 
     // Cell access — two methods dispatched by JS glue (col: number | string)
     #[napi]
-    pub fn get_cell_by_col_num(&self, col: u32) -> Cell {
-        self.cells.get(&col).cloned().unwrap_or_else(|| Cell::new(
-            /* address computed from row+col */ "...", self.number, col
-        ))
+    pub fn get_cell_by_col_num(&mut self, col: u32) -> Cell {
+        self.get_or_create_cell_mut(col).clone()
     }
 
     #[napi]
-    pub fn get_cell_by_col_letter(&self, col_letter: String) -> Cell {
+    pub fn get_cell_by_col_letter(&mut self, col_letter: String) -> Cell {
         let col = parse_column_letter(&col_letter);
-        self.cells.get(&col).cloned().unwrap_or_else(|| Cell::new(
-            format!("{}{}", col_letter, self.number), self.number, col
-        ))
+        self.get_or_create_cell_mut(col).clone()
     }
 }
 
@@ -1183,7 +1208,7 @@ cargo fmt -- --check
 - ARGB hex (8 chars) or RGB hex (6 chars) colors. No theme color references in v0.2.0 (ADR-25).
 - Built-in "Normal" remains index 0. `cell.style = null` resets to Normal.
 
-**Explicitly out of scope (deferred; see §9.2.1 for the v0.4.0 candidate list):** seven items — `Worksheet.mergeCells`, cell-level interior mutability, `Hyperlink`/`RichText`/`Merge` CellValue variants, theme color references, row-level style, gradient fills, diagonal borders. (Style read shipped in v0.3.0.)
+**Explicitly out of scope (deferred; see §9.2.1 for the v0.4.0 candidate list):** six items — `Worksheet.mergeCells`, `Hyperlink`/`RichText`/`Merge` CellValue variants, theme color references, row-level style, gradient fills, diagonal borders. (Cell-level interior mutability shipped in v0.4.0; style read shipped in v0.3.0.)
 
 **Test budget:** ~22 new Rust (6 type construction + 8 setter validation + 4 `cellXfs` dedup + 4 round-trip) + ~13 new JS (4 setter + 5 round-trip via exceljs fixtures + 4 column-style). v0.1.0 ends at 73+42; v0.2.0 targets **95+55** total.
 
@@ -1196,14 +1221,13 @@ The following items are explicitly **deferred from v0.2.0 to keep the v0.2.0 rel
 | Deferred item | Rationale |
 |---------------|-----------|
 | `Worksheet.mergeCells(range)` | Requires `<mergeCells>` element, non-master cell handling, and read-side parsing. Independent of the style system. |
-| Cell-level interior mutability | `Arc<Mutex<Cell>>` in `Worksheet.rows` so `ws.getCell('A1').value = 42` persists. v0.1.0/0.2.0 keep clone-on-read; row-level interior mutability is already in place. |
 | `Hyperlink`, `RichText`, `Merge` CellValue variants | Reintroduce with reader/writer support. `Hyperlink` needs `<hyperlinks>` part; `RichText` needs inline string parsing on read; `Merge` is a marker set when a cell is inside a merge range. |
 | Theme color references | Reading `xl/theme1.xml` and supporting `theme="N"` color refs. ARGB hex covers the common case. |
 | Row-level style (`Row.style: Option<Style>`) | OOXML's `<row>` element supports `s="<idx>"` for row-default formatting. Adds one field on `Row`, one writer branch, and a reader parse. Currently shipped: cell + column style only. |
 | Gradient fills (`Fill.kind = "gradient"`) | OOXML's `<gradientFill>` requires angle and color-stop fields. Rare in spreadsheet styling. Rejected in v0.2.0 setter with `ExcelrsError::InvalidStyle`. |
 | Diagonal borders (`Border.diagonal` + `diagonalUp` + `diagonalDown`) | OOXML's `<border>` element supports a diagonal line used for strike-through cells. Three more fields; <1% of real-world styling. |
 
-These seven items are the headline v0.4.0 work units.
+These remaining six items are the headline v0.4.0 work units.
 
 ### 9.3 Future (v0.3+)
 
@@ -1260,7 +1284,7 @@ These are capabilities that excelrs will **not** implement, now or in the future
 | 16 | `<dimension ref="..."/>` in sheet XML | Declares used cell range for correct Excel scroll bounds and print area |
 | 17 | Remove `Merge`, `RichText`, `Hyperlink`, `SharedString` from v0.1 | Dead variants — no calamine source for them on the read path, no write support in v0.1. Reintroduce in v0.3.0 (deferred per §9.2.1) |
 | 18 | Date detection via calamine's built-in date format IDs | IDs 14–22 and custom formats with date tokens; calamine handles 1900/1904 system internally |
-| 19 | Clone-on-read mutation semantics (known limitation) | napi-rs passes structs by value/clone. `ws.getCell('A1').value = 42` mutates a clone. v0.1 uses explicit setters; v0.2 explores interior mutability |
+| 19 | Clone-on-read mutation semantics — **resolved in v0.4.0** | `Cell` now holds `Arc<Mutex<CellInner>>` so `ws.getCell('A1').value = 42` and `cell.style = {...}` persist into the worksheet. v0.1–v0.3 used explicit setters; interior mutability is now shipped. |
 | 20 | `#[napi(constructor)]` on `new()` methods | napi v3 requires `#[napi(constructor)]` explicitly on constructor functions, not bare `#[napi]` |
 | 21 | `#[napi(setter)]` not `#[napi(set)]` | Correct napi v3 attribute name for property setters |
 | 22 | `napi-build = "3"` in build-dependencies | Matches napi v3 toolchain; note: `napi-build = "2"` also works with napi v3 — the scaffold uses v2 for build-deps |

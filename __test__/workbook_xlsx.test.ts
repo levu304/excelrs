@@ -70,6 +70,65 @@ test('wb.xlsx.writeFile writes to disk', async () => {
 })
 
 // ---------------------------------------------------------------------------
+// Cell interior mutability via getCell (v0.4.0 regression)
+// ---------------------------------------------------------------------------
+
+test('getCell().value = x persists through write/read round-trip', async () => {
+  const wb = new Workbook()
+  const ws = wb.addWorksheet('Mutate')
+  ws.addRow([1, 2, 3])
+
+  // Mutate A1's value via getCell (the key regression path)
+  const cell = ws.getCell('A1')
+  cell.value = 42
+
+  const buf = await wb.xlsx.write()
+
+  const wb2 = new Workbook()
+  await wb2.xlsx.read(buf)
+  const ws2 = wb2.getWorksheet('Mutate')!
+  expect(ws2.getCell('A1').value.number).toBe(42)
+})
+
+test('getCell().style = {...} persists through write/read round-trip', async () => {
+  const wb = new Workbook()
+  const ws = wb.addWorksheet('StyleMut')
+  ws.addRow(['hello'])
+
+  // Mutate A1's style via getCell (the key regression path)
+  const cell = ws.getCell('A1')
+  cell.style = {
+    font: { bold: true, color: 'FF00FF00' },
+  }
+
+  const buf = await wb.xlsx.write()
+
+  const wb2 = new Workbook()
+  await wb2.xlsx.read(buf)
+  const ws2 = wb2.getWorksheet('StyleMut')!
+
+  // Read back and verify style persists
+  const readCell = ws2.getCell('A1')
+  expect(readCell.style.font.bold).toBe(true)
+  expect(readCell.style.font.color).toBe('FF00FF00')
+})
+
+test('row.getCell().value mutates persisted cell', () => {
+  // Regression: row.getCell() returns the shared Arc-backed cell when
+  // the cell already exists, so value mutation persists.
+  const wb = new Workbook()
+  const ws = wb.addWorksheet('RowMut')
+  ws.addRow([10])
+
+  const row = ws.getRow(1)
+  const cell = row.getCell(1)
+  cell.value = 99
+
+  // Read back via worksheet — should see the mutation
+  expect(ws.getCell('A1').value.number).toBe(99)
+})
+
+// ---------------------------------------------------------------------------
 // Round-trip: excelrs -> write -> read with same excelrs
 // ---------------------------------------------------------------------------
 

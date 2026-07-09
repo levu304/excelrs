@@ -87,7 +87,7 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
                     ws.columns().iter().map(|c| (c.col_num(), c.style())).collect();
                 ws.rows().into_iter().flat_map(move |row| {
                     let col_style_map = &col_style_map;
-                    row.sorted_cells()
+                    row.written_cells()
                         .into_iter()
                         .map(move |c| effective_cell_style_with_fallback(c, col_style_map))
                         .collect::<Vec<_>>()
@@ -104,7 +104,7 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
             start_file(&mut zip, &sheet_path)?;
 
             // Count cells in this worksheet for the style-indices slice
-            let cell_count: usize = ws.rows().iter().map(|r| r.sorted_cells().len()).sum();
+            let cell_count: usize = ws.rows().iter().map(|r| r.written_cells().len()).sum();
             let ws_indices = &style_table.cell_indices[style_offset..style_offset + cell_count];
             style_offset += cell_count;
 
@@ -176,7 +176,7 @@ fn build_shared_strings(worksheets: &[Worksheet]) -> (Vec<String>, HashMap<Strin
 
     for ws in worksheets {
         for row in ws.rows() {
-            for cell in row.sorted_cells() {
+            for cell in row.written_cells() {
                 let cv = cell.value();
                 if cv.value_type == "String" {
                     if let Some(s) = cv.string {
@@ -381,8 +381,13 @@ fn write_cells_with_styles<W: Write>(
 ) -> Result<(), ExcelrsError> {
     let mut si = style_indices.iter();
     for row in ws.rows() {
+        let cells = row.written_cells();
+        if cells.is_empty() {
+            // Skip empty rows to avoid phantom `<row>` in output
+            continue;
+        }
         write!(w, r#"<row r="{}">"#, row.number())?;
-        for cell in row.sorted_cells() {
+        for cell in cells {
             let style_idx = si
                 .next()
                 .copied()
@@ -476,26 +481,27 @@ fn compute_dimension(ws: &Worksheet) -> Option<String> {
     let mut has_cells = false;
 
     for row in ws.rows() {
-        let r = row.number();
-        if row.cell_count() > 0 {
-            if r < min_row {
-                min_row = r;
-            }
-            if r > max_row {
-                max_row = r;
-            }
-            // Find min_col per row
-            for cell in row.sorted_cells() {
-                let c = cell.col();
-                if c < min_col {
-                    min_col = c;
-                }
-                if c > max_col {
-                    max_col = c;
-                }
-            }
-            has_cells = true;
+        let written = row.written_cells();
+        if written.is_empty() {
+            continue;
         }
+        let r = row.number();
+        if r < min_row {
+            min_row = r;
+        }
+        if r > max_row {
+            max_row = r;
+        }
+        for cell in written {
+            let c = cell.col();
+            if c < min_col {
+                min_col = c;
+            }
+            if c > max_col {
+                max_col = c;
+            }
+        }
+        has_cells = true;
     }
 
     if !has_cells {
@@ -1002,6 +1008,65 @@ mod tests {
         assert_eq!(style.num_fmt.as_deref(), Some("0.00%"));
     }
 
+    // -- Regression: getCell().style / .value persist through round-trip (v0.4.0) --
+
+    /// Write a workbook where styles and values are set via `getCell().style = {...}`
+    /// and `getCell().value = x` (not via `setCellStyle`/`addRow`), then read back
+    /// and verify the data persists. Catches the Arc<Mutex<CellInner>> regression.
+    #[test]
+    fn test_round_trip_cell_mutation_via_get_cell() {
+        use crate::reader::xlsx::workbook_inner_from_bytes;
+
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("GetCellMut".into());
+
+        // Populate via add_row, then mutate via getCell
+        ws.add_row(vec![serde_json::json!(10), serde_json::json!("x")]);
+        ws.add_row(vec![serde_json::json!(20)]);
+
+        // Mutate style via getCell (simulates JS cell.style = {...})
+        let mut cell = ws.get_cell_by_address("A1".into());
+        cell.set_style(serde_json::json!({
+            "font": { "bold": true, "color": "FF00FF00" },
+        }))
+        .unwrap();
+
+        // Mutate value via getCell (simulates JS cell.value = 42)
+        let mut cell = ws.get_cell_by_address("B1".into());
+        cell.set_value(serde_json::json!("mutated"));
+
+        // Also style on a second cell
+        let mut cell = ws.get_cell_by_address("A2".into());
+        cell.set_style(serde_json::json!({
+            "fill": { "kind": "solid", "foreground": "FFFF0000" },
+        }))
+        .unwrap();
+
+        // Round-trip through writer + reader
+        let bytes = crate::writer::xlsx::workbook_to_bytes(&inner).unwrap();
+        let read_back = workbook_inner_from_bytes(&bytes).unwrap();
+        let ws = &read_back.worksheets()[0];
+
+        // Verify A1: bold + green font
+        let cell = ws.get_cell_by_address("A1".into());
+        let style = cell.style().expect("A1 style should round-trip");
+        assert_eq!(style.font.as_ref().and_then(|f| f.bold), Some(true));
+        assert_eq!(style.font.as_ref().and_then(|f| f.color.as_deref()), Some("FF00FF00"));
+
+        // Verify B1: value was mutated
+        let cell = ws.get_cell_by_address("B1".into());
+        assert_eq!(cell.value().string.as_deref(), Some("mutated"));
+
+        // Verify A2: red fill
+        let cell = ws.get_cell_by_address("A2".into());
+        let style = cell.style().expect("A2 style should round-trip");
+        assert_eq!(
+            style.fill.as_ref().and_then(|f| f.foreground.as_deref()),
+            Some("FFFF0000")
+        );
+        assert_eq!(style.fill.as_ref().map(|f| f.kind.as_str()), Some("solid"));
+    }
+
     fn build_test_worksheet() -> Worksheet {
         let mut ws = Worksheet::new("Test".into());
         ws.set_id(1);
@@ -1029,4 +1094,44 @@ mod tests {
         file.read_to_end(&mut data).map_err(ExcelrsError::Io)?;
         workbook_inner_from_bytes(&data)
     }
+
+    #[test]
+    fn test_read_does_not_create_phantom_cells() {
+        // Regression: ws.getCellByRc(r,c) must NOT emit phantom <c> for cells
+        // that were only read (not written). Inspects raw sheet XML inside the ZIP
+        // because calamine's reader already skips empty cells.
+        use std::io::Read;
+
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("Phantom".into());
+        ws.add_row(vec![serde_json::json!(1)]);
+
+        // Read a cell at col 5 (E1) — row exists, so get_or_create inserts a
+        // null Cell. After fix, the writer must skip it.
+        let _cell = ws.get_cell_by_rc(1, 5);
+
+        // Write to ZIP, extract sheet1.xml
+        let bytes = crate::writer::xlsx::workbook_to_bytes(&inner).unwrap();
+        let cursor = std::io::Cursor::new(&bytes[..]);
+        let mut archive = zip::ZipArchive::new(cursor).unwrap();
+        let mut sheet_xml = String::new();
+        archive
+            .by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut sheet_xml)
+            .unwrap();
+
+        // Before fix: sheet contains `<c r="E1"`  (phantom cell written)
+        // After fix:  only `<c r="A1"` from add_row([1])
+        assert!(
+            !sheet_xml.contains("E1"),
+            "sheet must not contain phantom cell E1: {sheet_xml}"
+        );
+        assert!(
+            sheet_xml.contains(r#"c r="A1""#),
+            "sheet must contain real cell A1"
+        );
+    }
+
+
 }
