@@ -16,6 +16,9 @@ npm/
 # OS
 .DS_Store
 
+# Build artifacts
+native.d.ts
+
 # Environment
 .env
 .env.local

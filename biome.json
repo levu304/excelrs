@@ -1,0 +1,14 @@
+{
+  "files": {
+    "includes": ["index.d.ts"]
+  },
+  "formatter": { "enabled": false },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "suspicious": {
+        "noExplicitAny": "error"
+      }
+    }
+  }
+}
