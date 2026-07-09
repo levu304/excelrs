@@ -108,22 +108,13 @@ impl Worksheet {
     /// Get cell by 1-indexed row and column numbers.
     /// Returns the cell from the worksheet's internal row map, so value and style
     /// mutations on the returned cell persist into the worksheet.
-    /// If the row exists, creates the cell in the map if absent.
-    /// If the row doesn't exist, returns a standalone empty cell.
+    /// Creates the row (and cell) if absent.
     #[napi]
     pub fn get_cell_by_rc(&self, row: u32, col: u32) -> Cell {
         let mut rows = self.rows.lock().expect("Worksheet rows lock poisoned");
-        match rows.get_mut(&row) {
-            Some(r) => {
-                let cell = r.get_or_create_cell_mut(col);
-                cell.clone()
-            }
-            None => Cell::new(
-                types::address_to_string(col, row).unwrap_or_else(|_| format!("R{row}C{col}")),
-                row,
-                col,
-            ),
-        }
+        let ws_row = rows.entry(row).or_insert_with(|| Row::new(row));
+        let cell = ws_row.get_or_create_cell_mut(col);
+        cell.clone()
     }
 
     // -- get_row --
@@ -224,24 +215,21 @@ impl Worksheet {
     /// the cell is mutated inside the locked row map.
     #[napi]
     pub fn set_cell_style(&self, row: u32, col: u32, style: serde_json::Value) -> napi::Result<()> {
-        let mut rows = self.rows.lock().expect("Worksheet rows lock poisoned");
-        let ws_row = rows.entry(row).or_insert_with(|| Row::new(row));
-        let cell = ws_row.get_or_create_cell_mut(col);
         // Use the raw setter to bypass the napi-rs setter codegen
         // (#[napi(setter)] renames the function, making it unreachable
         // when called from another Rust method).
         if style.is_null() {
-            cell.set_style_raw(None);
+            self.with_cell_mut(row, col, |cell| cell.set_style_raw(None));
             return Ok(());
         }
         let parsed: crate::model::style::Style =
             serde_json::from_value(style).map_err(|e| napi::Error::from_reason(format!("style: {e}")))?;
         if parsed.is_empty() {
-            cell.set_style_raw(None);
+            self.with_cell_mut(row, col, |cell| cell.set_style_raw(None));
             return Ok(());
         }
         let validated = parsed.validate().map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        cell.set_style_raw(Some(validated));
+        self.with_cell_mut(row, col, |cell| cell.set_style_raw(Some(validated)));
         Ok(())
     }
 
@@ -312,27 +300,30 @@ impl Worksheet {
         self.id = id;
     }
 
-    /// Insert a cell value at (row, col) — used by the reader.
-    pub fn insert_cell_value(&self, row: u32, col: u32, value: CellValue) {
+    /// Lock rows, get-or-create row + cell, call `f` on the mutable cell ref.
+    fn with_cell_mut<F>(&self, row: u32, col: u32, f: F)
+    where
+        F: FnOnce(&mut Cell),
+    {
         let mut rows = self.rows.lock().expect("Worksheet rows lock poisoned");
         let ws_row = rows.entry(row).or_insert_with(|| Row::new(row));
-        ws_row.set_cell_value(col, value);
+        let cell = ws_row.get_or_create_cell_mut(col);
+        f(cell);
+    }
+
+    /// Insert a cell value at (row, col) — used by the reader.
+    pub fn insert_cell_value(&self, row: u32, col: u32, value: CellValue) {
+        self.with_cell_mut(row, col, |cell| cell.set_value_raw(value));
     }
 
     /// Set a formula string on a cell at (row, col) — used by the reader.
     pub fn insert_cell_formula(&self, row: u32, col: u32, formula: String) {
-        let mut rows = self.rows.lock().expect("Worksheet rows lock poisoned");
-        let ws_row = rows.entry(row).or_insert_with(|| Row::new(row));
-        let cell = ws_row.get_or_create_cell_mut(col);
-        cell.set_formula(Some(formula));
+        self.with_cell_mut(row, col, |cell| cell.set_formula(Some(formula)));
     }
 
     /// Set the style on a cell at (row, col) — used by the reader.
     pub fn insert_cell_style(&self, row: u32, col: u32, style: Style) {
-        let mut rows = self.rows.lock().expect("Worksheet rows lock poisoned");
-        let ws_row = rows.entry(row).or_insert_with(|| Row::new(row));
-        let cell = ws_row.get_or_create_cell_mut(col);
-        cell.set_style_raw(Some(style));
+        self.with_cell_mut(row, col, |cell| cell.set_style_raw(Some(style)));
     }
 }
 
@@ -516,5 +507,26 @@ mod tests {
 
         let cloned_cell = cell.clone();
         assert_eq!(cloned_cell.style().unwrap().font.unwrap().bold, Some(true));
+    }
+
+    #[test]
+    fn test_missing_row_getcell_persists() {
+        // Regression: getCell on a row that doesn't exist yet must return a cell
+        // that shares the worksheet's internal Arc<Mutex<CellInner>>, so mutations
+        // persist. Before fix B, the returned Cell was standalone and writes were lost.
+        let ws = Worksheet::new("Sheet1".into());
+
+        // Get cell at a row that doesn't exist yet
+        let mut cell = ws.get_cell_by_rc(5, 1);
+        cell.set_value_raw(CellValue::number(42.0));
+        // Dropping `cell` — the value should still be in the worksheet's internal map
+
+        // Re-acquire the same cell from the worksheet
+        let cell2 = ws.get_cell_by_rc(5, 1);
+        assert_eq!(
+            cell2.value().number,
+            Some(42.0),
+            "value set on missing-row getCell must persist"
+        );
     }
 }

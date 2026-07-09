@@ -252,6 +252,14 @@ impl Cell {
         self.inner.lock().expect("Cell lock poisoned").formula = formula;
     }
 
+    /// A cell is "effectively empty" when it has no value, no formula, and
+    /// no style — i.e., it was only created by a read-side `getCell` and
+    /// never populated. The writer skips these cells to avoid phantom output.
+    pub fn is_effectively_empty(&self) -> bool {
+        let inner = self.inner.lock().expect("Cell lock poisoned");
+        inner.value.value_type == "Null" && inner.formula.is_none() && inner.style.is_none()
+    }
+
     /// Compute the A1 address from (col, row). Used during row/cell creation.
     pub fn compute_address(row: u32, col: u32) -> String {
         types::address_to_string(col, row).unwrap_or_else(|_| format!("R{row}C{col}"))

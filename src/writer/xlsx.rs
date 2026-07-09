@@ -87,7 +87,7 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
                     ws.columns().iter().map(|c| (c.col_num(), c.style())).collect();
                 ws.rows().into_iter().flat_map(move |row| {
                     let col_style_map = &col_style_map;
-                    row.sorted_cells()
+                    row.written_cells()
                         .into_iter()
                         .map(move |c| effective_cell_style_with_fallback(c, col_style_map))
                         .collect::<Vec<_>>()
@@ -104,7 +104,7 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
             start_file(&mut zip, &sheet_path)?;
 
             // Count cells in this worksheet for the style-indices slice
-            let cell_count: usize = ws.rows().iter().map(|r| r.sorted_cells().len()).sum();
+            let cell_count: usize = ws.rows().iter().map(|r| r.written_cells().len()).sum();
             let ws_indices = &style_table.cell_indices[style_offset..style_offset + cell_count];
             style_offset += cell_count;
 
@@ -176,7 +176,7 @@ fn build_shared_strings(worksheets: &[Worksheet]) -> (Vec<String>, HashMap<Strin
 
     for ws in worksheets {
         for row in ws.rows() {
-            for cell in row.sorted_cells() {
+            for cell in row.written_cells() {
                 let cv = cell.value();
                 if cv.value_type == "String" {
                     if let Some(s) = cv.string {
@@ -381,8 +381,13 @@ fn write_cells_with_styles<W: Write>(
 ) -> Result<(), ExcelrsError> {
     let mut si = style_indices.iter();
     for row in ws.rows() {
+        let cells = row.written_cells();
+        if cells.is_empty() {
+            // Skip empty rows to avoid phantom `<row>` in output
+            continue;
+        }
         write!(w, r#"<row r="{}">"#, row.number())?;
-        for cell in row.sorted_cells() {
+        for cell in cells {
             let style_idx = si
                 .next()
                 .copied()
@@ -476,26 +481,27 @@ fn compute_dimension(ws: &Worksheet) -> Option<String> {
     let mut has_cells = false;
 
     for row in ws.rows() {
-        let r = row.number();
-        if row.cell_count() > 0 {
-            if r < min_row {
-                min_row = r;
-            }
-            if r > max_row {
-                max_row = r;
-            }
-            // Find min_col per row
-            for cell in row.sorted_cells() {
-                let c = cell.col();
-                if c < min_col {
-                    min_col = c;
-                }
-                if c > max_col {
-                    max_col = c;
-                }
-            }
-            has_cells = true;
+        let written = row.written_cells();
+        if written.is_empty() {
+            continue;
         }
+        let r = row.number();
+        if r < min_row {
+            min_row = r;
+        }
+        if r > max_row {
+            max_row = r;
+        }
+        for cell in written {
+            let c = cell.col();
+            if c < min_col {
+                min_col = c;
+            }
+            if c > max_col {
+                max_col = c;
+            }
+        }
+        has_cells = true;
     }
 
     if !has_cells {
@@ -1088,4 +1094,44 @@ mod tests {
         file.read_to_end(&mut data).map_err(ExcelrsError::Io)?;
         workbook_inner_from_bytes(&data)
     }
+
+    #[test]
+    fn test_read_does_not_create_phantom_cells() {
+        // Regression: ws.getCellByRc(r,c) must NOT emit phantom <c> for cells
+        // that were only read (not written). Inspects raw sheet XML inside the ZIP
+        // because calamine's reader already skips empty cells.
+        use std::io::Read;
+
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("Phantom".into());
+        ws.add_row(vec![serde_json::json!(1)]);
+
+        // Read a cell at col 5 (E1) — row exists, so get_or_create inserts a
+        // null Cell. After fix, the writer must skip it.
+        let _cell = ws.get_cell_by_rc(1, 5);
+
+        // Write to ZIP, extract sheet1.xml
+        let bytes = crate::writer::xlsx::workbook_to_bytes(&inner).unwrap();
+        let cursor = std::io::Cursor::new(&bytes[..]);
+        let mut archive = zip::ZipArchive::new(cursor).unwrap();
+        let mut sheet_xml = String::new();
+        archive
+            .by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut sheet_xml)
+            .unwrap();
+
+        // Before fix: sheet contains `<c r="E1"`  (phantom cell written)
+        // After fix:  only `<c r="A1"` from add_row([1])
+        assert!(
+            !sheet_xml.contains("E1"),
+            "sheet must not contain phantom cell E1: {sheet_xml}"
+        );
+        assert!(
+            sheet_xml.contains(r#"c r="A1""#),
+            "sheet must contain real cell A1"
+        );
+    }
+
+
 }

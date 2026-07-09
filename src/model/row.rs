@@ -112,6 +112,16 @@ impl Row {
         keys.sort_unstable();
         keys.iter().map(|k| &self.cells[k]).collect()
     }
+
+    /// Like `sorted_cells` but filters out cells that are effectively empty
+    /// (no value, no formula, no style). Used by the writer to avoid emitting
+    /// phantom cells created by read-side `getCell`.
+    pub fn written_cells(&self) -> Vec<&Cell> {
+        self.sorted_cells()
+            .into_iter()
+            .filter(|c| !c.is_effectively_empty())
+            .collect()
+    }
 }
 
 #[cfg(test)]
