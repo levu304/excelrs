@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- Reconciled `docs/spec.md` with the v0.3.0 release: corrected header metadata (Version/Status) and removed stale "deferred to v0.3.0" references now that style read and writer alignment emission have shipped (see §1, §4.3, §6.8, §9.2).
+
 ## [0.3.0] — 2026-06-30
 
 ### Added

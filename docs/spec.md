@@ -1,10 +1,10 @@
 # excelrs — Specification
 
 **Package:** `@levu304/excelrs` (scoped npm — unscoped name `excelrs` blocked as too similar to `exceljs`)
-**Version:** 0.1.0 (MVP)
+**Version:** 0.3.0
 **License:** MIT OR Apache-2.0
 **Author:** Solo maintainer (open source)
-**Status:** Pre-implementation
+**Status:** Implemented (published to npm as `@levu304/excelrs`)
 
 ---
 
@@ -197,7 +197,7 @@ model/
 
 **v0.1 limitations:**
 - Styles table is minimal (Normal only). v0.2.0 adds full font/fill/border/alignment/numFmt support (see §6.8, §6.9, §9.2).
-- No merged cell support in write path (deferred to v0.3.0, see §9.2.1).
+- No merged cell support in write path (deferred; v0.4.0 candidate, see §9.2.1).
 - No column width storage in written files.
 
 ### 4.4 `error` — Error handling
@@ -804,9 +804,9 @@ impl Column {
 }
 ```
 
-### 6.8 Style (v0.2.0+ write; not read)
+### 6.8 Style (v0.2.0+ write; read as of v0.3.0)
 
-The full style model is composed of five sub-types and one aggregate `Style` struct (six `#[napi(object)]` flat structs total, ADR-11 pattern). Colors are ARGB hex strings (8 chars, e.g. `"FFFF0000"`) or RGB hex strings (6 chars, e.g. `"FF0000"`). Theme color references are **not** supported in v0.2.0 (deferred to v0.3.0, see §9.2.1).
+The full style model is composed of five sub-types and one aggregate `Style` struct (six `#[napi(object)]` flat structs total, ADR-11 pattern). Colors are ARGB hex strings (8 chars, e.g. `"FFFF0000"`) or RGB hex strings (6 chars, e.g. `"FF0000"`). Theme color references are **not** supported (deferred; v0.4.0 candidate, see §9.2.1).
 
 ```rust
 #[napi(object)]
@@ -912,7 +912,7 @@ Column-level style is applied as the default for cells in that column that have 
 
 **Common pitfall (cell vs column merge):** `cell.style = { font: { italic: true } }` is full-replace; it silently drops every other field, including any field inherited from the column-level style. To change one field while keeping the rest, spread the column style first: `cell.style = { ...column.style, font: { italic: true } }`. This matches the OOXML `cellXfs` model (a style is one XF record per cell) and exceljs's setter behavior. A future `setStyle(partial, { merge: true })` helper is not part of v0.2.0.
 
-**v0.2.0 reader behavior:** Reading a styled `.xlsx` produces `Cell.style = null` (Normal). Style *read* is deferred to v0.3.0 (see §9.2.1).
+**Reader behavior:** Reading a styled `.xlsx` now preserves Font, Fill, Border, Alignment, and numFmt via parsed `xl/styles.xml` (shipped in v0.3.0, see §6.8). `Cell.style` is `null` only when the source cell carries no style.
 
 ---
 
@@ -1171,7 +1171,7 @@ cargo fmt -- --check
 
 ### 9.2 v0.2 — Style System (write only)
 
-**Scope:** styles **write** path only. Reading styles from existing `.xlsx` files is out of scope and deferred to v0.3.0.
+**Scope (v0.2.0):** styles **write** path only. Reading styles was deferred and **shipped in v0.3.0** (see §6.8).
 
 **In scope:**
 
@@ -1183,7 +1183,7 @@ cargo fmt -- --check
 - ARGB hex (8 chars) or RGB hex (6 chars) colors. No theme color references in v0.2.0 (ADR-25).
 - Built-in "Normal" remains index 0. `cell.style = null` resets to Normal.
 
-**Explicitly out of scope (deferred to v0.3.0, see §9.2.1):** eight items — style read, `Worksheet.mergeCells`, cell-level interior mutability, `Hyperlink`/`RichText`/`Merge` CellValue variants, theme color references, row-level style, gradient fills, diagonal borders.
+**Explicitly out of scope (deferred; see §9.2.1 for the v0.4.0 candidate list):** seven items — `Worksheet.mergeCells`, cell-level interior mutability, `Hyperlink`/`RichText`/`Merge` CellValue variants, theme color references, row-level style, gradient fills, diagonal borders. (Style read shipped in v0.3.0.)
 
 **Test budget:** ~22 new Rust (6 type construction + 8 setter validation + 4 `cellXfs` dedup + 4 round-trip) + ~13 new JS (4 setter + 5 round-trip via exceljs fixtures + 4 column-style). v0.1.0 ends at 73+42; v0.2.0 targets **95+55** total.
 
@@ -1294,4 +1294,4 @@ These are capabilities that excelrs will **not** implement, now or in the future
 
 ---
 
-*Spec version: 1.4.0. Last updated: 2026-06-30. v0.3.0 (Style read + alignment emission) — full end-to-end style round-trip; see §9.2 for v0.2.0+ style model, §9.2.1 for remaining deferred items. v1.4.0: §9.2.1 removed Style read and Alignment emission rows; §1 updated to v0.3.0 scope; §6.8 added vertical middle→center mapping note.*
+*Spec version: 1.4.1. Last updated: 2026-07-09. v0.3.0 (Style read + alignment emission) — full end-to-end style round-trip; see §9.2 for v0.2.0+ style model, §9.2.1 for remaining deferred items. v1.4.0: §9.2.1 removed Style read and Alignment emission rows; §1 updated to v0.3.0 scope; §6.8 added vertical middle→center mapping note. v1.4.1: reconciled header metadata (Version/Status) and removed stale "deferred to v0.3.0" references now that style read + writer alignment emission have shipped (§1, §4.3, §6.8, §9.2).*
