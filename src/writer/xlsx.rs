@@ -1002,6 +1002,65 @@ mod tests {
         assert_eq!(style.num_fmt.as_deref(), Some("0.00%"));
     }
 
+    // -- Regression: getCell().style / .value persist through round-trip (v0.4.0) --
+
+    /// Write a workbook where styles and values are set via `getCell().style = {...}`
+    /// and `getCell().value = x` (not via `setCellStyle`/`addRow`), then read back
+    /// and verify the data persists. Catches the Arc<Mutex<CellInner>> regression.
+    #[test]
+    fn test_round_trip_cell_mutation_via_get_cell() {
+        use crate::reader::xlsx::workbook_inner_from_bytes;
+
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("GetCellMut".into());
+
+        // Populate via add_row, then mutate via getCell
+        ws.add_row(vec![serde_json::json!(10), serde_json::json!("x")]);
+        ws.add_row(vec![serde_json::json!(20)]);
+
+        // Mutate style via getCell (simulates JS cell.style = {...})
+        let mut cell = ws.get_cell_by_address("A1".into());
+        cell.set_style(serde_json::json!({
+            "font": { "bold": true, "color": "FF00FF00" },
+        }))
+        .unwrap();
+
+        // Mutate value via getCell (simulates JS cell.value = 42)
+        let mut cell = ws.get_cell_by_address("B1".into());
+        cell.set_value(serde_json::json!("mutated"));
+
+        // Also style on a second cell
+        let mut cell = ws.get_cell_by_address("A2".into());
+        cell.set_style(serde_json::json!({
+            "fill": { "kind": "solid", "foreground": "FFFF0000" },
+        }))
+        .unwrap();
+
+        // Round-trip through writer + reader
+        let bytes = crate::writer::xlsx::workbook_to_bytes(&inner).unwrap();
+        let read_back = workbook_inner_from_bytes(&bytes).unwrap();
+        let ws = &read_back.worksheets()[0];
+
+        // Verify A1: bold + green font
+        let cell = ws.get_cell_by_address("A1".into());
+        let style = cell.style().expect("A1 style should round-trip");
+        assert_eq!(style.font.as_ref().and_then(|f| f.bold), Some(true));
+        assert_eq!(style.font.as_ref().and_then(|f| f.color.as_deref()), Some("FF00FF00"));
+
+        // Verify B1: value was mutated
+        let cell = ws.get_cell_by_address("B1".into());
+        assert_eq!(cell.value().string.as_deref(), Some("mutated"));
+
+        // Verify A2: red fill
+        let cell = ws.get_cell_by_address("A2".into());
+        let style = cell.style().expect("A2 style should round-trip");
+        assert_eq!(
+            style.fill.as_ref().and_then(|f| f.foreground.as_deref()),
+            Some("FFFF0000")
+        );
+        assert_eq!(style.fill.as_ref().map(|f| f.kind.as_str()), Some("solid"));
+    }
+
     fn build_test_worksheet() -> Worksheet {
         let mut ws = Worksheet::new("Test".into());
         ws.set_id(1);

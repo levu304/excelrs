@@ -3,9 +3,9 @@
 /**
  * A single cell in a worksheet.
  *
- * Holds its address (e.g., "A1"), position (1-indexed row/col), value, formula,
- * and style reference. Cells are **value types** across the FFI boundary — see
- * the module-level doc for mutation semantics.
+ * Holds `Arc<Mutex<CellInner>>` so that every clone shares the same underlying
+ * state — value and style mutations made through any handle persist to the
+ * worksheet's internal model.
  */
 export declare class Cell {
   constructor(address: string, row: number, col: number)
@@ -172,7 +172,10 @@ export declare class Worksheet {
   getCellByAddress(address: string): Cell
   /**
    * Get cell by 1-indexed row and column numbers.
-   * Returns an empty cell if the coordinates are valid but haven't been populated.
+   * Returns the cell from the worksheet's internal row map, so value and style
+   * mutations on the returned cell persist into the worksheet.
+   * If the row exists, creates the cell in the map if absent.
+   * If the row doesn't exist, returns a standalone empty cell.
    */
   getCellByRc(row: number, col: number): Cell
   /** Get row by 1-indexed row number. Creates the row if it doesn't exist. */

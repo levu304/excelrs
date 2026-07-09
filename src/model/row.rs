@@ -66,20 +66,14 @@ impl Row {
     /// Get cell by 1-indexed column number. Creates an empty cell if none exists.
     /// This is the Rust backing for `Row.getCell(col: number)`.
     #[napi]
-    pub fn get_cell_by_col_num(&self, col: u32) -> Cell {
-        self.cells.get(&col).cloned().unwrap_or_else(|| {
-            Cell::new(
-                types::address_to_string(col, self.number).unwrap_or_else(|_| format!("R{}{}", self.number, col)),
-                self.number,
-                col,
-            )
-        })
+    pub fn get_cell_by_col_num(&mut self, col: u32) -> Cell {
+        self.get_or_create_cell_mut(col).clone()
     }
 
     /// Get cell by column letter. Creates an empty cell if none exists.
     /// This is the Rust backing for `Row.getCell(col: string)`.
     #[napi]
-    pub fn get_cell_by_col_letter(&self, col_letter: String) -> Cell {
+    pub fn get_cell_by_col_letter(&mut self, col_letter: String) -> Cell {
         let col = types::col_letter_to_num(&col_letter).unwrap_or(0); // returns empty cell for invalid column letters
         self.get_cell_by_col_num(col)
     }
@@ -136,7 +130,7 @@ mod tests {
 
     #[test]
     fn test_row_get_cell_by_col_num_creates_empty() {
-        let row = Row::new(5);
+        let mut row = Row::new(5);
         let cell = row.get_cell_by_col_num(3);
         assert_eq!(cell.row(), 5);
         assert_eq!(cell.col(), 3);
@@ -146,7 +140,7 @@ mod tests {
 
     #[test]
     fn test_row_get_cell_by_col_letter() {
-        let row = Row::new(10);
+        let mut row = Row::new(10);
         let cell = row.get_cell_by_col_letter("AA".into());
         assert_eq!(cell.row(), 10);
         assert_eq!(cell.col(), 27);

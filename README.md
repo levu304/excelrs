@@ -81,9 +81,7 @@ styling for Font, Fill, Border, Alignment, and number formats (write only).
 
 **Limitations (see [spec §9.2.1](docs/spec.md#921-v030-candidate) for full deferred list):**
 - No style **read** — round-trip of a styled `.xlsx` drops styles (deferred to v0.3.0)
-- No cell-level interior mutability — `ws.getCell('A1').style = {...}` only persists
-  when the cell was just-created and not yet cloned; use `ws.setCellStyle()` for
-  reliable cell-level style setting
+- Cell-level interior mutability shipped in v0.4.0 — `ws.getCell('A1').style = {...}` and `ws.getCell('A1').value = x` now persist into the worksheet automatically (via `Arc<Mutex<CellInner>>`)
 - No `alignment` emission — accepted in the `Style` JS object but silently dropped
   at write time (deferred to v0.3.0)
 - No merged cells, no streaming, no formula evaluation, no CSV / XLS / XLSB

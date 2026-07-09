@@ -4,11 +4,15 @@
 //! string and optional typed fields for each variant. This is the proven pattern from
 //! the napi-rs v3 spike — Rust enums with variant data cannot cross the FFI boundary.
 //!
-//! # Mutation semantics (clone-on-read)
-//! napi-rs passes structs by value/clone across FFI. Calling `ws.getCell('A1')` returns
-//! a clone of the internal cell. Mutating the returned object has **no effect** on the
-//! worksheet's internal state. This is a fundamental constraint of napi-rs v3.
-//! v0.2 will explore interior mutability (`Arc<Mutex<>>`) for chainable mutation.
+//! # Mutation semantics (interior mutability)
+//!
+//! `Cell` holds `Arc<Mutex<CellInner>>`, so every clone of a `Cell` shares the same
+//! underlying state. Calling `ws.getCell('A1').value = x` or
+//! `ws.getCell('A1').style = {...}` persists through the `Arc`, even though napi-rs
+//! passes the `Cell` by value/clone across the FFI boundary. This matches the pattern
+//! used by `Row` and `Column` in `worksheet.rs`.
+
+use std::sync::{Arc, Mutex};
 
 use napi_derive::napi;
 
@@ -93,25 +97,34 @@ impl CellValue {
 }
 
 // ---------------------------------------------------------------------------
+// CellInner (private)
+// ---------------------------------------------------------------------------
+
+/// The mutable inner state shared by all clones of a `Cell`.
+#[derive(Clone, Debug)]
+pub(crate) struct CellInner {
+    pub address: String,
+    pub row: u32,
+    pub col: u32,
+    pub value: CellValue,
+    pub formula: Option<String>,
+    /// Style reference. `None` = Normal (index 0).
+    pub style: Option<Style>,
+}
+
+// ---------------------------------------------------------------------------
 // Cell
 // ---------------------------------------------------------------------------
 
 /// A single cell in a worksheet.
 ///
-/// Holds its address (e.g., "A1"), position (1-indexed row/col), value, formula,
-/// and style reference. Cells are **value types** across the FFI boundary — see
-/// the module-level doc for mutation semantics.
+/// Holds `Arc<Mutex<CellInner>>` so that every clone shares the same underlying
+/// state — value and style mutations made through any handle persist to the
+/// worksheet's internal model.
 #[napi]
 #[derive(Clone, Debug)]
 pub struct Cell {
-    address: String,
-    row: u32,
-    col: u32,
-    value: CellValue,
-    formula: Option<String>,
-    /// Style reference. `None` = Normal (index 0). Write-only in v0.2.0.
-    /// Reading a styled `.xlsx` yields `None` (style read deferred to v0.3.0).
-    style: Option<Style>,
+    inner: Arc<Mutex<CellInner>>,
 }
 
 #[napi]
@@ -119,12 +132,14 @@ impl Cell {
     #[napi(constructor)]
     pub fn new(address: String, row: u32, col: u32) -> Self {
         Cell {
-            address,
-            row,
-            col,
-            value: CellValue::default(),
-            formula: None,
-            style: None,
+            inner: Arc::new(Mutex::new(CellInner {
+                address,
+                row,
+                col,
+                value: CellValue::default(),
+                formula: None,
+                style: None,
+            })),
         }
     }
 
@@ -132,14 +147,15 @@ impl Cell {
 
     #[napi(getter)]
     pub fn value(&self) -> CellValue {
-        self.value.clone()
+        self.inner.lock().expect("Cell lock poisoned").value.clone()
     }
 
     /// Accepts JS primitives via serde_json::Value auto-conversion (napi v3 serde-json feature).
     /// Dispatches to the correct CellValue variant based on the JSON value type.
     #[napi(setter)]
     pub fn set_value(&mut self, val: serde_json::Value) {
-        self.value = match val {
+        let mut inner = self.inner.lock().expect("Cell lock poisoned");
+        inner.value = match val {
             serde_json::Value::Number(n) => CellValue {
                 value_type: "Number".into(),
                 number: n.as_f64(),
@@ -164,28 +180,28 @@ impl Cell {
 
     #[napi(getter)]
     pub fn address(&self) -> String {
-        self.address.clone()
+        self.inner.lock().expect("Cell lock poisoned").address.clone()
     }
 
     // -- row (read-only) --
 
     #[napi(getter)]
     pub fn row(&self) -> u32 {
-        self.row
+        self.inner.lock().expect("Cell lock poisoned").row
     }
 
     // -- col (read-only) --
 
     #[napi(getter)]
     pub fn col(&self) -> u32 {
-        self.col
+        self.inner.lock().expect("Cell lock poisoned").col
     }
 
     // -- formula (read-only) --
 
     #[napi(getter)]
     pub fn formula(&self) -> Option<String> {
-        self.formula.clone()
+        self.inner.lock().expect("Cell lock poisoned").formula.clone()
     }
 
     // -- style (getter + setter) --
@@ -193,7 +209,7 @@ impl Cell {
     /// Returns the cell's style, or `None` if Normal (index 0).
     #[napi(getter)]
     pub fn style(&self) -> Option<Style> {
-        self.style.clone()
+        self.inner.lock().expect("Cell lock poisoned").style.clone()
     }
 
     /// Set the cell's style from a JS object. Full-replace semantics
@@ -203,16 +219,17 @@ impl Cell {
     /// - Throws `ExcelrsError::InvalidStyle` on validation failure.
     #[napi(setter)]
     pub fn set_style(&mut self, val: serde_json::Value) -> napi::Result<()> {
+        let mut inner = self.inner.lock().expect("Cell lock poisoned");
         if val.is_null() {
-            self.style = None;
+            inner.style = None;
             return Ok(());
         }
         let style: Style = serde_json::from_value(val).map_err(|e| napi::Error::from_reason(format!("style: {e}")))?;
         if style.is_empty() {
-            self.style = None;
+            inner.style = None;
             return Ok(());
         }
-        self.style = Some(style.validate().map_err(|e| napi::Error::from_reason(e.to_string()))?);
+        inner.style = Some(style.validate().map_err(|e| napi::Error::from_reason(e.to_string()))?);
         Ok(())
     }
 }
@@ -221,18 +238,18 @@ impl Cell {
     /// Internal: set the CellValue directly (used by reader, add_row).
     /// Skips the serde_json::Value dispatch for efficiency.
     pub fn set_value_raw(&mut self, value: CellValue) {
-        self.value = value;
+        self.inner.lock().expect("Cell lock poisoned").value = value;
     }
 
     /// Internal: set the style directly (used by reader, set_columns).
     /// Skips the serde_json::Value dispatch.
     pub fn set_style_raw(&mut self, style: Option<Style>) {
-        self.style = style;
+        self.inner.lock().expect("Cell lock poisoned").style = style;
     }
 
     /// Internal: set the formula string (used by reader).
     pub fn set_formula(&mut self, formula: Option<String>) {
-        self.formula = formula;
+        self.inner.lock().expect("Cell lock poisoned").formula = formula;
     }
 
     /// Compute the A1 address from (col, row). Used during row/cell creation.
