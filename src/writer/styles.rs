@@ -325,9 +325,7 @@ fn emit_fills<W: Write>(w: &mut W, fills: &[Fill]) -> Result<(), ExcelrsError> {
             if let Some(angle) = f.gradient_angle {
                 attrs.push_str(&format!(r#" angle="{}""#, angle));
             }
-            write_str(w, &format!("<gradientFill {}/>", attrs))?;
-            // gradientFill elements: stops inside?
-            // OOXML uses <stop position="0.0"><color rgb="..."/></stop>
+            write_str(w, &format!("<gradientFill {}>", attrs))?;
             if let Some(ref stops) = f.gradient_stops {
                 for stop in stops {
                     write_str(
@@ -339,6 +337,7 @@ fn emit_fills<W: Write>(w: &mut W, fills: &[Fill]) -> Result<(), ExcelrsError> {
                     )?;
                 }
             }
+            write_str(w, "</gradientFill>")?;
         } else {
             let has_fg = f.foreground.is_some();
             let has_bg = f.background.is_some();

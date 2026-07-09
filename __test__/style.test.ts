@@ -53,14 +53,31 @@ test('A3: invalid color throws', () => {
   }).toThrow()
 })
 
-test('A4: Fill.kind = "gradient" throws with descriptive message', () => {
+test('A4: Fill.kind = "gradient" is accepted and round-trips', async () => {
   const wb = new Workbook()
   const ws = wb.addWorksheet('Gradient')
   ws.addRow(['hello'])
 
+  // v0.5.0: gradient fill is accepted with gradient_type and stops
   expect(() => {
-    ws.setCellStyle(1, 1, { fill: { kind: 'gradient' } })
-  }).toThrow(/gradient/)
+    ws.setCellStyle(1, 1, {
+      fill: {
+        kind: 'gradient',
+        gradient_type: 'linear',
+        gradient_degree: 90,
+        gradient_stops: [
+          { color: 'FFFF0000', position: 0 },
+          { color: 'FF00FF00', position: 1 },
+        ],
+      },
+    })
+  }).not.toThrow()
+
+  const wbjs = await writeThenReadWithExceljs(wb)
+  const wsjs = wbjs.getWorksheet('Gradient')!
+  const cell = wsjs.getCell('A1')
+  // exceljs preserves gradient fill (though exceljs uses its own schema)
+  expect(cell.fill?.type).toBe('gradient')
 })
 
 // ---------------------------------------------------------------------------

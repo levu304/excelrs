@@ -72,6 +72,8 @@ export declare class Row {
   set height(val: number | undefined | null)
   get hidden(): boolean
   set hidden(val: boolean)
+  get style(): Style | null
+  set style(val: any)
   /**
    * Get cell by 1-indexed column number. Creates an empty cell if none exists.
    * This is the Rust backing for `Row.getCell(col: number)`.
@@ -174,8 +176,7 @@ export declare class Worksheet {
    * Get cell by 1-indexed row and column numbers.
    * Returns the cell from the worksheet's internal row map, so value and style
    * mutations on the returned cell persist into the worksheet.
-   * If the row exists, creates the cell in the map if absent.
-   * If the row doesn't exist, returns a standalone empty cell.
+   * Creates the row (and cell) if absent.
    */
   getCellByRc(row: number, col: number): Cell
   /** Get row by 1-indexed row number. Creates the row if it doesn't exist. */
@@ -215,6 +216,12 @@ export declare class Worksheet {
    * exist).  Duplicate `colNum` values across the same call are rejected.
    */
   setColumns(cols: any): void
+  /**
+   * Merge a range of cells (e.g. "A1:C3"). Accepts an A1-style range string.
+   * Validates that the range parses to a rectangular area; stores it for
+   * emission in the writer. Duplicate ranges are silently ignored.
+   */
+  mergeCells(range: string): void
 }
 
 /** Cell content alignment and text wrapping. */
@@ -227,12 +234,24 @@ export interface Alignment {
   indent?: number
 }
 
-/** All four cell-border sides. Each side is optional; `None` means no border. */
+/** All cell-border sides plus diagonals. Each side is optional; `None` means no border. */
 export interface Border {
   top?: BorderStyle
   right?: BorderStyle
   bottom?: BorderStyle
   left?: BorderStyle
+  /** Diagonal border line style. Only valid edges between top-left ↔ bottom-right. */
+  diagonal?: BorderStyle
+  /**
+   * Whether the diagonal line goes up (bottom-left to top-right).
+   * OOXML attribute `diagonalUp` on the `<border>` element.
+   */
+  diagonalUp?: boolean
+  /**
+   * Whether the diagonal line goes down (top-left to bottom-right).
+   * OOXML attribute `diagonalDown` on the `<border>` element.
+   */
+  diagonalDown?: boolean
 }
 
 /** Border line style and color for one side of a cell border. */
@@ -247,37 +266,28 @@ export interface BorderStyle {
   color?: string
 }
 
-/**
- * Flat tagged union for cell values across the FFI boundary.
- *
- * Discriminant is `value_type`:
- * - `"Null"` — no value (default)
- * - `"Number"` — numeric value (field: `number`)
- * - `"String"` — text value (field: `string`)
- * - `"Boolean"` — boolean value (field: `boolean`)
- * - `"Formula"` — formula string (field: `formula`; preserved, not evaluated)
- * - `"Error"` — error value (field: `error_value`)
- *
- * # Variants deferred from v0.1
- * `Hyperlink`, `RichText`, `SharedString`, and `Merge` are not included because
- * calamine does not expose them on the read path. They will be reintroduced in v0.2.
- */
 export interface CellValue {
-  /** Discriminant: "Null" | "Number" | "String" | "Boolean" | "Formula" | "Error" */
+  /**
+   * Discriminant: "Null" | "Number" | "String" | "Boolean" | "Formula" | "Error"
+   * | "Hyperlink" | "RichText" | "Merge"
+   */
   valueType: string
   number?: number
   string?: string
   boolean?: boolean
   formula?: string
   errorValue?: string
+  /** URL for hyperlink (write-only, Null on read). */
+  hyperlink?: string
+  /** Display text for hyperlink (write-only, Null on read). */
+  hyperlinkText?: string
+  /** Rich text runs (write-only, Null on read). */
+  richText?: Array<RichTextRun>
 }
 
 /** Cell fill: kind, foreground, background, and pattern. */
 export interface Fill {
-  /**
-   * Fill kind: `"none"` | `"solid"` | `"pattern"`.
-   * `"gradient"` is rejected in v0.2.0 (see spec §9.2.1).
-   */
+  /** Fill kind: `"none"` | `"solid"` | `"pattern"` | `"gradient"`. */
   kind: string
   /** Foreground color (ARGB hex). Default: None. */
   foreground?: string
@@ -285,6 +295,14 @@ export interface Fill {
   background?: string
   /** Pattern name (for `kind="pattern"`). Default: None. */
   pattern?: string
+  /** Gradient type: `"linear"` or `"path"`. Only used when `kind="gradient"`. */
+  gradientType?: string
+  /** Gradient angle in degrees (linear). Only used when `kind="gradient"`. */
+  gradientDegree?: number
+  /** Gradient angle as left/right angle (for path gradients). Only used when `kind="gradient"`. */
+  gradientAngle?: number
+  /** Gradient stops. Only used when `kind="gradient"`. */
+  gradientStops?: Array<GradientStop>
 }
 
 /** Font properties: name, size (points), weight, style, and color. */
@@ -298,6 +316,38 @@ export interface Font {
   underline?: boolean
   /** ARGB hex (8 chars) or RGB hex (6 chars). Default: None. */
   color?: string
+}
+
+/** A single gradient stop: color + position. */
+export interface GradientStop {
+  /** ARGB hex color (8 chars) or RGB hex (6 chars). */
+  color: string
+  /** Position in [0.0, 1.0]. */
+  position: number
+}
+
+/**
+ * Flat tagged union for cell values across the FFI boundary.
+ *
+ * Discriminant is `value_type`:
+ * - `"Null"` — no value (default)
+ * - `"Number"` — numeric value (field: `number`)
+ * - `"String"` — text value (field: `string`)
+ * - `"Boolean"` — boolean value (field: `boolean`)
+ * - `"Formula"` — formula string (field: `formula`; preserved, not evaluated)
+ * - `"Error"` — error value (field: `error_value`)
+ *
+ * # Write-only variants (v0.5.0)
+ * `Hyperlink`, `RichText`, `Merge` are write-only: they can be set via JS and
+ * will be written to the XLSX, but calamine does not expose them on the read
+ * path so they appear as `Null` when read back (see spec §9.2.1 item 2).
+ * A rich text run: a text fragment with optional font formatting.
+ */
+export interface RichTextRun {
+  /** Text content for this run. */
+  text: string
+  /** Font formatting for this run (optional). */
+  font?: Font
 }
 
 /**
