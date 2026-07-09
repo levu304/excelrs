@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use napi_derive::napi;
 
 use super::cell::Cell;
+use crate::model::style::Style;
 use crate::types;
 
 /// A row in a worksheet.
@@ -20,6 +21,7 @@ pub struct Row {
     cells: HashMap<u32, Cell>,
     height: Option<f64>,
     hidden: bool,
+    style: Option<Style>,
 }
 
 #[napi]
@@ -31,6 +33,7 @@ impl Row {
             cells: HashMap::new(),
             height: None,
             hidden: false,
+            style: None,
         }
     }
 
@@ -61,6 +64,30 @@ impl Row {
     #[napi(setter)]
     pub fn set_hidden(&mut self, val: bool) {
         self.hidden = val;
+    }
+
+    // -- style --
+
+    #[napi(getter)]
+    pub fn style(&self) -> Option<Style> {
+        self.style.clone()
+    }
+
+    #[napi(setter)]
+    pub fn set_style(&mut self, val: serde_json::Value) -> napi::Result<()> {
+        if val.is_null() {
+            self.style = None;
+            return Ok(());
+        }
+        let style: Style = serde_json::from_value(val)
+            .map_err(|e| napi::Error::from_reason(format!("style: {e}")))?;
+        if style.is_empty() {
+            self.style = None;
+            return Ok(());
+        }
+        self.style = Some(style.validate()
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?);
+        Ok(())
     }
 
     /// Get cell by 1-indexed column number. Creates an empty cell if none exists.

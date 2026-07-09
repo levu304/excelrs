@@ -78,37 +78,57 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
 
         // xl/styles.xml (v0.2.0: full dedup'd style table)
         start_file(&mut zip, "xl/styles.xml")?;
-        // Collect effective styles across every worksheet
+        // Collect effective styles across every worksheet.
         // Precedence: cell-level wins, then column-level, then Normal (None).
-        let all_styles: Vec<Option<Style>> = worksheets
-            .iter()
-            .flat_map(|ws| {
-                let col_style_map: BTreeMap<u32, Option<Style>> =
-                    ws.columns().iter().map(|c| (c.col_num(), c.style())).collect();
-                ws.rows().into_iter().flat_map(move |row| {
-                    let col_style_map = &col_style_map;
-                    row.written_cells()
-                        .into_iter()
-                        .map(move |c| effective_cell_style_with_fallback(c, col_style_map))
-                        .collect::<Vec<_>>()
-                })
-            })
-            .collect();
+        // Row-level styles are collected separately after cell styles.
+        let mut cell_styles: Vec<Option<Style>> = Vec::new();
+        let mut row_styles: Vec<Option<Style>> = Vec::new();
+        // Per-worksheet boundary tracking: (cell_count, row_count)
+        let mut ws_boundaries: Vec<(usize, usize)> = Vec::new();
+        for ws in worksheets.iter() {
+            let col_style_map: BTreeMap<u32, Option<Style>> =
+                ws.columns().iter().map(|c| (c.col_num(), c.style())).collect();
+            // Cell styles (existing logic)
+            let mut cell_count = 0usize;
+            for row in ws.rows() {
+                let written = row.written_cells();
+                for cell in written {
+                    cell_styles.push(effective_cell_style_with_fallback(cell, &col_style_map));
+                    cell_count += 1;
+                }
+            }
+            // Row styles — include all rows (None maps to Normal index 0)
+            let mut row_count = 0usize;
+            for row in ws.rows() {
+                row_styles.push(row.style().clone());
+                row_count += 1;
+            }
+            ws_boundaries.push((cell_count, row_count));
+        }
+        let all_styles: Vec<Option<Style>> = {
+            let mut v = cell_styles.clone();
+            v.extend(row_styles);
+            v
+        };
         let style_table = styles::build_style_table(&all_styles);
         styles::emit_styles_xml(&mut zip, &style_table)?;
 
         // xl/worksheets/sheet{N}.xml
-        let mut style_offset = 0usize;
+        let mut cell_offset = 0usize;
+        let mut row_offset = 0usize;
+        let cell_styles_total = cell_styles.len();
         for (i, ws) in worksheets.iter().enumerate() {
             let sheet_path = format!("xl/worksheets/sheet{}.xml", i + 1);
             start_file(&mut zip, &sheet_path)?;
 
-            // Count cells in this worksheet for the style-indices slice
-            let cell_count: usize = ws.rows().iter().map(|r| r.written_cells().len()).sum();
-            let ws_indices = &style_table.cell_indices[style_offset..style_offset + cell_count];
-            style_offset += cell_count;
+            let (cell_count, row_count) = ws_boundaries[i];
+            let ws_cell_indices = &style_table.cell_indices[cell_offset..cell_offset + cell_count];
+            cell_offset += cell_count;
+            let ws_row_indices_base = &style_table.cell_indices[cell_styles_total..];
+            let ws_row_indices = &ws_row_indices_base[row_offset..row_offset + row_count];
+            row_offset += row_count;
 
-            write_sheet_xml(&mut zip, ws, &string_indices, ws_indices)?;
+            write_sheet_xml(&mut zip, ws, &string_indices, ws_cell_indices, ws_row_indices)?;
         }
 
         zip.finish()
@@ -178,14 +198,31 @@ fn build_shared_strings(worksheets: &[Worksheet]) -> (Vec<String>, HashMap<Strin
         for row in ws.rows() {
             for cell in row.written_cells() {
                 let cv = cell.value();
-                if cv.value_type == "String" {
-                    if let Some(s) = cv.string {
-                        string_indices.entry(s.clone()).or_insert_with(|| {
-                            let idx = string_table.len() as u32;
-                            string_table.push(s);
-                            idx
-                        });
+                match cv.value_type.as_str() {
+                    "String" => {
+                        if let Some(s) = cv.string {
+                            string_indices.entry(s.clone()).or_insert_with(|| {
+                                let idx = string_table.len() as u32;
+                                string_table.push(s);
+                                idx
+                            });
+                        }
                     }
+                    "Hyperlink" => {
+                        // Collect display text (prefer hyperlink_text, fallback to URL)
+                        let text = cv
+                            .hyperlink_text
+                            .as_deref()
+                            .or(cv.hyperlink.as_deref());
+                        if let Some(s) = text {
+                            string_indices.entry(s.to_string()).or_insert_with(|| {
+                                let idx = string_table.len() as u32;
+                                string_table.push(s.to_string());
+                                idx
+                            });
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -347,7 +384,8 @@ fn write_sheet_xml<W: Write>(
     w: &mut W,
     ws: &Worksheet,
     string_indices: &HashMap<String, u32>,
-    style_indices: &[u32],
+    cell_style_indices: &[u32],
+    row_style_indices: &[u32],
 ) -> Result<(), ExcelrsError> {
     write_str(w, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#)?;
     write_str(
@@ -363,35 +401,62 @@ fn write_sheet_xml<W: Write>(
 
     write_str(w, "<sheetData>")?;
 
-    write_cells_with_styles(w, ws, string_indices, style_indices)?;
+    write_cells_with_styles(w, ws, string_indices, cell_style_indices, row_style_indices)?;
 
     write_str(w, "</sheetData>")?;
+
+    // <mergeCells> — item 1 (v0.5.0)
+    let merged_ranges = ws.get_merged_ranges();
+    if !merged_ranges.is_empty() {
+        write_str(w, &format!(r#"<mergeCells count="{}">"#, merged_ranges.len()))?;
+        for range in &merged_ranges {
+            write_str(w, &format!(r#"<mergeCell ref="{}"/>"#, escape(range)))?;
+        }
+        write_str(w, "</mergeCells>")?;
+    }
+
     write_str(w, "</worksheet>")?;
     Ok(())
 }
 
 /// Iterate a worksheet's cells in order, writing `<row>` and `<c>` elements
-/// with the style index at each cell.  Returns `Err` if `style_indices` is
-/// exhausted before the last cell (writer internal invariant).
+/// with the style index at each cell.  Also emits `<row s="N">` for rows
+/// with a row-level style (including styled empty rows).
+/// Returns `Err` if `cell_style_indices` is exhausted before the last cell
+/// (writer internal invariant).
 fn write_cells_with_styles<W: Write>(
     w: &mut W,
     ws: &Worksheet,
     string_indices: &HashMap<String, u32>,
-    style_indices: &[u32],
+    cell_style_indices: &[u32],
+    row_style_indices: &[u32],
 ) -> Result<(), ExcelrsError> {
-    let mut si = style_indices.iter();
+    let mut cell_si = cell_style_indices.iter();
+    let mut row_si = row_style_indices.iter();
     for row in ws.rows() {
         let cells = row.written_cells();
-        if cells.is_empty() {
-            // Skip empty rows to avoid phantom `<row>` in output
+        let row_style_idx = *row_si
+            .next()
+            .ok_or_else(|| ExcelrsError::Write("row_style_indices exhausted mid-sheet (writer bug)".into()))?;
+        let has_row_style = row.style().is_some();
+
+        if cells.is_empty() && !has_row_style {
+            // Skip completely empty rows (no data, no row style)
             continue;
         }
-        write!(w, r#"<row r="{}">"#, row.number())?;
+
+        // Emit <row> with optional s="N" for row-level style
+        if has_row_style {
+            write!(w, r#"<row r="{}" s="{}">"#, row.number(), row_style_idx)?;
+        } else {
+            write!(w, r#"<row r="{}">"#, row.number())?;
+        }
+
         for cell in cells {
-            let style_idx = si
+            let style_idx = cell_si
                 .next()
                 .copied()
-                .ok_or_else(|| ExcelrsError::Write("style_indices exhausted mid-sheet (writer bug)".into()))?;
+                .ok_or_else(|| ExcelrsError::Write("cell_style_indices exhausted mid-sheet (writer bug)".into()))?;
             write_cell_xml(w, cell, string_indices, style_idx)?;
         }
         write_str(w, "</row>")?;
@@ -418,6 +483,8 @@ fn write_cell_xml<W: Write>(
         "String" => Some("t=\"s\""),
         "Boolean" => Some("t=\"b\""),
         "Error" => Some("t=\"e\""),
+        "RichText" => Some("t=\"inlineStr\""),
+        "Hyperlink" => Some("t=\"s\""),
         _ => None, // Number, Null, Formula (no type attr)
     };
 
@@ -462,6 +529,48 @@ fn write_cell_xml<W: Write>(
             // If there's also a cached value, write it
             if let Some(n) = cv.number {
                 write_str(w, &format!("<v>{}</v>", n))?;
+            }
+        }
+        "RichText" => {
+            if let Some(runs) = &cv.rich_text {
+                write_str(w, "<is>")?;
+                for run in runs {
+                    write_str(w, "<r>")?;
+                    if let Some(ref font) = run.font {
+                        write_str(w, "<rPr>")?;
+                        if let Some(sz) = font.size {
+                            write_str(w, &format!("<sz val=\"{}\"/>", sz))?;
+                        }
+                        if let Some(ref name) = font.name {
+                            write_str(w, &format!("<rFont val=\"{}\"/>", escape(name)))?;
+                        }
+                        if let Some(true) = font.bold {
+                            write_str(w, "<b/>")?;
+                        }
+                        if let Some(true) = font.italic {
+                            write_str(w, "<i/>")?;
+                        }
+                        if let Some(ref color) = font.color {
+                            write_str(w, &format!("<color rgb=\"{}\"/>", color))?;
+                        }
+                        write_str(w, "</rPr>")?;
+                    }
+                    write_str(w, &format!("<t>{}</t>", escape(&run.text)))?;
+                    write_str(w, "</r>")?;
+                }
+                write_str(w, "</is>")?;
+            }
+        }
+        "Hyperlink" => {
+            // Write the display text as a shared string value
+            if let Some(text) = &cv.hyperlink_text {
+                if let Some(idx) = string_indices.get(text) {
+                    write_str(w, &format!("<v>{}</v>", idx))?;
+                }
+            } else if let Some(url) = &cv.hyperlink {
+                if let Some(idx) = string_indices.get(url) {
+                    write_str(w, &format!("<v>{}</v>", idx))?;
+                }
             }
         }
         _ => {}
@@ -942,7 +1051,7 @@ mod tests {
         assert!(sheet_xml.contains(r#"<c r="A1" s="0""#));
     }
 
-    /// write_cells_with_styles returns Err when style_indices is exhausted early.
+    /// write_cells_with_styles returns Err when cell_style_indices is exhausted early.
     #[test]
     fn test_write_cells_with_styles_exhaustion() {
         let ws = build_test_worksheet();
@@ -950,14 +1059,16 @@ mod tests {
         let mut buf = Vec::new();
         let string_indices = HashMap::new();
         // worksheet has 4 cells but slice is length 1 → should error, not panic
-        let style_indices = vec![0u32];
+        let cell_style_indices = vec![0u32];
+        // Row style indices must be correct length (2 rows in build_test_worksheet)
+        let row_style_indices = vec![0u32, 0u32];
 
-        let result = write_cells_with_styles(&mut buf, &ws, &string_indices, &style_indices);
+        let result = write_cells_with_styles(&mut buf, &ws, &string_indices, &cell_style_indices, &row_style_indices);
         match result {
             Err(ExcelrsError::Write(msg)) => {
                 assert!(
-                    msg.contains("style_indices"),
-                    "error should mention style_indices: {msg}"
+                    msg.contains("cell_style_indices"),
+                    "error should mention cell_style_indices: {msg}"
                 );
             }
             other => panic!("expected Err(Write), got {other:?}"),

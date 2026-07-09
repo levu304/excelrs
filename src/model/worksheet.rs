@@ -31,6 +31,7 @@ pub struct Worksheet {
     id: u32,
     rows: Arc<Mutex<BTreeMap<u32, Row>>>,
     columns: Arc<Mutex<Vec<Column>>>,
+    merged_ranges: Arc<Mutex<Vec<String>>>,
 }
 
 #[napi]
@@ -42,6 +43,7 @@ impl Worksheet {
             id: 1,
             rows: Arc::new(Mutex::new(BTreeMap::new())),
             columns: Arc::new(Mutex::new(Vec::new())),
+            merged_ranges: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -291,6 +293,36 @@ impl Worksheet {
         *columns = parsed;
         Ok(())
     }
+
+    /// Merge a range of cells (e.g. "A1:C3"). Accepts an A1-style range string.
+    /// Validates that the range parses to a rectangular area; stores it for
+    /// emission in the writer. Duplicate ranges are silently ignored.
+    #[napi]
+    pub fn merge_cells(&self, range: String) -> napi::Result<()> {
+        // Basic validation: ensure range parses as col:row:col:row
+        let parts: Vec<&str> = range.split(':').collect();
+        if parts.len() != 2 {
+            return Err(napi::Error::from_reason(
+                "merge_cells: range must be in format 'A1:C3' (e.g. 'A1:B2')",
+            ));
+        }
+        let (tl, br) = (parts[0], parts[1]);
+        let (col1, _row1) = crate::types::parse_address(tl)
+            .map_err(|_| napi::Error::from_reason(format!("merge_cells: invalid start address '{tl}'")))?;
+        let (col2, _row2) = crate::types::parse_address(br)
+            .map_err(|_| napi::Error::from_reason(format!("merge_cells: invalid end address '{br}'")))?;
+        if col1 > col2 || _row1 > _row2 {
+            return Err(napi::Error::from_reason(
+                "merge_cells: start must be before end (e.g. 'A1' before 'C3')",
+            ));
+        }
+
+        let mut ranges = self.merged_ranges.lock().expect("Worksheet merged_ranges lock poisoned");
+        if !ranges.contains(&range) {
+            ranges.push(range);
+        }
+        Ok(())
+    }
 }
 
 // Internal methods (not exposed via napi)
@@ -309,6 +341,11 @@ impl Worksheet {
         let ws_row = rows.entry(row).or_insert_with(|| Row::new(row));
         let cell = ws_row.get_or_create_cell_mut(col);
         f(cell);
+    }
+
+    /// Accessor for merged ranges (used by writer).
+    pub fn get_merged_ranges(&self) -> Vec<String> {
+        self.merged_ranges.lock().expect("Worksheet merged_ranges lock poisoned").clone()
     }
 
     /// Insert a cell value at (row, col) — used by the reader.

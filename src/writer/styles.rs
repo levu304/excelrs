@@ -317,19 +317,43 @@ fn emit_fills<W: Write>(w: &mut W, fills: &[Fill]) -> Result<(), ExcelrsError> {
 
     for f in fills {
         write_str(w, "<fill>")?;
-        let has_fg = f.foreground.is_some();
-        let has_bg = f.background.is_some();
-        if has_fg || has_bg {
-            write_str(w, &format!(r#"<patternFill patternType="{}">"#, f.kind))?;
-            if let Some(ref fg) = f.foreground {
-                write_str(w, &format!(r#"<fgColor rgb="{}"/>"#, fg))?;
+        if f.kind == "gradient" {
+            let mut attrs = format!(r#"type="{}""#, f.gradient_type.as_deref().unwrap_or("linear"));
+            if let Some(deg) = f.gradient_degree {
+                attrs.push_str(&format!(r#" degree="{}""#, deg));
             }
-            if let Some(ref bg) = f.background {
-                write_str(w, &format!(r#"<bgColor rgb="{}"/>"#, bg))?;
+            if let Some(angle) = f.gradient_angle {
+                attrs.push_str(&format!(r#" angle="{}""#, angle));
             }
-            write_str(w, "</patternFill>")?;
+            write_str(w, &format!("<gradientFill {}/>", attrs))?;
+            // gradientFill elements: stops inside?
+            // OOXML uses <stop position="0.0"><color rgb="..."/></stop>
+            if let Some(ref stops) = f.gradient_stops {
+                for stop in stops {
+                    write_str(
+                        w,
+                        &format!(
+                            r#"<stop position="{}"><color rgb="{}"/></stop>"#,
+                            stop.position, stop.color
+                        ),
+                    )?;
+                }
+            }
         } else {
-            write_str(w, &format!(r#"<patternFill patternType="{}"/>"#, f.kind))?;
+            let has_fg = f.foreground.is_some();
+            let has_bg = f.background.is_some();
+            if has_fg || has_bg {
+                write_str(w, &format!(r#"<patternFill patternType="{}">"#, f.kind))?;
+                if let Some(ref fg) = f.foreground {
+                    write_str(w, &format!(r#"<fgColor rgb="{}"/>"#, fg))?;
+                }
+                if let Some(ref bg) = f.background {
+                    write_str(w, &format!(r#"<bgColor rgb="{}"/>"#, bg))?;
+                }
+                write_str(w, "</patternFill>")?;
+            } else {
+                write_str(w, &format!(r#"<patternFill patternType="{}"/>"#, f.kind))?;
+            }
         }
         write_str(w, "</fill>")?;
     }
@@ -343,12 +367,24 @@ fn emit_fills<W: Write>(w: &mut W, fills: &[Fill]) -> Result<(), ExcelrsError> {
 fn emit_borders<W: Write>(w: &mut W, borders: &[Border]) -> Result<(), ExcelrsError> {
     write_str(w, &format!(r#"<borders count="{}">"#, borders.len()))?;
     for b in borders {
-        write_str(w, "<border>")?;
+        // Build diagonal attributes on <border> element
+        let mut diag_attrs = String::new();
+        if let Some(true) = b.diagonal_up {
+            diag_attrs.push_str(r#" diagonalUp="1""#);
+        }
+        if let Some(true) = b.diagonal_down {
+            diag_attrs.push_str(r#" diagonalDown="1""#);
+        }
+        write_str(w, &format!("<border{}>", diag_attrs))?;
         emit_border_side(w, "left", &b.left)?;
         emit_border_side(w, "right", &b.right)?;
         emit_border_side(w, "top", &b.top)?;
         emit_border_side(w, "bottom", &b.bottom)?;
-        write_str(w, r#"<diagonal/>"#)?;
+        if b.diagonal.is_some() {
+            emit_border_side(w, "diagonal", &b.diagonal)?;
+        } else {
+            write_str(w, r#"<diagonal/>"#)?;
+        }
         write_str(w, "</border>")?;
     }
     write_str(w, "</borders>")?;
@@ -791,7 +827,6 @@ mod tests {
                 vertical: Some("middle".into()),
                 wrap_text: Some(true),
                 indent: Some(2),
-                ..Default::default()
             }),
             ..Default::default()
         })];

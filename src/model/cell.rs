@@ -33,19 +33,38 @@ use crate::types;
 /// - `"Formula"` — formula string (field: `formula`; preserved, not evaluated)
 /// - `"Error"` — error value (field: `error_value`)
 ///
-/// # Variants deferred from v0.1
-/// `Hyperlink`, `RichText`, `SharedString`, and `Merge` are not included because
-/// calamine does not expose them on the read path. They will be reintroduced in v0.2.
+/// # Write-only variants (v0.5.0)
+/// `Hyperlink`, `RichText`, `Merge` are write-only: they can be set via JS and
+/// will be written to the XLSX, but calamine does not expose them on the read
+/// path so they appear as `Null` when read back (see spec §9.2.1 item 2).
+/// A rich text run: a text fragment with optional font formatting.
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct RichTextRun {
+    /// Text content for this run.
+    pub text: String,
+    /// Font formatting for this run (optional).
+    pub font: Option<crate::model::style::Font>,
+}
+
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct CellValue {
     /// Discriminant: "Null" | "Number" | "String" | "Boolean" | "Formula" | "Error"
+    /// | "Hyperlink" | "RichText" | "Merge"
     pub value_type: String,
     pub number: Option<f64>,
     pub string: Option<String>,
     pub boolean: Option<bool>,
     pub formula: Option<String>,
     pub error_value: Option<String>,
+    // -- write-only variants (v0.5.0) --
+    /// URL for hyperlink (write-only, Null on read).
+    pub hyperlink: Option<String>,
+    /// Display text for hyperlink (write-only, Null on read).
+    pub hyperlink_text: Option<String>,
+    /// Rich text runs (write-only, Null on read).
+    pub rich_text: Option<Vec<RichTextRun>>,
 }
 
 impl Default for CellValue {
@@ -57,6 +76,9 @@ impl Default for CellValue {
             boolean: None,
             formula: None,
             error_value: None,
+            hyperlink: None,
+            hyperlink_text: None,
+            rich_text: None,
         }
     }
 }
@@ -91,6 +113,23 @@ impl CellValue {
         CellValue {
             value_type: "Formula".into(),
             formula: Some(f.into()),
+            ..Default::default()
+        }
+    }
+
+    pub fn hyperlink(url: impl Into<String>, text: Option<String>) -> Self {
+        CellValue {
+            value_type: "Hyperlink".into(),
+            hyperlink: Some(url.into()),
+            hyperlink_text: text,
+            ..Default::default()
+        }
+    }
+
+    pub fn rich_text(runs: Vec<RichTextRun>) -> Self {
+        CellValue {
+            value_type: "RichText".into(),
+            rich_text: Some(runs),
             ..Default::default()
         }
     }
