@@ -32,6 +32,9 @@ tests pass, smallest-first.
 - [ ] `A13 test_resolve_indexed_default` — `resolve_indexed(0) == Some(<doc entry 0 ARGB>)`; assert ≥2 known SYSTEM_INDEXED_COLORS entries.
 - [ ] `A14 test_resolve_indexed_custom_override` — inline `<a:indexedColors>` with `[2]="FFABCDEF"` → `resolve_indexed(2)==Some("FFABCDEF")`.
 - [ ] `A15 test_resolve_indexed_out_of_range` — `resolve_indexed(56).is_none()`.
+- [ ] `A16 test_from_xml_rgbcolor_strips_alpha` — `<a:rgbColor val="00ABCDEF"/>` strips alpha `"00"` → resolved as `"FFABCDEF"`. Guards against `raw.len() >= 6` false-positive acceptance of non-8-char values.
+
+> **Note (post-PR scope extension):** `indexedColors` override guard relaxed from `== 56` strict count check to `!is_empty()` with default palette fallback. Partial `<a:indexedColors>` lists (e.g. overriding only index 0) now partially override instead of being silently ignored. Missing entries fall back to `SYSTEM_INDEXED_COLORS`. This makes the A16 regression test meaningful — without it, a single-entry `<indexedColors>` was silently discarded by the 56-entry guard.
 
 ### A-impl (smallest-first)
 
@@ -54,6 +57,8 @@ tests pass, smallest-first.
 - [ ] `B7 test_parse_no_color_attr_still_none` — `<color rgb="FFFF0000"/>` path unchanged; missing color → None.
 - [ ] `B8 test_resolve_theme_not_skipped` — REPLACES existing `test_skip_theme_color`: `theme="1"` now resolves to `Some("FFFFFFFF")` (assert `is_some()`, not `is_none()`).
 - [ ] `B9 test_default_scheme_when_theme1_absent` — `parse_style_table(xml, &ThemeColorScheme::default())` with `theme="4"` resolves via default accent1.
+- [ ] `B10 test_parse_color_rgb_empty_returns_none` — `<color rgb=""/>` → `None` (not `Some("")`).
+- [ ] `B11 test_parse_color_rgb_non_hex_returns_none` — `<color rgb="ZZZZZZ"/>` → `None` (not `Some("ZZZZZZ")`).
 
 ### B-impl
 
