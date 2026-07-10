@@ -300,7 +300,7 @@ fn emit_fonts<W: Write>(w: &mut W, fonts: &[Font]) -> Result<(), ExcelrsError> {
             write_str(w, r#"<u/>"#)?;
         }
         if let Some(ref color) = f.color {
-            write_str(w, &format!(r#"<color rgb="{}"/>"#, color))?;
+            write_str(w, &format!(r#"<color rgb="{}"/>"#, escape(color)))?;
         }
         write_str(w, "</font>")?;
     }
@@ -362,10 +362,10 @@ fn emit_fills<W: Write>(w: &mut W, fills: &[Fill]) -> Result<(), ExcelrsError> {
             if has_fg || has_bg {
                 write_str(w, &format!(r#"<patternFill patternType="{}">"#, f.kind))?;
                 if let Some(ref fg) = f.foreground {
-                    write_str(w, &format!(r#"<fgColor rgb="{}"/>"#, fg))?;
+                    write_str(w, &format!(r#"<fgColor rgb="{}"/>"#, escape(fg)))?;
                 }
                 if let Some(ref bg) = f.background {
-                    write_str(w, &format!(r#"<bgColor rgb="{}"/>"#, bg))?;
+                    write_str(w, &format!(r#"<bgColor rgb="{}"/>"#, escape(bg)))?;
                 }
                 write_str(w, "</patternFill>")?;
             } else {
@@ -418,7 +418,7 @@ fn emit_border_side<W: Write>(
         Some(b) => {
             let style_attr = &b.style;
             let color = match &b.color {
-                Some(c) => format!(r#"<color rgb="{}"/>"#, c),
+                Some(c) => format!(r#"<color rgb="{}"/>"#, escape(c)),
                 None => String::new(),
             };
             write_str(w, &format!("<{side} style=\"{style_attr}\">{color}</{side}>"))
@@ -1074,5 +1074,94 @@ mod tests {
             !xml.contains("angle="),
             "angle is not a valid CT_GradientFill attribute: {xml}"
         );
+    }
+
+    /// Font color in emit_fonts must be XML-escaped (defense-in-depth).
+    #[test]
+    fn test_emit_font_color_escaped() {
+        let styles = vec![Some(Style {
+            font: Some(crate::model::style::Font {
+                color: Some("FF&<>\"'".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })];
+        let table = build_style_table(&styles);
+        let mut buf = Vec::new();
+        emit_styles_xml(&mut buf, &table).unwrap();
+        let xml = String::from_utf8(buf).unwrap();
+        assert!(
+            xml.contains("FF&amp;&lt;&gt;&quot;&apos;"),
+            "font color must be XML-escaped: {xml}"
+        );
+        assert!(!xml.contains(r##"color rgb="FF&""##), "unescaped font color: {xml}");
+    }
+
+    /// Pattern fill fgColor in emit_fills must be XML-escaped (defense-in-depth).
+    #[test]
+    fn test_emit_pattern_fill_fg_color_escaped() {
+        let styles = vec![Some(Style {
+            fill: Some(Fill {
+                kind: "solid".into(),
+                foreground: Some("FF&<>\"'".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })];
+        let table = build_style_table(&styles);
+        let mut buf = Vec::new();
+        emit_styles_xml(&mut buf, &table).unwrap();
+        let xml = String::from_utf8(buf).unwrap();
+        assert!(
+            xml.contains("FF&amp;&lt;&gt;&quot;&apos;"),
+            "fgColor must be XML-escaped: {xml}"
+        );
+        assert!(!xml.contains(r##"fgColor rgb="FF&""##), "unescaped fgColor: {xml}");
+    }
+
+    /// Pattern fill bgColor in emit_fills must be XML-escaped (defense-in-depth).
+    #[test]
+    fn test_emit_pattern_fill_bg_color_escaped() {
+        let styles = vec![Some(Style {
+            fill: Some(Fill {
+                kind: "solid".into(),
+                background: Some("FF&<>\"'".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })];
+        let table = build_style_table(&styles);
+        let mut buf = Vec::new();
+        emit_styles_xml(&mut buf, &table).unwrap();
+        let xml = String::from_utf8(buf).unwrap();
+        assert!(
+            xml.contains("FF&amp;&lt;&gt;&quot;&apos;"),
+            "bgColor must be XML-escaped: {xml}"
+        );
+        assert!(!xml.contains(r##"bgColor rgb="FF&""##), "unescaped bgColor: {xml}");
+    }
+
+    /// Border side color in emit_borders must be XML-escaped (defense-in-depth).
+    #[test]
+    fn test_emit_border_color_escaped() {
+        let styles = vec![Some(Style {
+            border: Some(crate::model::style::Border {
+                top: Some(BorderStyle {
+                    style: "thin".into(),
+                    color: Some("FF&<>\"'".into()),
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })];
+        let table = build_style_table(&styles);
+        let mut buf = Vec::new();
+        emit_styles_xml(&mut buf, &table).unwrap();
+        let xml = String::from_utf8(buf).unwrap();
+        assert!(
+            xml.contains("FF&amp;&lt;&gt;&quot;&apos;"),
+            "border color must be XML-escaped: {xml}"
+        );
+        assert!(!xml.contains(r##"color rgb="FF&""##), "unescaped border color: {xml}");
     }
 }
