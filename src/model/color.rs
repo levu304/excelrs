@@ -198,9 +198,8 @@ impl ThemeColorScheme {
                             if let Some(val) = attrs.iter().find(|a| a.key.local_name().as_ref() == b"val") {
                                 let raw = std::str::from_utf8(val.value.as_ref()).unwrap_or("");
                                 // rgbColor val is 8-char ARGB like "00FFFFFF" → strip alpha → "FFFFFF"
-                                if raw.len() >= 6 {
-                                    let rgb = &raw[2..];
-                                    indexed_acc.push(rgb.to_uppercase());
+                                if raw.len() == 8 && raw[2..8].chars().all(|c| c.is_ascii_hexdigit()) {
+                                    indexed_acc.push(raw[2..8].to_uppercase());
                                 }
                             }
                         }
@@ -257,9 +256,16 @@ impl ThemeColorScheme {
                     }
                     if tag == b"indexedColors" {
                         in_indexed_colors = false;
-                        if indexed_acc.len() == 56 {
-                            let arr: [String; 56] =
-                                std::array::from_fn(|i| indexed_acc.get(i).cloned().unwrap_or_default());
+                        if !indexed_acc.is_empty() {
+                            let arr: [String; 56] = std::array::from_fn(|i| {
+                                indexed_acc.get(i).cloned().unwrap_or_else(|| {
+                                    // Fall back to default system palette for entries not provided
+                                    SYSTEM_INDEXED_COLORS
+                                        .get(i)
+                                        .map(|s| s.to_string())
+                                        .unwrap_or_default()
+                                })
+                            });
                             indexed_override = Some(arr);
                         }
                         continue;
@@ -505,5 +511,29 @@ mod tests {
         let scheme = ThemeColorScheme::default();
         assert!(scheme.resolve_indexed(56).is_none());
         assert!(scheme.resolve_indexed(99).is_none());
+    }
+
+    /// A16: rgbColor val with alpha prefix strips correctly and validates hex.
+    #[test]
+    fn test_from_xml_rgbcolor_strips_alpha() {
+        let xml = r#"<a:clrScheme name="Test">
+            <a:dk1><a:srgbClr val="000000"/></a:dk1>
+            <a:lt1><a:srgbClr val="FFFFFF"/></a:lt1>
+            <a:dk2><a:srgbClr val="1F497D"/></a:dk2>
+            <a:lt2><a:srgbClr val="EEECE1"/></a:lt2>
+            <a:accent1><a:srgbClr val="4F81BD"/></a:accent1>
+            <a:accent2><a:srgbClr val="C0504D"/></a:accent2>
+            <a:accent3><a:srgbClr val="9BBB59"/></a:accent3>
+            <a:accent4><a:srgbClr val="F79646"/></a:accent4>
+            <a:accent5><a:srgbClr val="8064A2"/></a:accent5>
+            <a:accent6><a:srgbClr val="4BACC6"/></a:accent6>
+            <a:hlink><a:srgbClr val="0000FF"/></a:hlink>
+            <a:folHlink><a:srgbClr val="800080"/></a:folHlink>
+            <a:indexedColors>
+                <a:rgbColor val="00ABCDEF"/>
+            </a:indexedColors>
+        </a:clrScheme>"#;
+        let scheme = ThemeColorScheme::from_xml(xml).unwrap();
+        assert_eq!(scheme.resolve_indexed(0), Some("FFABCDEF".into()));
     }
 }
