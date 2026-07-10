@@ -646,9 +646,19 @@ pub fn parse_styles_and_sheet_maps(
     let cursor = Cursor::new(data);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
 
+    // Resolve theme color scheme from xl/theme1.xml (optional)
+    let scheme = match archive.by_name("xl/theme1.xml") {
+        Ok(mut entry) => {
+            let mut data = String::new();
+            entry.read_to_string(&mut data)?;
+            ThemeColorScheme::from_xml(&data).unwrap_or_default()
+        }
+        Err(_) => ThemeColorScheme::default(),
+    };
+
     // Parse xl/styles.xml (optional — some files lack it)
     let style_table = if let Ok(styles_bytes) = read_entry(&mut archive, "xl/styles.xml") {
-        parse_style_table(&styles_bytes, &ThemeColorScheme::default())?
+        parse_style_table(&styles_bytes, &scheme)?
     } else {
         StyleTableRead::empty()
     };
@@ -1297,5 +1307,101 @@ mod tests {
         );
         assert!(style.font.is_some(), "fontId=1 resolves with no applyFont attr");
         assert_eq!(style.font.as_ref().unwrap().bold, Some(true));
+    }
+
+    // -- C-tests: parse_styles_and_sheet_maps with real zip archives --
+
+    /// C1: theme1.xml present with custom accent1.
+    /// Font using <color theme="4"/> resolves via the custom scheme.
+    #[test]
+    fn test_parse_styles_reads_theme1() {
+        use std::io::Write;
+
+        let mut buf = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let options: zip::write::FileOptions<'_, ()> =
+                zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+            zip.start_file("xl/styles.xml", options).unwrap();
+            write!(
+                zip,
+                r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="1">
+    <font><sz val="11"/><name val="Calibri"/><color theme="4"/></font>
+  </fonts>
+</styleSheet>"##
+            )
+            .unwrap();
+
+            zip.start_file("xl/theme1.xml", options).unwrap();
+            write!(
+                zip,
+                r##"<a:clrScheme name="Custom">
+  <a:dk1><a:srgbClr val="000000"/></a:dk1>
+  <a:lt1><a:srgbClr val="FFFFFF"/></a:lt1>
+  <a:dk2><a:srgbClr val="1F497D"/></a:dk2>
+  <a:lt2><a:srgbClr val="EEECE1"/></a:lt2>
+  <a:accent1><a:srgbClr val="123456"/></a:accent1>
+  <a:accent2><a:srgbClr val="C0504D"/></a:accent2>
+  <a:accent3><a:srgbClr val="9BBB59"/></a:accent3>
+  <a:accent4><a:srgbClr val="F79646"/></a:accent4>
+  <a:accent5><a:srgbClr val="8064A2"/></a:accent5>
+  <a:accent6><a:srgbClr val="4BACC6"/></a:accent6>
+  <a:hlink><a:srgbClr val="0000FF"/></a:hlink>
+  <a:folHlink><a:srgbClr val="800080"/></a:folHlink>
+</a:clrScheme>"##
+            )
+            .unwrap();
+
+            zip.finish().unwrap();
+        }
+
+        let (table, _) = parse_styles_and_sheet_maps(&buf, 0).unwrap();
+        assert_eq!(table.fonts.len(), 1);
+        // Custom accent1="123456" → resolved with FF prefix
+        assert_eq!(
+            table.fonts[0].color.as_deref(),
+            Some("FF123456"),
+            "theme=\"4\" should resolve via custom theme1.xml accent1"
+        );
+    }
+
+    /// C2: theme1.xml absent → default accent1 is used.
+    #[test]
+    fn test_parse_styles_theme1_absent_falls_back() {
+        use std::io::Write;
+
+        let mut buf = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let options: zip::write::FileOptions<'_, ()> =
+                zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+            // Only styles.xml — no theme1.xml
+            zip.start_file("xl/styles.xml", options).unwrap();
+            write!(
+                zip,
+                r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="1">
+    <font><sz val="11"/><name val="Calibri"/><color theme="4"/></font>
+  </fonts>
+</styleSheet>"##
+            )
+            .unwrap();
+
+            zip.finish().unwrap();
+        }
+
+        let (table, _) = parse_styles_and_sheet_maps(&buf, 0).unwrap();
+        assert_eq!(table.fonts.len(), 1);
+        // Default accent1 = "4F81BD" → "FF4F81BD"
+        assert_eq!(
+            table.fonts[0].color.as_deref(),
+            Some("FF4F81BD"),
+            "missing theme1.xml should fall back to default accent1"
+        );
     }
 }
