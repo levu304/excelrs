@@ -646,8 +646,8 @@ pub fn parse_styles_and_sheet_maps(
     let cursor = Cursor::new(data);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
 
-    // Resolve theme color scheme from xl/theme1.xml (optional)
-    let scheme = match archive.by_name("xl/theme1.xml") {
+    // Resolve theme color scheme from xl/theme/theme1.xml (optional)
+    let scheme = match archive.by_name("xl/theme/theme1.xml") {
         Ok(mut entry) => {
             let mut data = String::new();
             entry.read_to_string(&mut data)?;
@@ -1335,7 +1335,7 @@ mod tests {
             )
             .unwrap();
 
-            zip.start_file("xl/theme1.xml", options).unwrap();
+            zip.start_file("xl/theme/theme1.xml", options).unwrap();
             write!(
                 zip,
                 r##"<a:clrScheme name="Custom">

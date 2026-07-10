@@ -1,7 +1,7 @@
 # excelrs — Specification
 
 **Package:** `@levu304/excelrs` (scoped npm — unscoped name `excelrs` blocked as too similar to `exceljs`)
-**Version:** 0.3.0
+**Version:** 0.6.0
 **License:** MIT OR Apache-2.0
 **Author:** Solo maintainer (open source)
 **Status:** Implemented (published to npm as `@levu304/excelrs`)
@@ -16,7 +16,7 @@
 
 **npm package:** `@levu304/excelrs`. Install: `npm install @levu304/excelrs`.
 
-**v0.3.0 scope:** style read + alignment emission (writer). See §6.8, §6.9, §9.2 for the style model. Reading a styled `.xlsx` now preserves Font, Fill, Border, Alignment, and numFmt via parsed `xl/styles.xml`. Alignment is emitted as an inline `<alignment>` child of `<xf>` in `cellXfs`.
+**v0.6.0 scope:** theme color and indexed color resolution on read. Theme color references (`theme="N"`) and indexed colors (`indexed="N"`) in `xl/styles.xml` are resolved to concrete ARGB hex strings via `xl/theme/theme1.xml` and the standard 56-entry system palette. See §6.8, §9.2.1.
 
 ---
 
@@ -89,6 +89,7 @@ excelrs/
 ### 3.2 Data flow
 
 **Read path:**
+
 ```
 .xlsx file (or Buffer)
   → calamine::open_workbook_from_rs (in-memory read)
@@ -99,6 +100,7 @@ excelrs/
 ```
 
 **Write path:**
+
 ```
 User builds Workbook in JS (calls Rust methods via napi)
   → Rust model types hold all state
@@ -113,7 +115,7 @@ User builds Workbook in JS (calls Rust methods via napi)
 ### 3.3 Dependency rationale
 
 | Crate | Why | Alternative considered |
-|-------|-----|----------------------|
+| ------- | ----- | ---------------------- |
 | `calamine` | Battle-tested XLSX reader, no need to parse OOXML read path | Hand-rolling read: 2x work, more bugs |
 | `zip` + `quick-xml` | Full control over OOXML output for write path | `calamine` writer: limited output control |
 | `thiserror` | Ergonomic error enum derivation | Manual `Display`/`Error` impls: boilerplate |
@@ -143,6 +145,7 @@ model/
 ```
 
 **Invariants:**
+
 - A `Cell` always knows its `address` (e.g., "A1") and `row`/`col` (1-indexed, matching exceljs).
 - A `Worksheet` can have sparse rows (row 1 and row 1000 without intermediate allocations).
 - `CellValue::Null` is the default cell value — distinct from `CellValue::Number(0.0)` or `CellValue::String("")`.
@@ -152,10 +155,12 @@ model/
 **Responsibilities:** Parse `.xlsx` files into the model.
 
 **Entry points:**
+
 - `read_from_buffer(data: &[u8]) -> Result<Workbook>`
 - `read_from_file(path: &Path) -> Result<Workbook>`
 
 **Algorithm (read path):**
+
 1. Pass raw bytes to `calamine::open_workbook_from_rs`.
 2. Iterate calamine sheets; for each sheet:
    - Map sheet name → `Worksheet.name`.
@@ -167,6 +172,7 @@ model/
 3. Assemble `Workbook { worksheets }`.
 
 **Edge cases handled:**
+
 - Empty sheets (0 rows) → valid `Worksheet` with `row_count = 0`.
 - Shared strings (Excel uses a string table — calamine resolves these).
 - **Shared formulas:** calamine stores formulas in a separate API (`worksheet_formula()`), not in the cell data iterator. The reader must explicitly call the formula API for each sheet and merge results by cell address. Shared formulas (`<f t="shared" si="0">`) are expanded to regular formulas on write in v0.1.
@@ -176,10 +182,12 @@ model/
 **Responsibilities:** Serialize the model to a `.xlsx` byte buffer.
 
 **Entry points:**
+
 - `write_to_buffer(workbook: &Workbook) -> Result<Vec<u8>>`
 - `write_to_file(workbook: &Workbook, path: &Path) -> Result<()>`
 
 **Algorithm (write path):**
+
 1. Create a zip archive (zip crate, in-memory).
 2. Write `[Content_Types].xml` with content type declarations for worksheets and shared strings.
 3. Write `_rels/.rels` with relationship references.
@@ -196,6 +204,7 @@ model/
 8. Flush zip to `Vec<u8>`.
 
 **v0.1 limitations:**
+
 - Styles table is minimal (Normal only). v0.2.0 adds full font/fill/border/alignment/numFmt support (see §6.8, §6.9, §9.2).
 - No merged cell support in write path (deferred; v0.4.0 candidate, see §9.2.1).
 - No column width storage in written files.
@@ -434,7 +443,7 @@ type CellValueInput = any;
 **Setter behavior (Rust `#[napi(setter)]` with `serde_json::Value`):**
 
 | JS input | Rust dispatch | Resulting `valueType` |
-|----------|---------------|----------------------|
+| ---------- | --------------- | ---------------------- |
 | `42` / `3.14` | `Value::Number` | `"Number"`, `number: Some(n)` |
 | `"hello"` | `Value::String` | `"String"`, `string: Some(s)` |
 | `true` / `false` | `Value::Bool` | `"Boolean"`, `boolean: Some(b)` |
@@ -513,6 +522,7 @@ pub struct RichTextRun {
 ```
 
 **Variants deferred from v0.1:** `Hyperlink`, `RichText`, `SharedString`, and `Merge` are not included in the v0.1 `CellValue` struct. Reasons:
+
 - `Hyperlink`: calamine does not expose hyperlinks in the cell data stream.
 - `RichText`: calamine does not parse inline rich text (`<is><r>`) into components.
 - `SharedString`: calamine resolves shared string references internally — the reader never sees a "SharedString" variant.
@@ -589,10 +599,12 @@ impl Cell {
 A `Cell` obtained via `Worksheet.getCell*` or `Row.getCell*` SHALL share mutable state with the owning worksheet. Assigning `cell.value = x` on such a cell MUST persist into the worksheet's internal model and be present after a write/read round-trip.
 
 ##### Scenario: Set value on fetched cell, read back after round-trip
+
 - **WHEN** `ws.getCell('A1').value = 42` is assigned on a worksheet, then the workbook is written and read back
 - **THEN** `ws.getCell('A1').value.number` equals `42`
 
 ##### Scenario: Set value chained from row
+
 - **WHEN** `ws.getRow(1).getCell(1).value = "hi"` is assigned
 - **THEN** `ws.getCell('A1').value.string` equals `"hi"`
 
@@ -601,14 +613,17 @@ A `Cell` obtained via `Worksheet.getCell*` or `Row.getCell*` SHALL share mutable
 A `Cell` obtained via `Worksheet.getCell*` or `Row.getCell*` SHALL share mutable state with the owning worksheet. Assigning `cell.style = {...}` on such a cell MUST persist into the worksheet's internal model and survive a write/read round-trip, matching exceljs chainable-mutation behavior.
 
 ##### Scenario: Set style on fetched cell, read back after round-trip
+
 - **WHEN** `ws.getCell('B2').style = { font: { bold: true } }` is assigned, then the workbook is written and read back
 - **THEN** `ws.getCell('B2').style.font.bold` is `true`
 
 ##### Scenario: Style set via getCell equals style set via setCellStyle
+
 - **WHEN** `ws.getCell('C3').style = { fill: { kind: 'solid', foreground: 'FFFF0000' } }` and separately `ws.setCellStyle(4, 4, { font: { italic: true } })` are applied
 - **THEN** both cells retain their respective styles after a write/read round-trip
 
 ##### Scenario: Clearing style via assignment resets to Normal
+
 - **WHEN** a cell with style `{ font: { bold: true } }` has `cell.style = null` (or `{}`) assigned
 - **THEN** the cell's style is `None` (Normal) and is written without a style index
 
@@ -829,9 +844,9 @@ impl Column {
 }
 ```
 
-### 6.8 Style (v0.2.0+ write; read as of v0.3.0)
+### 6.8 Style (v0.2.0+ write; read as of v0.6.0)
 
-The full style model is composed of five sub-types and one aggregate `Style` struct (six `#[napi(object)]` flat structs total, ADR-11 pattern). Colors are ARGB hex strings (8 chars, e.g. `"FFFF0000"`) or RGB hex strings (6 chars, e.g. `"FF0000"`). Theme color references are **not** supported (deferred; v0.4.0 candidate, see §9.2.1).
+The full style model is composed of five sub-types and one aggregate `Style` struct (six `#[napi(object)]` flat structs total, ADR-11 pattern). Colors are ARGB hex strings (8 chars, e.g. `"FFFF0000"`) or RGB hex strings (6 chars, e.g. `"FF0000"`). Theme color references (`theme="N"`) and indexed colors (`indexed="N"`) in `xl/styles.xml` are resolved to ARGB hex on read via `xl/theme/theme1.xml` and the standard 56-entry system-indexed palette (see §9.2.1). The `color` field remains `Option<String>` ARGB — no public API change. Theme colors that were previously `null` now return the resolved ARGB.
 
 ```rust
 #[napi(object)]
@@ -889,6 +904,7 @@ pub struct Style {
 **Defaults:** A cell with no `Style` set has index 0 in the written `cellXfs` table — the built-in "Normal" style. `cell.style = null | undefined | {}` all resolve to Normal (index 0).
 
 **Setter validation (canonical serialization rules):**
+
 - **Color strings** (used in `Font.color`, `Fill.foreground`, `Fill.background`, `BorderStyle.color`): must match `^[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$` (6-char RGB or 8-char ARGB). Setter rejects invalid input with `ExcelrsError::InvalidStyle`. Valid input is uppercased before storing; the canonical form is uppercase ARGB or RGB.
 - **Float fields** (`Font.size`): must be finite. Setter rejects `NaN` and `±Infinity` with `ExcelrsError::InvalidStyle`.
 - **String fields** (`Font.name`, `Fill.pattern`): preserved as-given. `name: "calibri"` and `name: "Calibri"` produce distinct dedup keys. Excel preserves case in font names.
@@ -905,10 +921,12 @@ These rules ensure the canonical key passed to `BTreeMap` is deterministic and t
 Style is set via a JS object through the napi v3 `serde-json` feature (same pattern as the `cell.value` setter, ADR-13/ADR-26). Rust receives `serde_json::Value` and dispatches on JSON shape.
 
 **Semantics: full-replace.** Assigning a new style object **replaces** the existing style entirely. To preserve specific fields (e.g. keep the fill but change the font), read the current style first and spread it:
+
 ```typescript
 const current = cell.style ?? {};
 cell.style = { ...current, font: { bold: true } };
 ```
+
 Full-replace matches the OOXML `cellXfs` model (a style is a complete XF record) and exceljs's setter behavior. Partial-merge would silently drop fields the user didn't think to repeat.
 
 **Cell-level setter:**
@@ -1082,6 +1100,7 @@ cargo fmt -- --check
 ### 7.5 Testing strategy
 
 **Rust unit tests (`cargo test`):**
+
 - `#[test]` for model logic (address parsing, CellValue conversion, date math).
 - `rstest` for parametrized test cases (e.g., address parse table).
 - `proptest` for property-based tests (e.g., `address_to_string(parse_address(a)) == a` for all valid addresses).
@@ -1089,6 +1108,7 @@ cargo fmt -- --check
 - `mockall` for mocking the reader/writer in unit tests.
 
 **JS end-to-end tests (`vitest`):**
+
 - Round-trip: write with `@levu304/excelrs` → read with exceljs, verify identical content.
 - Round-trip: write with exceljs → read with `@levu304/excelrs`, verify identical content.
 - Ported exceljs test cases (~300 files, incrementally).
@@ -1097,11 +1117,13 @@ cargo fmt -- --check
 ### 7.6 Benchmark methodology
 
 **Rust benchmarks (Criterion):**
+
 - XLSX read: time to parse a large .xlsx (10K rows, 50 columns).
 - XLSX write: time to generate .xlsx from a large model.
 - Cell access: random access patterns (getCell on a 100K-cell worksheet).
 
 **JS benchmarks (vitest bench or mitata):**
+
 - Compare exceljs `readFile` vs `@levu304/excelrs` `readFile` on the same file.
 - Compare exceljs `writeFile` vs `@levu304/excelrs` `writeFile` for the same data.
 - Report: wall-clock time, memory usage (RSS), file size.
@@ -1115,6 +1137,7 @@ cargo fmt -- --check
 **Trigger:** Manual tag push (e.g., `git tag v0.1.0 && git push --tags`).
 
 **Matrix:**
+
 | Platform     | Arch    | Node   |
 |-------------|---------|--------|
 | macOS 14    | arm64   | 20.x   |
@@ -1122,6 +1145,7 @@ cargo fmt -- --check
 | Windows 2022 | x64     | 20.x   |
 
 **Jobs per platform:**
+
 1. Checkout + Install Rust + Install Node.js 20
 2. `npm ci`
 3. `napi build --release --platform`
@@ -1130,6 +1154,7 @@ cargo fmt -- --check
 6. Upload test results
 
 **Publish job (depends on all platform builds):**
+
 1. Download all platform artifacts
 2. Assemble npm package (JS glue + all `.node` files in `npm/`)
 3. `npm publish` (with `NPM_TOKEN` secret)
@@ -1163,6 +1188,7 @@ cargo fmt -- --check
 **Goal:** Read and write .xlsx files with correct data fidelity.
 
 **In scope:**
+
 - [ ] `Workbook` constructor, `addWorksheet`, `getWorksheet`, worksheet iteration.
 - [ ] `Worksheet` with name, rows, columns, `getCell`, `getRow`, `addRow`, `rowCount`, `columnCount`.
 - [ ] `Cell` with value (Number, String, Boolean, Date, Formula, Error, Null variants), address, row, col.
@@ -1180,6 +1206,7 @@ cargo fmt -- --check
 - [ ] Benchmarks (Criterion + vitest bench).
 
 **Not in scope (deferred):**
+
 - CSV read/write
 - Streaming read/write
 - Style CRUD (font, fill, border, alignment write)
@@ -1208,26 +1235,26 @@ cargo fmt -- --check
 - ARGB hex (8 chars) or RGB hex (6 chars) colors. No theme color references in v0.2.0 (ADR-25).
 - Built-in "Normal" remains index 0. `cell.style = null` resets to Normal.
 
-**Explicitly out of scope (deferred; see §9.2.1 for the v0.4.0 candidate list):** six items — `Worksheet.mergeCells`, `Hyperlink`/`RichText`/`Merge` CellValue variants, theme color references, row-level style, gradient fills, diagonal borders. (Cell-level interior mutability shipped in v0.4.0; style read shipped in v0.3.0.)
+**Explicitly out of scope (deferred; see §9.2.1 for the full list):** six items — `Worksheet.mergeCells`, `Hyperlink`/`RichText`/`Merge` CellValue variants, theme color references, row-level style, gradient fills, diagonal borders. All shipped across v0.5.0–v0.6.0 (see §9.2.1).
 
 **Test budget:** ~22 new Rust (6 type construction + 8 setter validation + 4 `cellXfs` dedup + 4 round-trip) + ~13 new JS (4 setter + 5 round-trip via exceljs fixtures + 4 column-style). v0.1.0 ends at 73+42; v0.2.0 targets **95+55** total.
 
 **Release prep (A11):** `README.md` updates for v0.2.0 are part of release prep (A11), not A2–A10. The new section lists the style CRUD API with a worked example; the limitations block is updated from `No style CRUD` to `No style read (round-trip of a styled .xlsx drops styles; deferred to v0.3.0)`.
 
-### 9.2.1 v0.4.0 candidate
+### 9.2.1 v0.4.0–v0.6.0 deferred items (all shipped)
 
-The following items are explicitly **deferred from v0.2.0 to keep the v0.2.0 release a focused, small-scope change**. Each has a one-line rationale:
+The following items were explicitly **deferred from v0.2.0**. All six are now shipped:
 
-| Deferred item | Rationale |
-|---------------|-----------|
-| `Worksheet.mergeCells(range)` | Requires `<mergeCells>` element, non-master cell handling, and read-side parsing. Independent of the style system. |
-| `Hyperlink`, `RichText`, `Merge` CellValue variants | Reintroduce with reader/writer support. `Hyperlink` needs `<hyperlinks>` part; `RichText` needs inline string parsing on read; `Merge` is a marker set when a cell is inside a merge range. |
-| Theme color references | Reading `xl/theme1.xml` and supporting `theme="N"` color refs. ARGB hex covers the common case. |
-| Row-level style (`Row.style: Option<Style>`) | OOXML's `<row>` element supports `s="<idx>"` for row-default formatting. Adds one field on `Row`, one writer branch, and a reader parse. Currently shipped: cell + column style only. |
-| Gradient fills (`Fill.kind = "gradient"`) | OOXML's `<gradientFill>` requires angle and color-stop fields. Rare in spreadsheet styling. Rejected in v0.2.0 setter with `ExcelrsError::InvalidStyle`. |
-| Diagonal borders (`Border.diagonal` + `diagonalUp` + `diagonalDown`) | OOXML's `<border>` element supports a diagonal line used for strike-through cells. Three more fields; <1% of real-world styling. |
+| Deferred item | Rationale | Shipped in |
+| --- | --- | --- |
+| `Worksheet.mergeCells(range)` | Requires `<mergeCells>` element, non-master cell handling, and read-side parsing. | v0.5.0 |
+| `Hyperlink`, `RichText`, `Merge` CellValue variants | Reintroduce with reader/writer support. `Hyperlink` needs `<hyperlinks>` part; `RichText` needs inline string parsing on read; `Merge` is a marker set when a cell is inside a merge range. | v0.5.0 |
+| Theme color references | Reading `xl/theme/theme1.xml` and supporting `theme="N"` color refs. ARGB hex covers the common case. | v0.6.0 |
+| Row-level style (`Row.style: Option<Style>`) | OOXML's `<row>` element supports `s="<idx>"` for row-default formatting. | v0.5.0 |
+| Gradient fills (`Fill.kind = "gradient"`) | OOXML's `<gradientFill>` requires angle and color-stop fields. | v0.5.0 |
+| Diagonal borders (`Border.diagonal` + `diagonalUp` + `diagonalDown`) | OOXML's `<border>` element supports a diagonal line used for strike-through cells. | v0.5.0 |
 
-These remaining six items are the headline v0.4.0 work units.
+No remaining deferred style items.
 
 ### 9.3 Future (v0.3+)
 
@@ -1265,7 +1292,7 @@ These are capabilities that excelrs will **not** implement, now or in the future
 ## Appendix A: Key Design Decisions Log
 
 | # | Decision | Rationale |
-|---|----------|-----------|
+| --- | ---------- | ----------- |
 | 1 | Target exceljs API compatibility | Maximizes migration path for existing 15K-star user base |
 | 2 | Monolithic crate | Premature workspace split adds complexity. Re-evaluate at ~5K LoC |
 | 3 | calamine for read, hand-roll for write | calamine is battle-tested for read. Write needs full OOXML control |
@@ -1297,7 +1324,7 @@ These are capabilities that excelrs will **not** implement, now or in the future
 ## Appendix B: exceljs → excelrs API Mapping
 
 | exceljs method | `@levu304/excelrs` equivalent | Notes |
-|---------------|-------------------|-------|
+| --------------- | ------------------- | ------- |
 | `new Workbook()` | `new Workbook()` | Identical |
 | `wb.addWorksheet(name)` | `wb.addWorksheet(name)` | Identical |
 | `wb.getWorksheet(name)` | `wb.getWorksheet(name)` | Identical |
@@ -1318,4 +1345,4 @@ These are capabilities that excelrs will **not** implement, now or in the future
 
 ---
 
-*Spec version: 1.4.1. Last updated: 2026-07-09. v0.3.0 (Style read + alignment emission) — full end-to-end style round-trip; see §9.2 for v0.2.0+ style model, §9.2.1 for remaining deferred items. v1.4.0: §9.2.1 removed Style read and Alignment emission rows; §1 updated to v0.3.0 scope; §6.8 added vertical middle→center mapping note. v1.4.1: reconciled header metadata (Version/Status) and removed stale "deferred to v0.3.0" references now that style read + writer alignment emission have shipped (§1, §4.3, §6.8, §9.2).*
+_Spec version: 1.4.1. Last updated: 2026-07-09. v0.3.0 (Style read + alignment emission) — full end-to-end style round-trip; see §9.2 for v0.2.0+ style model, §9.2.1 for remaining deferred items. v1.4.0: §9.2.1 removed Style read and Alignment emission rows; §1 updated to v0.3.0 scope; §6.8 added vertical middle→center mapping note. v1.4.1: reconciled header metadata (Version/Status) and removed stale "deferred to v0.3.0" references now that style read + writer alignment emission have shipped (§1, §4.3, §6.8, §9.2)._

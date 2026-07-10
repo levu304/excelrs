@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] — unreleased
+
+### Added
+
+- Theme color references (`theme="N"`) resolved to ARGB on read via `xl/theme/theme1.xml` color scheme
+- Indexed color references (`indexed="N"`) resolved to ARGB on read via the standard 56-entry system palette
+- Tint support for theme colors (`tint` attribute applied to theme color resolution)
+- Custom theme1.xml parsing with fallback to OOXML default scheme
+
 ## [0.5.0] — 2026-07-10
 
 ### Added
