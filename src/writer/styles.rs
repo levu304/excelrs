@@ -1164,4 +1164,24 @@ mod tests {
         );
         assert!(!xml.contains(r##"color rgb="FF&""##), "unescaped border color: {xml}");
     }
+
+    /// Theme-resolved ARGB must be emitted as-is (regression guard).
+    #[test]
+    fn test_emit_theme_resolved_argb() {
+        let styles = vec![Some(Style {
+            font: Some(Font {
+                color: Some("FF4F81BD".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })];
+        let table = build_style_table(&styles);
+        let mut buf = Vec::new();
+        emit_styles_xml(&mut buf, &table).unwrap();
+        let xml = String::from_utf8(buf).unwrap();
+        assert!(
+            xml.contains(r##"<color rgb="FF4F81BD"/>"##),
+            "theme-resolved ARGB must be emitted: {xml}"
+        );
+    }
 }

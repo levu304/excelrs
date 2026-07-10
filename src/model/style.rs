@@ -1,8 +1,9 @@
 //! Style types: `Font`, `Fill`, `BorderStyle`, `Border`, `Alignment`, `Style`.
 //!
 //! All six structs are `#[napi(object)]` flat structs (ADR-11). Colors are ARGB
-//! hex (8 chars) or RGB hex (6 chars). Theme color references are not supported
-//! in v0.2.0 (deferred to v0.3.0, see spec §9.2.1).
+//! hex (8 chars) or RGB hex (6 chars). Theme color references (`theme="N"`) and indexed
+//! colors (`indexed="N"`) in `xl/styles.xml` are resolved to ARGB on read via
+//! `xl/theme/theme1.xml` and the standard 56-entry system-indexed palette.
 //!
 //! # Setter validation
 //! `Style::validate()` runs seven canonical-serialization rules from spec §6.8:
