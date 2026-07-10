@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 
 use napi_derive::napi;
 
+use crate::error::ExcelrsError;
 use crate::model::style::Style;
 use crate::types;
 
@@ -132,6 +133,20 @@ impl CellValue {
             rich_text: Some(runs),
             ..Default::default()
         }
+    }
+
+    /// Validate this cell value. Validates rich-text fonts.
+    /// Returns `Ok(self)` if valid, `Err` with `ExcelrsError` otherwise.
+    /// This is called by the writer before emitting XML.
+    pub fn validate(mut self) -> Result<Self, ExcelrsError> {
+        if let Some(ref mut runs) = self.rich_text {
+            for run in runs.iter_mut() {
+                if let Some(ref mut font) = run.font {
+                    font.validate()?;
+                }
+            }
+        }
+        Ok(self)
     }
 }
 

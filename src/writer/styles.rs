@@ -318,14 +318,31 @@ fn emit_fills<W: Write>(w: &mut W, fills: &[Fill]) -> Result<(), ExcelrsError> {
     for f in fills {
         write_str(w, "<fill>")?;
         if f.kind == "gradient" {
-            let mut attrs = format!(r#"type="{}""#, f.gradient_type.as_deref().unwrap_or("linear"));
-            if let Some(deg) = f.gradient_degree {
-                attrs.push_str(&format!(r#" degree="{}""#, deg));
-            }
-            if let Some(angle) = f.gradient_angle {
-                attrs.push_str(&format!(r#" angle="{}""#, angle));
-            }
-            write_str(w, &format!("<gradientFill {}>", attrs))?;
+            let (tag, attrs) = if f.gradient_type.as_deref() == Some("path") {
+                // Path gradient: left/right/top/bottom geometry
+                let mut a = String::from(r#"type="path""#);
+                if let Some(v) = f.gradient_left {
+                    a.push_str(&format!(r#" left="{}""#, v));
+                }
+                if let Some(v) = f.gradient_right {
+                    a.push_str(&format!(r#" right="{}""#, v));
+                }
+                if let Some(v) = f.gradient_top {
+                    a.push_str(&format!(r#" top="{}""#, v));
+                }
+                if let Some(v) = f.gradient_bottom {
+                    a.push_str(&format!(r#" bottom="{}""#, v));
+                }
+                ("gradientFill", a)
+            } else {
+                // Linear gradient (default): degree only
+                let mut a = String::from(r#"type="linear""#);
+                if let Some(deg) = f.gradient_degree {
+                    a.push_str(&format!(r#" degree="{}""#, deg));
+                }
+                ("gradientFill", a)
+            };
+            write_str(w, &format!("<{} {}>", tag, attrs))?;
             if let Some(ref stops) = f.gradient_stops {
                 for stop in stops {
                     write_str(
@@ -530,7 +547,7 @@ fn write_str<W: Write>(w: &mut W, s: &str) -> Result<(), ExcelrsError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::style::{BorderStyle, Fill};
+    use crate::model::style::{BorderStyle, Fill, GradientStop};
 
     // -- 4 dedup tests (per §9.2 budget) --
 
@@ -938,6 +955,92 @@ mod tests {
         assert_eq!(
             table.cell_xfs[table.cell_indices[0] as usize].num_fmt_id,
             table.cell_xfs[table.cell_indices[2] as usize].num_fmt_id
+        );
+    }
+
+    /// Linear gradient must NOT emit `angle` (invalid CT_GradientFill attr).
+    #[test]
+    fn test_emit_gradient_linear_has_no_angle() {
+        let fill = Fill {
+            kind: "gradient".into(),
+            gradient_type: Some("linear".into()),
+            gradient_degree: Some(45.0),
+            gradient_stops: Some(vec![
+                GradientStop {
+                    color: "FFFF0000".into(),
+                    position: 0.0,
+                },
+                GradientStop {
+                    color: "FF00FF00".into(),
+                    position: 1.0,
+                },
+            ]),
+            ..Default::default()
+        };
+        let table = build_style_table(&[Some(Style {
+            fill: Some(fill),
+            ..Default::default()
+        })]);
+        let mut buf = Vec::new();
+        emit_styles_xml(&mut buf, &table).unwrap();
+        let xml = String::from_utf8(buf).unwrap();
+
+        assert!(
+            xml.contains(r##"type="linear""##),
+            "linear gradient missing type attr: {xml}"
+        );
+        assert!(
+            xml.contains(r##"degree="45""##),
+            "linear gradient missing degree attr: {xml}"
+        );
+        assert!(
+            !xml.contains("angle="),
+            "angle is not a valid CT_GradientFill attribute: {xml}"
+        );
+    }
+
+    /// Path gradient must emit correct geometry attrs (left/right/top/bottom)
+    /// and must NOT emit `angle`.
+    #[test]
+    fn test_emit_gradient_path_emits_geometry() {
+        let fill = Fill {
+            kind: "gradient".into(),
+            gradient_type: Some("path".into()),
+            gradient_left: Some(0.0),
+            gradient_right: Some(1.0),
+            gradient_top: Some(0.0),
+            gradient_bottom: Some(1.0),
+            gradient_stops: Some(vec![
+                GradientStop {
+                    color: "FFFF0000".into(),
+                    position: 0.0,
+                },
+                GradientStop {
+                    color: "FF00FF00".into(),
+                    position: 1.0,
+                },
+            ]),
+            ..Default::default()
+        };
+        let table = build_style_table(&[Some(Style {
+            fill: Some(fill),
+            ..Default::default()
+        })]);
+        let mut buf = Vec::new();
+        emit_styles_xml(&mut buf, &table).unwrap();
+        let xml = String::from_utf8(buf).unwrap();
+
+        assert!(
+            xml.contains(r##"type="path""##),
+            "path gradient missing type attr: {xml}"
+        );
+        assert!(xml.contains(r##"left="0""##), "path gradient missing left: {xml}");
+        assert!(xml.contains(r##"right="1""##), "path gradient missing right: {xml}");
+        assert!(xml.contains(r##"top="0""##), "path gradient missing top: {xml}");
+        assert!(xml.contains(r##"bottom="1""##), "path gradient missing bottom: {xml}");
+        assert!(
+            !xml.contains("angle="),
+            "angle is not a valid CT_GradientFill attribute: {xml}"
         );
     }
 }

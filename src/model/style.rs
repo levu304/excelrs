@@ -48,6 +48,16 @@ impl Default for Font {
     }
 }
 
+impl Font {
+    /// Validate font fields that appear in rich-text runs.
+    /// Called by `CellValue::validate()` before writing.
+    pub fn validate(&mut self) -> Result<(), ExcelrsError> {
+        validate_float(self.size, "rich_text.font.size")?;
+        validate_color(&mut self.color, "rich_text.font.color")?;
+        Ok(())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Fill
 // ---------------------------------------------------------------------------
@@ -85,6 +95,15 @@ pub struct Fill {
     pub gradient_angle: Option<f64>,
     /// Gradient stops. Only used when `kind="gradient"`.
     pub gradient_stops: Option<Vec<GradientStop>>,
+    // -- path gradient geometry (v0.5.0) --
+    /// Left edge position (0.0–1.0) for path gradients. Only used when `kind="gradient"` and `gradient_type="path"`.
+    pub gradient_left: Option<f64>,
+    /// Right edge position (0.0–1.0) for path gradients. Only used when `kind="gradient"` and `gradient_type="path"`.
+    pub gradient_right: Option<f64>,
+    /// Top edge position (0.0–1.0) for path gradients. Only used when `kind="gradient"` and `gradient_type="path"`.
+    pub gradient_top: Option<f64>,
+    /// Bottom edge position (0.0–1.0) for path gradients. Only used when `kind="gradient"` and `gradient_type="path"`.
+    pub gradient_bottom: Option<f64>,
 }
 
 impl Default for Fill {
@@ -98,6 +117,10 @@ impl Default for Fill {
             gradient_degree: None,
             gradient_angle: None,
             gradient_stops: None,
+            gradient_left: None,
+            gradient_right: None,
+            gradient_top: None,
+            gradient_bottom: None,
         }
     }
 }
@@ -291,29 +314,62 @@ impl Style {
             validate_color(&mut fill.background, "fill.background")?;
             // Gradient validation
             if fill.kind == "gradient" {
-                if let Some(ref gt) = fill.gradient_type {
-                    if gt != "linear" && gt != "path" {
-                        return Err(ExcelrsError::InvalidStyle(
-                            "fill.gradient_type: must be 'linear' or 'path'".into(),
-                        ));
+                let gt = fill.gradient_type.as_deref();
+                match gt {
+                    Some("path") => {
+                        // Path gradient: require left/right/top/bottom geometry
+                        for (field, val) in [
+                            ("fill.gradient_left", fill.gradient_left),
+                            ("fill.gradient_right", fill.gradient_right),
+                            ("fill.gradient_top", fill.gradient_top),
+                            ("fill.gradient_bottom", fill.gradient_bottom),
+                        ] {
+                            validate_float(val, field)?;
+                        }
+                        if fill.gradient_left.is_none()
+                            || fill.gradient_right.is_none()
+                            || fill.gradient_top.is_none()
+                            || fill.gradient_bottom.is_none()
+                        {
+                            return Err(ExcelrsError::InvalidStyle(
+                                "fill: path gradient requires gradientLeft/Right/Top/Bottom".into(),
+                            ));
+                        }
+                    }
+                    Some("linear") | None => {
+                        // Linear gradient: degree is optional
+                        validate_float(fill.gradient_degree, "fill.gradient_degree")?;
+                    }
+                    Some(other) => {
+                        return Err(ExcelrsError::InvalidStyle(format!(
+                            "fill.gradient_type: '{other}' is not valid; use 'linear' or 'path'"
+                        )));
                     }
                 }
-                validate_float(fill.gradient_degree, "fill.gradient_degree")?;
+                // gradient_angle is deprecated — validate it but no longer emitted
                 validate_float(fill.gradient_angle, "fill.gradient_angle")?;
-                if let Some(ref stops) = fill.gradient_stops {
-                    for (i, stop) in stops.iter().enumerate() {
-                        if !is_valid_hex_color(&stop.color) {
-                            return Err(ExcelrsError::InvalidStyle(format!(
-                                "fill.gradient_stops[{}].color: '{}' is not a valid ARGB/RGB hex string",
-                                i, stop.color
-                            )));
+                match &fill.gradient_stops {
+                    Some(stops) if stops.len() >= 2 => {
+                        for (i, stop) in stops.iter().enumerate() {
+                            if !is_valid_hex_color(&stop.color) {
+                                return Err(ExcelrsError::InvalidStyle(format!(
+                                    "fill.gradient_stops[{}].color: '{}' is not a valid ARGB/RGB hex string",
+                                    i, stop.color
+                                )));
+                            }
+                            if !(0.0..=1.0).contains(&stop.position) {
+                                return Err(ExcelrsError::InvalidStyle(format!(
+                                    "fill.gradient_stops[{}].position: {} is outside [0.0, 1.0]",
+                                    i, stop.position
+                                )));
+                            }
                         }
-                        if !(0.0..=1.0).contains(&stop.position) {
-                            return Err(ExcelrsError::InvalidStyle(format!(
-                                "fill.gradient_stops[{}].position: {} is outside [0.0, 1.0]",
-                                i, stop.position
-                            )));
-                        }
+                    }
+                    _ => {
+                        return Err(ExcelrsError::InvalidStyle(
+                            "fill.gradient_stops: a gradient fill requires at least 2 stops (positions in [0,1])"
+                                .into(),
+                        ));
                     }
                 }
             }
@@ -531,8 +587,14 @@ mod tests {
             gradient_type: Some("linear".into()),
             gradient_degree: Some(90.0),
             gradient_stops: Some(vec![
-                GradientStop { color: "FFFF0000".into(), position: 0.0 },
-                GradientStop { color: "FF00FF00".into(), position: 1.0 },
+                GradientStop {
+                    color: "FFFF0000".into(),
+                    position: 0.0,
+                },
+                GradientStop {
+                    color: "FF00FF00".into(),
+                    position: 1.0,
+                },
             ]),
             ..Default::default()
         };
@@ -550,9 +612,10 @@ mod tests {
         let fill = Fill {
             kind: "gradient".into(),
             gradient_type: Some("linear".into()),
-            gradient_stops: Some(vec![
-                GradientStop { color: "ZZZ".into(), position: 0.0 },
-            ]),
+            gradient_stops: Some(vec![GradientStop {
+                color: "ZZZ".into(),
+                position: 0.0,
+            }]),
             ..Default::default()
         };
         let style = Style {
@@ -567,9 +630,10 @@ mod tests {
     fn test_validate_gradient_stop_position_out_of_range() {
         let fill = Fill {
             kind: "gradient".into(),
-            gradient_stops: Some(vec![
-                GradientStop { color: "FFFF0000".into(), position: 1.5 },
-            ]),
+            gradient_stops: Some(vec![GradientStop {
+                color: "FFFF0000".into(),
+                position: 1.5,
+            }]),
             ..Default::default()
         };
         let style = Style {
@@ -577,6 +641,42 @@ mod tests {
             ..Default::default()
         };
         assert!(style.validate().is_err());
+    }
+
+    /// Gradient with no stops must be rejected.
+    #[test]
+    fn test_validate_gradient_requires_stops() {
+        let fill = Fill {
+            kind: "gradient".into(),
+            gradient_type: Some("linear".into()),
+            gradient_degree: Some(90.0),
+            gradient_stops: None,
+            ..Default::default()
+        };
+        let style = Style {
+            fill: Some(fill),
+            ..Default::default()
+        };
+        assert!(style.validate().is_err(), "gradient with no stops should be rejected");
+    }
+
+    /// Gradient with an empty stop list must be rejected.
+    #[test]
+    fn test_validate_gradient_empty_stops_rejected() {
+        let fill = Fill {
+            kind: "gradient".into(),
+            gradient_type: Some("linear".into()),
+            gradient_stops: Some(vec![]),
+            ..Default::default()
+        };
+        let style = Style {
+            fill: Some(fill),
+            ..Default::default()
+        };
+        assert!(
+            style.validate().is_err(),
+            "gradient with empty stops should be rejected"
+        );
     }
 
     /// Fill.kind: random string rejected.

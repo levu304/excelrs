@@ -317,7 +317,10 @@ impl Worksheet {
             ));
         }
 
-        let mut ranges = self.merged_ranges.lock().expect("Worksheet merged_ranges lock poisoned");
+        let mut ranges = self
+            .merged_ranges
+            .lock()
+            .expect("Worksheet merged_ranges lock poisoned");
         if !ranges.contains(&range) {
             ranges.push(range);
         }
@@ -345,7 +348,10 @@ impl Worksheet {
 
     /// Accessor for merged ranges (used by writer).
     pub fn get_merged_ranges(&self) -> Vec<String> {
-        self.merged_ranges.lock().expect("Worksheet merged_ranges lock poisoned").clone()
+        self.merged_ranges
+            .lock()
+            .expect("Worksheet merged_ranges lock poisoned")
+            .clone()
     }
 
     /// Insert a cell value at (row, col) — used by the reader.

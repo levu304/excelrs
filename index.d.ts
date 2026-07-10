@@ -329,8 +329,19 @@ export interface Fill {
   gradientType?: string
   /** Gradient angle in degrees (linear). Only used when `kind="gradient"`. */
   gradientDegree?: number
-  /** Gradient angle as left/right angle (for path gradients). Only used when `kind="gradient"`. */
+  /**
+   * Deprecated — previously emitted an invalid `angle` attribute.
+   * Use `gradientDegree` (linear) or `gradientLeft`/`gradientRight`/`gradientTop`/`gradientBottom` (path).
+   */
   gradientAngle?: number
+  /** Left edge position (0.0–1.0) for path gradients. Only used when `kind="gradient"` and `gradientType="path"`. */
+  gradientLeft?: number
+  /** Right edge position (0.0–1.0) for path gradients. Only used when `kind="gradient"` and `gradientType="path"`. */
+  gradientRight?: number
+  /** Top edge position (0.0–1.0) for path gradients. Only used when `kind="gradient"` and `gradientType="path"`. */
+  gradientTop?: number
+  /** Bottom edge position (0.0–1.0) for path gradients. Only used when `kind="gradient"` and `gradientType="path"`. */
+  gradientBottom?: number
   /** Gradient stops. Only used when `kind="gradient"`. */
   gradientStops?: Array<GradientStop>
 }
