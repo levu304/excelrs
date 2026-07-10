@@ -255,7 +255,10 @@ fn parse_color(attrs: &[Attribute], scheme: &ThemeColorScheme) -> Option<String>
     }
     // rgb attr — fallback
     if let Some(rgb) = str_attr(attrs, b"rgb") {
-        return Some(rgb.to_uppercase());
+        if !rgb.is_empty() && rgb.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Some(rgb.to_uppercase());
+        }
+        return None;
     }
     None
 }
@@ -968,6 +971,34 @@ mod tests {
         </styleSheet>"#;
         let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
         assert_eq!(table.fonts[1].color.as_deref(), Some("FF4F81BD"));
+    }
+
+    /// B10: `<color rgb=""/>` must return None, not Some("").
+    #[test]
+    fn test_parse_color_rgb_empty_returns_none() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <fonts count="2">
+            <font><sz val="11"/><name val="Calibri"/></font>
+            <font><sz val="14"/><name val="Arial"/><color rgb=""/></font>
+          </fonts>
+        </styleSheet>"#;
+        let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
+        assert_eq!(table.fonts[1].color, None);
+    }
+
+    /// B11: `<color rgb="ZZZZZZ"/>` non-hex → None.
+    #[test]
+    fn test_parse_color_rgb_non_hex_returns_none() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <fonts count="2">
+            <font><sz val="11"/><name val="Calibri"/></font>
+            <font><sz val="14"/><name val="Arial"/><color rgb="ZZZZZZ"/></font>
+          </fonts>
+        </styleSheet>"#;
+        let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
+        assert_eq!(table.fonts[1].color, None);
     }
 
     // -- resolve_style tests --
