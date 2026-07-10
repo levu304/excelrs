@@ -8,9 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Documentation
+## [0.5.0] — 2026-07-10
 
-- Reconciled `docs/spec.md` with the v0.3.0 release: corrected header metadata (Version/Status) and removed stale "deferred to v0.3.0" references now that style read and writer alignment emission have shipped (see §1, §4.3, §6.8, §9.2).
+### Added
+
+- Row-level styles (height, hidden, style index in `<row>` element)
+- Gradient fills with linear (`degree`) and path (`left`/`right`/`top`/`bottom` geometry)
+- Cell style object model with validation
+- Diagonal borders (up, down)
+- Merged cells (`mergeCells` in sheet XML)
+- Hyperlinks (per-sheet `.rels` + `<hyperlinks>` block)
+- Rich-text inline formatting (`<is>`/`<r>`/`<rPr>`)
+
+### Fixed
+
+- Row.style silent drop (interior mutability via `Arc<Mutex<>>`)
+- Gradient stops validation (< 2 stops rejected)
+- `gradientFill` invalid `angle` attribute omitted; correct path geometry emitted
+- RichText font.color XML injection (escaped + validated)
+- Gradient stop, font color, fill fg/bg, border color sinks escaped
+
+### Changed
+
+- Minimum Rust edition bumped implicitly via dependency updates
+- Color values validated to 6/8 hex characters
+- All XML `rgb=` attributes escaped for defense-in-depth
 
 ## [0.3.0] — 2026-06-30
 
@@ -167,6 +189,7 @@ first fully working release; v0.2.0 and v0.2.1 are superseded.
   and GitHub Release on tag push.
 - **Documentation** — complete spec (docs/spec.md), two architecture reviews.
 
+[0.5.0]: https://github.com/levu304/excelrs/releases/tag/v0.5.0
 [0.3.0]: https://github.com/levu304/excelrs/releases/tag/v0.3.0
 [0.2.2]: https://github.com/levu304/excelrs/releases/tag/v0.2.2
 [0.2.0]: https://github.com/levu304/excelrs/releases/tag/v0.2.0
