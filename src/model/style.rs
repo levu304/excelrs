@@ -247,6 +247,19 @@ fn validate_float(val: Option<f64>, field: &str) -> Result<(), ExcelrsError> {
     Ok(())
 }
 
+/// Validate float is finite AND within [min, max].
+fn validate_float_range(val: Option<f64>, field: &str, min: f64, max: f64) -> Result<(), ExcelrsError> {
+    validate_float(val, field)?;
+    if let Some(v) = val {
+        if !(min..=max).contains(&v) {
+            return Err(ExcelrsError::InvalidStyle(format!(
+                "{field}: {v} is outside the valid range [{min}, {max}]"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Validate Fill.kind. Must be one of: "none", "solid", "pattern", "gradient".
 fn validate_fill_kind(kind: &str) -> Result<(), ExcelrsError> {
     match kind {
@@ -324,7 +337,7 @@ impl Style {
                             ("fill.gradient_top", fill.gradient_top),
                             ("fill.gradient_bottom", fill.gradient_bottom),
                         ] {
-                            validate_float(val, field)?;
+                            validate_float_range(val, field, 0.0, 1.0)?;
                         }
                         if fill.gradient_left.is_none()
                             || fill.gradient_right.is_none()
@@ -346,8 +359,8 @@ impl Style {
                         )));
                     }
                 }
-                // gradient_angle is deprecated — validate it but no longer emitted
-                validate_float(fill.gradient_angle, "fill.gradient_angle")?;
+                // gradient_angle is deprecated and never emitted — intentionally not validated.
+                // Set it and it is silently ignored (see emit_fills for the real gradient attributes).
                 match &fill.gradient_stops {
                     Some(stops) if stops.len() >= 2 => {
                         for (i, stop) in stops.iter().enumerate() {
@@ -641,6 +654,58 @@ mod tests {
             ..Default::default()
         };
         assert!(style.validate().is_err());
+    }
+
+    /// P3b — Path gradient geometry not range-checked [0,1].
+    #[test]
+    fn test_validate_gradient_path_geometry_out_of_range() {
+        let fill = Fill {
+            kind: "gradient".into(),
+            gradient_type: Some("path".into()),
+            gradient_left: Some(2.0),
+            gradient_right: Some(1.0),
+            gradient_top: Some(0.0),
+            gradient_bottom: Some(1.0),
+            gradient_stops: Some(vec![
+                GradientStop {
+                    position: 0.0,
+                    color: "FFFF0000".into(),
+                },
+                GradientStop {
+                    position: 1.0,
+                    color: "FF0000FF".into(),
+                },
+            ]),
+            ..Default::default()
+        };
+        let style = Style {
+            fill: Some(fill),
+            ..Default::default()
+        };
+        assert!(
+            style.validate().is_err(),
+            "gradient_left=2.0 is outside [0,1] and must be rejected"
+        );
+    }
+
+    /// P3d — Single gradient stop boundary test (regression lock-in).
+    #[test]
+    fn test_validate_gradient_single_stop_rejected() {
+        let fill = Fill {
+            kind: "gradient".into(),
+            gradient_type: Some("linear".into()),
+            gradient_degree: Some(90.0),
+            gradient_stops: Some(vec![GradientStop {
+                position: 0.0,
+                color: "FFFF0000".into(),
+            }]),
+            ..Default::default()
+        };
+        let style = Style {
+            fill: Some(fill),
+            ..Default::default()
+        };
+        assert!(style.validate().is_err(), "exactly 1 gradient stop must be rejected");
     }
 
     /// Gradient with no stops must be rejected.

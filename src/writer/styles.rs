@@ -349,7 +349,8 @@ fn emit_fills<W: Write>(w: &mut W, fills: &[Fill]) -> Result<(), ExcelrsError> {
                         w,
                         &format!(
                             r#"<stop position="{}"><color rgb="{}"/></stop>"#,
-                            stop.position, stop.color
+                            stop.position,
+                            escape(&stop.color)
                         ),
                     )?;
                 }
@@ -996,6 +997,37 @@ mod tests {
         assert!(
             !xml.contains("angle="),
             "angle is not a valid CT_GradientFill attribute: {xml}"
+        );
+    }
+
+    /// P3a — Gradient stop color is XML-escaped on emit.
+    #[test]
+    fn test_emit_gradient_stop_color_escaped() {
+        let mut xml = Vec::new();
+        let fills = vec![Fill {
+            kind: "gradient".into(),
+            gradient_type: Some("linear".into()),
+            gradient_stops: Some(vec![
+                GradientStop {
+                    position: 0.0,
+                    color: "FF&\">\"<".into(),
+                },
+                GradientStop {
+                    position: 1.0,
+                    color: "00000000".into(),
+                },
+            ]),
+            ..Default::default()
+        }];
+        emit_fills(&mut xml, &fills).unwrap();
+        let out = String::from_utf8(xml).unwrap();
+        assert!(
+            out.contains("FF&amp;&quot;&gt;&quot;&lt;"),
+            "stop color must be XML-escaped: {out}"
+        );
+        assert!(
+            !out.contains(r##"color="FF&""##),
+            "unescaped & or quote in stop color: {out}"
         );
     }
 

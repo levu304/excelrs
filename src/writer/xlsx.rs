@@ -1556,4 +1556,149 @@ mod tests {
         // Verify <v> exists (the index may vary; just confirm there's a numeric <v>)
         assert!(sheet_xml.contains("<v>"), "B1 should have a shared-string index <v>");
     }
+
+    // ---- P1: sheet name XML escaping (lock-in) ----
+
+    /// Sheet names with special XML chars must be escaped in workbook.xml.
+    /// This is a lock-in test: the escaping is already implemented.
+    #[test]
+    fn test_sheet_name_xml_escaped() {
+        use std::io::{Cursor, Read};
+
+        let mut ws = Worksheet::new("A & B <x> \"q\"".into());
+        ws.set_id(1);
+        let mut inner = WorkbookInner::new();
+        inner.worksheets.push(ws);
+        let bytes = workbook_to_bytes(&inner).unwrap();
+
+        // Extract workbook.xml
+        let mut archive = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut wb = String::new();
+        archive
+            .by_name("xl/workbook.xml")
+            .unwrap()
+            .read_to_string(&mut wb)
+            .unwrap();
+
+        assert!(
+            wb.contains(r##"name="A &amp; B &lt;x&gt; &quot;q&quot;"##),
+            "sheet name must be XML-escaped: {wb}"
+        );
+        assert!(
+            !wb.contains(r##"name="A & B"##),
+            "raw unescaped chars would break workbook.xml: {wb}"
+        );
+    }
+
+    // ---- P2a: row style emission (lock-in) ----
+
+    /// A row with a style but no cells must still be emitted with s="M".
+    #[test]
+    fn test_row_style_emitted_in_sheet_xml() {
+        use std::io::{Cursor, Read};
+
+        let mut ws = Worksheet::new("Styled".into());
+        ws.set_id(1);
+        // Row 2 gets a style but no cells -- must still emit <row r="2" s="N">
+        ws.get_row(2)
+            .set_style(serde_json::json!({ "num_fmt": "0.00%" }))
+            .unwrap();
+        let mut inner = WorkbookInner::new();
+        inner.worksheets.push(ws);
+        let bytes = workbook_to_bytes(&inner).unwrap();
+
+        let mut archive = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut sheet = String::new();
+        archive
+            .by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut sheet)
+            .unwrap();
+
+        assert!(
+            sheet.contains(r##"<row r="2" s=""##),
+            "styled row 2 must emit <row r=\"2\" s=\"M\">: {sheet}"
+        );
+    }
+
+    // ---- P2b: hyperlink per-sheet rId isolation (lock-in) ----
+
+    /// Hyperlinks in different sheets get independent rId numbering and
+    /// separate .rels files.
+    #[test]
+    fn test_hyperlink_per_sheet_rid_isolation() {
+        use std::io::{Cursor, Read};
+
+        // Sheet 1: hyperlink at A1
+        let mut ws1 = Worksheet::new("Sheet1".into());
+        ws1.set_id(1);
+        ws1.insert_cell_value(1, 1, CellValue::hyperlink("https://example.com/s1", Some("S1".into())));
+
+        // Sheet 2: different hyperlink at A1
+        let mut ws2 = Worksheet::new("Sheet2".into());
+        ws2.set_id(2);
+        ws2.insert_cell_value(1, 1, CellValue::hyperlink("https://example.com/s2", Some("S2".into())));
+
+        let mut inner = WorkbookInner::new();
+        inner.worksheets.push(ws1);
+        inner.worksheets.push(ws2);
+        let bytes = workbook_to_bytes(&inner).unwrap();
+
+        let mut archive = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+
+        // Sheet 1 rels: rId1 -> s1 url
+        let mut rels1 = String::new();
+        archive
+            .by_name("xl/worksheets/_rels/sheet1.xml.rels")
+            .unwrap()
+            .read_to_string(&mut rels1)
+            .unwrap();
+        assert!(rels1.contains(r##"Id="rId1""##));
+        assert!(rels1.contains("https://example.com/s1"));
+
+        // Sheet 2 rels: rId1 -> s2 url (isolated!)
+        let mut rels2 = String::new();
+        archive
+            .by_name("xl/worksheets/_rels/sheet2.xml.rels")
+            .unwrap()
+            .read_to_string(&mut rels2)
+            .unwrap();
+        assert!(rels2.contains(r##"Id="rId1""##));
+        assert!(rels2.contains("https://example.com/s2"));
+
+        // Cross-check: no leakage
+        assert!(
+            !rels1.contains("https://example.com/s2"),
+            "rId must not leak across sheets"
+        );
+        assert!(
+            !rels2.contains("https://example.com/s1"),
+            "rId must not leak across sheets"
+        );
+
+        // Sheet XML must also have <hyperlinks> block for each sheet
+        let mut sheet1 = String::new();
+        archive
+            .by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut sheet1)
+            .unwrap();
+        assert!(
+            sheet1.contains("<hyperlinks"),
+            "Sheet 1 must have <hyperlinks>: {sheet1}"
+        );
+        assert!(sheet1.contains(r##"ref="A1" r:id="rId1""##));
+
+        let mut sheet2 = String::new();
+        archive
+            .by_name("xl/worksheets/sheet2.xml")
+            .unwrap()
+            .read_to_string(&mut sheet2)
+            .unwrap();
+        assert!(
+            sheet2.contains("<hyperlinks"),
+            "Sheet 2 must have <hyperlinks>: {sheet2}"
+        );
+        assert!(sheet2.contains(r##"ref="A1" r:id="rId1""##));
+    }
 }
