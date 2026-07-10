@@ -15,13 +15,15 @@
     ]
   },
   "scripts": {
-    "build": "napi build --platform --js native.js",
-    "build:release": "napi build --platform --release --js native.js",
+    "build": "napi build --platform --js native.js --dts native.d.ts",
+    "build:release": "napi build --platform --release --js native.js --dts native.d.ts",
     "test": "vitest run",
     "format": "cargo fmt --",
-    "lint": "cargo clippy -- -D warnings"
+    "lint": "cargo clippy -- -D warnings",
+    "lint:js": "biome lint"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.3",
     "@napi-rs/cli": "^3.2.0",
     "vitest": "^4.1.9",
     "typescript": "^5.8.0",

@@ -48,17 +48,37 @@ impl Default for Font {
     }
 }
 
+impl Font {
+    /// Validate font fields that appear in rich-text runs.
+    /// Called by `CellValue::validate()` before writing.
+    pub fn validate(&mut self) -> Result<(), ExcelrsError> {
+        validate_float(self.size, "rich_text.font.size")?;
+        validate_color(&mut self.color, "rich_text.font.color")?;
+        Ok(())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Fill
 // ---------------------------------------------------------------------------
+
+/// A single gradient stop: color + position.
+#[napi(object)]
+#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
+#[serde(default)]
+pub struct GradientStop {
+    /// ARGB hex color (8 chars) or RGB hex (6 chars).
+    pub color: String,
+    /// Position in [0.0, 1.0].
+    pub position: f64,
+}
 
 /// Cell fill: kind, foreground, background, and pattern.
 #[napi(object)]
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct Fill {
-    /// Fill kind: `"none"` | `"solid"` | `"pattern"`.
-    /// `"gradient"` is rejected in v0.2.0 (see spec §9.2.1).
+    /// Fill kind: `"none"` | `"solid"` | `"pattern"` | `"gradient"`.
     pub kind: String,
     /// Foreground color (ARGB hex). Default: None.
     pub foreground: Option<String>,
@@ -66,6 +86,24 @@ pub struct Fill {
     pub background: Option<String>,
     /// Pattern name (for `kind="pattern"`). Default: None.
     pub pattern: Option<String>,
+    // -- gradient fields (v0.5.0) --
+    /// Gradient type: `"linear"` or `"path"`. Only used when `kind="gradient"`.
+    pub gradient_type: Option<String>,
+    /// Gradient angle in degrees (linear). Only used when `kind="gradient"`.
+    pub gradient_degree: Option<f64>,
+    /// Gradient angle as left/right angle (for path gradients). Only used when `kind="gradient"`.
+    pub gradient_angle: Option<f64>,
+    /// Gradient stops. Only used when `kind="gradient"`.
+    pub gradient_stops: Option<Vec<GradientStop>>,
+    // -- path gradient geometry (v0.5.0) --
+    /// Left edge position (0.0–1.0) for path gradients. Only used when `kind="gradient"` and `gradient_type="path"`.
+    pub gradient_left: Option<f64>,
+    /// Right edge position (0.0–1.0) for path gradients. Only used when `kind="gradient"` and `gradient_type="path"`.
+    pub gradient_right: Option<f64>,
+    /// Top edge position (0.0–1.0) for path gradients. Only used when `kind="gradient"` and `gradient_type="path"`.
+    pub gradient_top: Option<f64>,
+    /// Bottom edge position (0.0–1.0) for path gradients. Only used when `kind="gradient"` and `gradient_type="path"`.
+    pub gradient_bottom: Option<f64>,
 }
 
 impl Default for Fill {
@@ -75,6 +113,14 @@ impl Default for Fill {
             foreground: None,
             background: None,
             pattern: None,
+            gradient_type: None,
+            gradient_degree: None,
+            gradient_angle: None,
+            gradient_stops: None,
+            gradient_left: None,
+            gradient_right: None,
+            gradient_top: None,
+            gradient_bottom: None,
         }
     }
 }
@@ -100,7 +146,7 @@ pub struct BorderStyle {
 // Border
 // ---------------------------------------------------------------------------
 
-/// All four cell-border sides. Each side is optional; `None` means no border.
+/// All cell-border sides plus diagonals. Each side is optional; `None` means no border.
 #[napi(object)]
 #[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
@@ -109,6 +155,15 @@ pub struct Border {
     pub right: Option<BorderStyle>,
     pub bottom: Option<BorderStyle>,
     pub left: Option<BorderStyle>,
+    // -- diagonal borders (v0.5.0) --
+    /// Diagonal border line style. Only valid edges between top-left ↔ bottom-right.
+    pub diagonal: Option<BorderStyle>,
+    /// Whether the diagonal line goes up (bottom-left to top-right).
+    /// OOXML attribute `diagonalUp` on the `<border>` element.
+    pub diagonal_up: Option<bool>,
+    /// Whether the diagonal line goes down (top-left to bottom-right).
+    /// OOXML attribute `diagonalDown` on the `<border>` element.
+    pub diagonal_down: Option<bool>,
 }
 
 // ---------------------------------------------------------------------------
@@ -192,16 +247,25 @@ fn validate_float(val: Option<f64>, field: &str) -> Result<(), ExcelrsError> {
     Ok(())
 }
 
-/// Validate Fill.kind. Must be one of: "none", "solid", "pattern".
-/// "gradient" is explicitly rejected with a clear message.
+/// Validate float is finite AND within [min, max].
+fn validate_float_range(val: Option<f64>, field: &str, min: f64, max: f64) -> Result<(), ExcelrsError> {
+    validate_float(val, field)?;
+    if let Some(v) = val {
+        if !(min..=max).contains(&v) {
+            return Err(ExcelrsError::InvalidStyle(format!(
+                "{field}: {v} is outside the valid range [{min}, {max}]"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Validate Fill.kind. Must be one of: "none", "solid", "pattern", "gradient".
 fn validate_fill_kind(kind: &str) -> Result<(), ExcelrsError> {
     match kind {
-        "none" | "solid" | "pattern" => Ok(()),
-        "gradient" => Err(ExcelrsError::InvalidStyle(
-            "fill.kind: 'gradient' is not supported in v0.2.0 (see spec §9.2.1)".into(),
-        )),
+        "none" | "solid" | "pattern" | "gradient" => Ok(()),
         other => Err(ExcelrsError::InvalidStyle(format!(
-            "fill.kind: '{other}' is not valid; use 'none', 'solid', or 'pattern'"
+            "fill.kind: '{other}' is not valid; use 'none', 'solid', 'pattern', or 'gradient'"
         ))),
     }
 }
@@ -261,15 +325,77 @@ impl Style {
             validate_fill_kind(&fill.kind)?;
             validate_color(&mut fill.foreground, "fill.foreground")?;
             validate_color(&mut fill.background, "fill.background")?;
+            // Gradient validation
+            if fill.kind == "gradient" {
+                let gt = fill.gradient_type.as_deref();
+                match gt {
+                    Some("path") => {
+                        // Path gradient: require left/right/top/bottom geometry
+                        for (field, val) in [
+                            ("fill.gradient_left", fill.gradient_left),
+                            ("fill.gradient_right", fill.gradient_right),
+                            ("fill.gradient_top", fill.gradient_top),
+                            ("fill.gradient_bottom", fill.gradient_bottom),
+                        ] {
+                            validate_float_range(val, field, 0.0, 1.0)?;
+                        }
+                        if fill.gradient_left.is_none()
+                            || fill.gradient_right.is_none()
+                            || fill.gradient_top.is_none()
+                            || fill.gradient_bottom.is_none()
+                        {
+                            return Err(ExcelrsError::InvalidStyle(
+                                "fill: path gradient requires gradientLeft/Right/Top/Bottom".into(),
+                            ));
+                        }
+                    }
+                    Some("linear") | None => {
+                        // Linear gradient: degree is optional
+                        validate_float(fill.gradient_degree, "fill.gradient_degree")?;
+                    }
+                    Some(other) => {
+                        return Err(ExcelrsError::InvalidStyle(format!(
+                            "fill.gradient_type: '{other}' is not valid; use 'linear' or 'path'"
+                        )));
+                    }
+                }
+                // gradient_angle is deprecated and never emitted — intentionally not validated.
+                // Set it and it is silently ignored (see emit_fills for the real gradient attributes).
+                match &fill.gradient_stops {
+                    Some(stops) if stops.len() >= 2 => {
+                        for (i, stop) in stops.iter().enumerate() {
+                            if !is_valid_hex_color(&stop.color) {
+                                return Err(ExcelrsError::InvalidStyle(format!(
+                                    "fill.gradient_stops[{}].color: '{}' is not a valid ARGB/RGB hex string",
+                                    i, stop.color
+                                )));
+                            }
+                            if !(0.0..=1.0).contains(&stop.position) {
+                                return Err(ExcelrsError::InvalidStyle(format!(
+                                    "fill.gradient_stops[{}].position: {} is outside [0.0, 1.0]",
+                                    i, stop.position
+                                )));
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(ExcelrsError::InvalidStyle(
+                            "fill.gradient_stops: a gradient fill requires at least 2 stops (positions in [0,1])"
+                                .into(),
+                        ));
+                    }
+                }
+            }
         }
 
-        // Border (each side)
+        // Border (each side including diagonal)
         if let Some(ref mut border) = self.border {
             for (side, bs) in [
                 ("border.top", &mut border.top),
                 ("border.right", &mut border.right),
                 ("border.bottom", &mut border.bottom),
                 ("border.left", &mut border.left),
+                ("border.diagonal", &mut border.diagonal),
             ] {
                 if let Some(ref mut bs) = bs {
                     validate_border_style(&bs.style)?;
@@ -466,11 +592,23 @@ mod tests {
         assert!(style.validate().is_err());
     }
 
-    /// Fill.kind: "gradient" rejected with specific message.
+    /// Fill.kind: "gradient" accepted in v0.5.0 with valid gradient fields.
     #[test]
-    fn test_validate_fill_kind_gradient() {
+    fn test_validate_fill_kind_gradient_accept() {
         let fill = Fill {
             kind: "gradient".into(),
+            gradient_type: Some("linear".into()),
+            gradient_degree: Some(90.0),
+            gradient_stops: Some(vec![
+                GradientStop {
+                    color: "FFFF0000".into(),
+                    position: 0.0,
+                },
+                GradientStop {
+                    color: "FF00FF00".into(),
+                    position: 1.0,
+                },
+            ]),
             ..Default::default()
         };
         let style = Style {
@@ -478,10 +616,132 @@ mod tests {
             ..Default::default()
         };
         let result = style.validate();
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("gradient"));
-        assert!(err.contains("v0.2.0"));
+        assert!(result.is_ok(), "gradient fill should be accepted: {:?}", result.err());
+    }
+
+    /// Gradient stop color validation
+    #[test]
+    fn test_validate_gradient_stop_invalid_color() {
+        let fill = Fill {
+            kind: "gradient".into(),
+            gradient_type: Some("linear".into()),
+            gradient_stops: Some(vec![GradientStop {
+                color: "ZZZ".into(),
+                position: 0.0,
+            }]),
+            ..Default::default()
+        };
+        let style = Style {
+            fill: Some(fill),
+            ..Default::default()
+        };
+        assert!(style.validate().is_err());
+    }
+
+    /// Gradient stop position out of range
+    #[test]
+    fn test_validate_gradient_stop_position_out_of_range() {
+        let fill = Fill {
+            kind: "gradient".into(),
+            gradient_stops: Some(vec![GradientStop {
+                color: "FFFF0000".into(),
+                position: 1.5,
+            }]),
+            ..Default::default()
+        };
+        let style = Style {
+            fill: Some(fill),
+            ..Default::default()
+        };
+        assert!(style.validate().is_err());
+    }
+
+    /// P3b — Path gradient geometry not range-checked [0,1].
+    #[test]
+    fn test_validate_gradient_path_geometry_out_of_range() {
+        let fill = Fill {
+            kind: "gradient".into(),
+            gradient_type: Some("path".into()),
+            gradient_left: Some(2.0),
+            gradient_right: Some(1.0),
+            gradient_top: Some(0.0),
+            gradient_bottom: Some(1.0),
+            gradient_stops: Some(vec![
+                GradientStop {
+                    position: 0.0,
+                    color: "FFFF0000".into(),
+                },
+                GradientStop {
+                    position: 1.0,
+                    color: "FF0000FF".into(),
+                },
+            ]),
+            ..Default::default()
+        };
+        let style = Style {
+            fill: Some(fill),
+            ..Default::default()
+        };
+        assert!(
+            style.validate().is_err(),
+            "gradient_left=2.0 is outside [0,1] and must be rejected"
+        );
+    }
+
+    /// P3d — Single gradient stop boundary test (regression lock-in).
+    #[test]
+    fn test_validate_gradient_single_stop_rejected() {
+        let fill = Fill {
+            kind: "gradient".into(),
+            gradient_type: Some("linear".into()),
+            gradient_degree: Some(90.0),
+            gradient_stops: Some(vec![GradientStop {
+                position: 0.0,
+                color: "FFFF0000".into(),
+            }]),
+            ..Default::default()
+        };
+        let style = Style {
+            fill: Some(fill),
+            ..Default::default()
+        };
+        assert!(style.validate().is_err(), "exactly 1 gradient stop must be rejected");
+    }
+
+    /// Gradient with no stops must be rejected.
+    #[test]
+    fn test_validate_gradient_requires_stops() {
+        let fill = Fill {
+            kind: "gradient".into(),
+            gradient_type: Some("linear".into()),
+            gradient_degree: Some(90.0),
+            gradient_stops: None,
+            ..Default::default()
+        };
+        let style = Style {
+            fill: Some(fill),
+            ..Default::default()
+        };
+        assert!(style.validate().is_err(), "gradient with no stops should be rejected");
+    }
+
+    /// Gradient with an empty stop list must be rejected.
+    #[test]
+    fn test_validate_gradient_empty_stops_rejected() {
+        let fill = Fill {
+            kind: "gradient".into(),
+            gradient_type: Some("linear".into()),
+            gradient_stops: Some(vec![]),
+            ..Default::default()
+        };
+        let style = Style {
+            fill: Some(fill),
+            ..Default::default()
+        };
+        assert!(
+            style.validate().is_err(),
+            "gradient with empty stops should be rejected"
+        );
     }
 
     /// Fill.kind: random string rejected.

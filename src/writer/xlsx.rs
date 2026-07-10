@@ -78,37 +78,74 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
 
         // xl/styles.xml (v0.2.0: full dedup'd style table)
         start_file(&mut zip, "xl/styles.xml")?;
-        // Collect effective styles across every worksheet
+        // Collect effective styles across every worksheet.
         // Precedence: cell-level wins, then column-level, then Normal (None).
-        let all_styles: Vec<Option<Style>> = worksheets
-            .iter()
-            .flat_map(|ws| {
-                let col_style_map: BTreeMap<u32, Option<Style>> =
-                    ws.columns().iter().map(|c| (c.col_num(), c.style())).collect();
-                ws.rows().into_iter().flat_map(move |row| {
-                    let col_style_map = &col_style_map;
-                    row.written_cells()
-                        .into_iter()
-                        .map(move |c| effective_cell_style_with_fallback(c, col_style_map))
-                        .collect::<Vec<_>>()
-                })
-            })
-            .collect();
+        // Row-level styles are collected separately after cell styles.
+        let mut cell_styles: Vec<Option<Style>> = Vec::new();
+        let mut row_styles: Vec<Option<Style>> = Vec::new();
+        // Per-worksheet boundary tracking: (cell_count, row_count)
+        let mut ws_boundaries: Vec<(usize, usize)> = Vec::new();
+        for ws in worksheets.iter() {
+            let col_style_map: BTreeMap<u32, Option<Style>> =
+                ws.columns().iter().map(|c| (c.col_num(), c.style())).collect();
+            // Cell styles (existing logic)
+            let mut cell_count = 0usize;
+            for row in ws.rows() {
+                let written = row.written_cells();
+                for cell in written {
+                    cell_styles.push(effective_cell_style_with_fallback(cell, &col_style_map));
+                    cell_count += 1;
+                }
+            }
+            // Row styles — include all rows (None maps to Normal index 0)
+            let mut row_count = 0usize;
+            for row in ws.rows() {
+                row_styles.push(row.style().clone());
+                row_count += 1;
+            }
+            ws_boundaries.push((cell_count, row_count));
+        }
+        let all_styles: Vec<Option<Style>> = {
+            let mut v = cell_styles.clone();
+            v.extend(row_styles);
+            v
+        };
         let style_table = styles::build_style_table(&all_styles);
         styles::emit_styles_xml(&mut zip, &style_table)?;
 
         // xl/worksheets/sheet{N}.xml
-        let mut style_offset = 0usize;
+        let mut cell_offset = 0usize;
+        let mut row_offset = 0usize;
+        let cell_styles_total = cell_styles.len();
         for (i, ws) in worksheets.iter().enumerate() {
             let sheet_path = format!("xl/worksheets/sheet{}.xml", i + 1);
             start_file(&mut zip, &sheet_path)?;
 
-            // Count cells in this worksheet for the style-indices slice
-            let cell_count: usize = ws.rows().iter().map(|r| r.written_cells().len()).sum();
-            let ws_indices = &style_table.cell_indices[style_offset..style_offset + cell_count];
-            style_offset += cell_count;
+            let (cell_count, row_count) = ws_boundaries[i];
+            let ws_cell_indices = &style_table.cell_indices[cell_offset..cell_offset + cell_count];
+            cell_offset += cell_count;
+            let ws_row_indices_base = &style_table.cell_indices[cell_styles_total..];
+            let ws_row_indices = &ws_row_indices_base[row_offset..row_offset + row_count];
+            row_offset += row_count;
 
-            write_sheet_xml(&mut zip, ws, &string_indices, ws_indices)?;
+            // Collect hyperlinks for this sheet
+            let hyperlinks = collect_sheet_hyperlinks(ws);
+
+            write_sheet_xml(
+                &mut zip,
+                ws,
+                &string_indices,
+                ws_cell_indices,
+                ws_row_indices,
+                &hyperlinks,
+            )?;
+
+            // Write sheet-level relationships (for hyperlinks)
+            if !hyperlinks.is_empty() {
+                let rel_path = format!("xl/worksheets/_rels/sheet{}.xml.rels", i + 1);
+                start_file(&mut zip, &rel_path)?;
+                write_sheet_rels(&mut zip, &hyperlinks)?;
+            }
         }
 
         zip.finish()
@@ -178,20 +215,67 @@ fn build_shared_strings(worksheets: &[Worksheet]) -> (Vec<String>, HashMap<Strin
         for row in ws.rows() {
             for cell in row.written_cells() {
                 let cv = cell.value();
-                if cv.value_type == "String" {
-                    if let Some(s) = cv.string {
-                        string_indices.entry(s.clone()).or_insert_with(|| {
-                            let idx = string_table.len() as u32;
-                            string_table.push(s);
-                            idx
-                        });
+                match cv.value_type.as_str() {
+                    "String" => {
+                        if let Some(s) = cv.string {
+                            string_indices.entry(s.clone()).or_insert_with(|| {
+                                let idx = string_table.len() as u32;
+                                string_table.push(s);
+                                idx
+                            });
+                        }
                     }
+                    "Hyperlink" => {
+                        // Collect display text (prefer hyperlink_text, fallback to URL)
+                        let text = cv.hyperlink_text.as_deref().or(cv.hyperlink.as_deref());
+                        if let Some(s) = text {
+                            string_indices.entry(s.to_string()).or_insert_with(|| {
+                                let idx = string_table.len() as u32;
+                                string_table.push(s.to_string());
+                                idx
+                            });
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
     }
 
     (string_table, string_indices)
+}
+
+// ---------------------------------------------------------------------------
+// Sheet hyperlink collection
+// ---------------------------------------------------------------------------
+
+/// A hyperlink reference on a single worksheet.
+struct SheetHyperlink {
+    cell_ref: String,
+    rid: String,
+    url: String,
+}
+
+/// Walk all cells in a worksheet and collect hyperlink references.
+fn collect_sheet_hyperlinks(ws: &Worksheet) -> Vec<SheetHyperlink> {
+    let mut out = Vec::new();
+    for row in ws.rows() {
+        for cell in row.written_cells() {
+            let cv = cell.value();
+            if cv.value_type == "Hyperlink" {
+                if let Some(ref url) = cv.hyperlink {
+                    let ref_addr = cell.address();
+                    let rid = format!("rId{}", out.len() + 1);
+                    out.push(SheetHyperlink {
+                        cell_ref: ref_addr,
+                        rid,
+                        url: url.clone(),
+                    });
+                }
+            }
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -314,6 +398,31 @@ fn write_workbook_rels<W: Write>(w: &mut W, sheet_count: usize) -> Result<(), Ex
 }
 
 // ---------------------------------------------------------------------------
+// xl/worksheets/_rels/sheet{N}.xml.rels
+// ---------------------------------------------------------------------------
+
+/// Write the relationships XML for a single worksheet (hyperlinks).
+fn write_sheet_rels<W: Write>(w: &mut W, hyperlinks: &[SheetHyperlink]) -> Result<(), ExcelrsError> {
+    write_str(w, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#)?;
+    write_str(
+        w,
+        r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
+    )?;
+    for h in hyperlinks {
+        write_str(
+            w,
+            &format!(
+                r#"<Relationship Id="{rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="{url}" TargetMode="External"/>"#,
+                rid = h.rid,
+                url = escape(&h.url),
+            ),
+        )?;
+    }
+    write_str(w, "</Relationships>")?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // xl/sharedStrings.xml
 // ---------------------------------------------------------------------------
 
@@ -347,12 +456,14 @@ fn write_sheet_xml<W: Write>(
     w: &mut W,
     ws: &Worksheet,
     string_indices: &HashMap<String, u32>,
-    style_indices: &[u32],
+    cell_style_indices: &[u32],
+    row_style_indices: &[u32],
+    hyperlinks: &[SheetHyperlink],
 ) -> Result<(), ExcelrsError> {
     write_str(w, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#)?;
     write_str(
         w,
-        r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"#,
+        r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
     )?;
 
     // <dimension ref="A1:Z1000"/> — used range
@@ -363,35 +474,74 @@ fn write_sheet_xml<W: Write>(
 
     write_str(w, "<sheetData>")?;
 
-    write_cells_with_styles(w, ws, string_indices, style_indices)?;
+    write_cells_with_styles(w, ws, string_indices, cell_style_indices, row_style_indices)?;
 
     write_str(w, "</sheetData>")?;
+
+    // <mergeCells> — item 1 (v0.5.0)
+    let merged_ranges = ws.get_merged_ranges();
+    if !merged_ranges.is_empty() {
+        write_str(w, &format!(r#"<mergeCells count="{}">"#, merged_ranges.len()))?;
+        for range in &merged_ranges {
+            write_str(w, &format!(r#"<mergeCell ref="{}"/>"#, escape(range)))?;
+        }
+        write_str(w, "</mergeCells>")?;
+    }
+
+    // <hyperlinks> — item 2 (v0.5.0)
+    if !hyperlinks.is_empty() {
+        write!(w, r#"<hyperlinks count="{}">"#, hyperlinks.len())?;
+        for h in hyperlinks {
+            write_str(
+                w,
+                &format!(r#"<hyperlink ref="{}" r:id="{}"/>"#, escape(&h.cell_ref), h.rid),
+            )?;
+        }
+        write_str(w, "</hyperlinks>")?;
+    }
+
     write_str(w, "</worksheet>")?;
     Ok(())
 }
 
 /// Iterate a worksheet's cells in order, writing `<row>` and `<c>` elements
-/// with the style index at each cell.  Returns `Err` if `style_indices` is
-/// exhausted before the last cell (writer internal invariant).
+/// with the style index at each cell.  Also emits `<row s="N">` for rows
+/// with a row-level style (including styled empty rows).
+/// Returns `Err` if `cell_style_indices` is exhausted before the last cell
+/// (writer internal invariant).
 fn write_cells_with_styles<W: Write>(
     w: &mut W,
     ws: &Worksheet,
     string_indices: &HashMap<String, u32>,
-    style_indices: &[u32],
+    cell_style_indices: &[u32],
+    row_style_indices: &[u32],
 ) -> Result<(), ExcelrsError> {
-    let mut si = style_indices.iter();
+    let mut cell_si = cell_style_indices.iter();
+    let mut row_si = row_style_indices.iter();
     for row in ws.rows() {
         let cells = row.written_cells();
-        if cells.is_empty() {
-            // Skip empty rows to avoid phantom `<row>` in output
+        let row_style_idx = *row_si
+            .next()
+            .ok_or_else(|| ExcelrsError::Write("row_style_indices exhausted mid-sheet (writer bug)".into()))?;
+        let has_row_style = row.style().is_some();
+
+        if cells.is_empty() && !has_row_style {
+            // Skip completely empty rows (no data, no row style)
             continue;
         }
-        write!(w, r#"<row r="{}">"#, row.number())?;
+
+        // Emit <row> with optional s="N" for row-level style
+        if has_row_style {
+            write!(w, r#"<row r="{}" s="{}">"#, row.number(), row_style_idx)?;
+        } else {
+            write!(w, r#"<row r="{}">"#, row.number())?;
+        }
+
         for cell in cells {
-            let style_idx = si
+            let style_idx = cell_si
                 .next()
                 .copied()
-                .ok_or_else(|| ExcelrsError::Write("style_indices exhausted mid-sheet (writer bug)".into()))?;
+                .ok_or_else(|| ExcelrsError::Write("cell_style_indices exhausted mid-sheet (writer bug)".into()))?;
             write_cell_xml(w, cell, string_indices, style_idx)?;
         }
         write_str(w, "</row>")?;
@@ -406,7 +556,10 @@ fn write_cell_xml<W: Write>(
     string_indices: &HashMap<String, u32>,
     style_index: u32,
 ) -> Result<(), ExcelrsError> {
-    let cv = cell.value();
+    let cv = cell
+        .value()
+        .validate()
+        .map_err(|e| ExcelrsError::Write(format!("invalid cell value: {e}")))?;
     let address = cell.address();
     let formula = cell.formula();
 
@@ -418,6 +571,8 @@ fn write_cell_xml<W: Write>(
         "String" => Some("t=\"s\""),
         "Boolean" => Some("t=\"b\""),
         "Error" => Some("t=\"e\""),
+        "RichText" => Some("t=\"inlineStr\""),
+        "Hyperlink" => Some("t=\"s\""),
         _ => None, // Number, Null, Formula (no type attr)
     };
 
@@ -462,6 +617,48 @@ fn write_cell_xml<W: Write>(
             // If there's also a cached value, write it
             if let Some(n) = cv.number {
                 write_str(w, &format!("<v>{}</v>", n))?;
+            }
+        }
+        "RichText" => {
+            if let Some(runs) = &cv.rich_text {
+                write_str(w, "<is>")?;
+                for run in runs {
+                    write_str(w, "<r>")?;
+                    if let Some(ref font) = run.font {
+                        write_str(w, "<rPr>")?;
+                        if let Some(sz) = font.size {
+                            write_str(w, &format!("<sz val=\"{}\"/>", sz))?;
+                        }
+                        if let Some(ref name) = font.name {
+                            write_str(w, &format!("<rFont val=\"{}\"/>", escape(name)))?;
+                        }
+                        if let Some(true) = font.bold {
+                            write_str(w, "<b/>")?;
+                        }
+                        if let Some(true) = font.italic {
+                            write_str(w, "<i/>")?;
+                        }
+                        if let Some(ref color) = font.color {
+                            write_str(w, &format!("<color rgb=\"{}\"/>", escape(color)))?;
+                        }
+                        write_str(w, "</rPr>")?;
+                    }
+                    write_str(w, &format!("<t>{}</t>", escape(&run.text)))?;
+                    write_str(w, "</r>")?;
+                }
+                write_str(w, "</is>")?;
+            }
+        }
+        "Hyperlink" => {
+            // Write the display text as a shared string value
+            if let Some(text) = &cv.hyperlink_text {
+                if let Some(idx) = string_indices.get(text) {
+                    write_str(w, &format!("<v>{}</v>", idx))?;
+                }
+            } else if let Some(url) = &cv.hyperlink {
+                if let Some(idx) = string_indices.get(url) {
+                    write_str(w, &format!("<v>{}</v>", idx))?;
+                }
             }
         }
         _ => {}
@@ -530,10 +727,11 @@ fn write_str<W: Write>(w: &mut W, s: &str) -> Result<(), ExcelrsError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::cell::CellValue;
+    use crate::model::cell::{Cell, CellValue, RichTextRun};
+    use crate::model::style::Font;
     use crate::model::workbook_inner::WorkbookInner;
     use crate::reader::xlsx::workbook_inner_from_bytes;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, HashMap};
 
     // ---- writer unit tests ----
 
@@ -942,7 +1140,7 @@ mod tests {
         assert!(sheet_xml.contains(r#"<c r="A1" s="0""#));
     }
 
-    /// write_cells_with_styles returns Err when style_indices is exhausted early.
+    /// write_cells_with_styles returns Err when cell_style_indices is exhausted early.
     #[test]
     fn test_write_cells_with_styles_exhaustion() {
         let ws = build_test_worksheet();
@@ -950,14 +1148,16 @@ mod tests {
         let mut buf = Vec::new();
         let string_indices = HashMap::new();
         // worksheet has 4 cells but slice is length 1 → should error, not panic
-        let style_indices = vec![0u32];
+        let cell_style_indices = vec![0u32];
+        // Row style indices must be correct length (2 rows in build_test_worksheet)
+        let row_style_indices = vec![0u32, 0u32];
 
-        let result = write_cells_with_styles(&mut buf, &ws, &string_indices, &style_indices);
+        let result = write_cells_with_styles(&mut buf, &ws, &string_indices, &cell_style_indices, &row_style_indices);
         match result {
             Err(ExcelrsError::Write(msg)) => {
                 assert!(
-                    msg.contains("style_indices"),
-                    "error should mention style_indices: {msg}"
+                    msg.contains("cell_style_indices"),
+                    "error should mention cell_style_indices: {msg}"
                 );
             }
             other => panic!("expected Err(Write), got {other:?}"),
@@ -1087,6 +1287,18 @@ mod tests {
         inner
     }
 
+    fn build_hyperlink_workbook() -> WorkbookInner {
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("Sheet1".into());
+        ws.insert_cell_value(
+            1,
+            1,
+            CellValue::hyperlink("https://example.com/target", Some("Example".into())),
+        );
+        ws.insert_cell_value(1, 2, CellValue::hyperlink("https://x.com/u", None));
+        inner
+    }
+
     fn workbook_inner_from_path(path: &Path) -> Result<WorkbookInner, ExcelrsError> {
         use std::io::Read;
         let mut file = std::fs::File::open(path).map_err(ExcelrsError::Io)?;
@@ -1127,11 +1339,366 @@ mod tests {
             !sheet_xml.contains("E1"),
             "sheet must not contain phantom cell E1: {sheet_xml}"
         );
+        assert!(sheet_xml.contains(r#"c r="A1""#), "sheet must contain real cell A1");
+    }
+
+    /// Rich-text with a valid font color is emitted correctly.
+    /// Note: XML injection through font color is now blocked at the validation
+    /// layer (Font::validate rejects non-hex colors before they reach the writer).
+    #[test]
+    fn test_rich_text_valid_font_color_emitted() {
+        let mut cell = Cell::new("A1".into(), 1, 1);
+        cell.set_value_raw(CellValue::rich_text(vec![RichTextRun {
+            text: "hello".into(),
+            font: Some(Font {
+                color: Some("FFFF0000".into()),
+                bold: Some(true),
+                ..Default::default()
+            }),
+        }]));
+        let mut buf = Vec::new();
+        write_cell_xml(&mut buf, &cell, &HashMap::new(), 0).unwrap();
+        let xml = String::from_utf8(buf).unwrap();
         assert!(
-            sheet_xml.contains(r#"c r="A1""#),
-            "sheet must contain real cell A1"
+            xml.contains(r##"<color rgb="FFFF0000"/>"##),
+            "font color missing: {xml}"
+        );
+        assert!(xml.contains("<b/>"), "bold missing: {xml}");
+        assert!(xml.contains("<t>hello</t>"), "text missing: {xml}");
+        assert!(xml.contains(r##"t="inlineStr""##), "must be inlineStr: {xml}");
+    }
+
+    /// Invalid rich-text font color must be rejected at write time.
+    #[test]
+    fn test_invalid_rich_text_font_rejected_at_write() {
+        use crate::model::workbook_inner::WorkbookInner;
+
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("S".into());
+        ws.insert_cell_value(
+            1,
+            1,
+            CellValue::rich_text(vec![RichTextRun {
+                text: "x".into(),
+                font: Some(Font {
+                    color: Some("ZZZZZZ".into()),
+                    ..Default::default()
+                }),
+            }]),
+        );
+        let res = crate::writer::xlsx::workbook_to_bytes(&inner);
+        assert!(
+            res.is_err(),
+            "invalid rich-text font color must be rejected at write: {:?}",
+            res.ok()
         );
     }
 
+    /// CellValue::validate must reject NaN font size in rich text.
+    #[test]
+    fn test_cell_value_rich_text_font_validated() {
+        let cv = CellValue::rich_text(vec![RichTextRun {
+            text: "x".into(),
+            font: Some(Font {
+                size: Some(f64::NAN),
+                ..Default::default()
+            }),
+        }]);
+        assert!(cv.validate().is_err(), "NaN font size in rich text should be rejected");
+    }
 
+    // ---- BUG 5: Hyperlink data loss tests ----
+
+    /// Verify that a worksheet with hyperlinks gets a per-sheet .rels file
+    /// with external Relationship entries pointing to the target URLs.
+    #[test]
+    fn test_hyperlink_writes_sheet_rels_part() {
+        use std::io::Read;
+
+        let inner = build_hyperlink_workbook();
+        let bytes = workbook_to_bytes(&inner).unwrap();
+        let mut archive = zip::read::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+
+        // .rels part must exist
+        let mut rels = String::new();
+        archive
+            .by_name("xl/worksheets/_rels/sheet1.xml.rels")
+            .expect("sheet .rels part should exist")
+            .read_to_string(&mut rels)
+            .unwrap();
+
+        assert!(
+            rels.contains("<Relationship"),
+            "sheet .rels must contain Relationship elements: {rels}"
+        );
+        assert!(
+            rels.contains(r##"TargetMode="External""##),
+            "hyperlink Relationship must have TargetMode=External: {rels}"
+        );
+        assert!(
+            rels.contains("https://example.com/target"),
+            "sheet .rels must contain the hyperlink URL"
+        );
+        assert!(
+            rels.contains("https://x.com/u"),
+            "sheet .rels must contain the second hyperlink URL"
+        );
+    }
+
+    /// Verify that sheet XML includes xmlns:r namespace and <hyperlinks> block
+    /// with correct ref and r:id attributes.
+    #[test]
+    fn test_hyperlink_emits_hyperlinks_block() {
+        use std::io::Read;
+
+        let inner = build_hyperlink_workbook();
+        let bytes = workbook_to_bytes(&inner).unwrap();
+        let mut archive = zip::read::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+        let mut sheet_xml = String::new();
+        archive
+            .by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut sheet_xml)
+            .unwrap();
+
+        assert!(
+            sheet_xml.contains(r##"xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""##),
+            "sheet must declare xmlns:r"
+        );
+        assert!(
+            sheet_xml.contains("<hyperlinks"),
+            "sheet must contain <hyperlinks> block"
+        );
+        assert!(
+            sheet_xml.contains(r##"ref="A1" r:id="rId1""##),
+            "sheet must reference A1 with rId1"
+        );
+        assert!(
+            sheet_xml.contains(r##"ref="B1" r:id="rId2""##),
+            "sheet must reference B1 with rId2"
+        );
+    }
+
+    /// Verify that hyperlink URLs are preserved in the .rels file and that
+    /// cell display text is written as a shared-string value (t="s").
+    #[test]
+    fn test_hyperlink_url_preserved_round_trip() {
+        use std::io::Read;
+
+        let inner = build_hyperlink_workbook();
+        let bytes = workbook_to_bytes(&inner).unwrap();
+        let mut archive = zip::read::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+
+        // Check .rels for exact URL
+        let mut rels = String::new();
+        archive
+            .by_name("xl/worksheets/_rels/sheet1.xml.rels")
+            .unwrap()
+            .read_to_string(&mut rels)
+            .unwrap();
+        assert!(
+            rels.contains("Target=\"https://example.com/target\""),
+            ".rels must contain the original hyperlink URL: {rels}"
+        );
+
+        // Check sheet XML: A1 still has t="s" for display text
+        let mut sheet_xml = String::new();
+        archive
+            .by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut sheet_xml)
+            .unwrap();
+        assert!(
+            sheet_xml.contains(r##"c r="A1" s="0" t="s""##),
+            "hyperlink cell A1 should be t=\"s\" (shared string): {sheet_xml}"
+        );
+    }
+
+    /// When hyperlink_text is None, the display text should fall back to the
+    /// URL itself in the shared strings table.
+    #[test]
+    fn test_hyperlink_no_text_falls_back_to_url() {
+        use std::io::Read;
+
+        let inner = build_hyperlink_workbook();
+        let bytes = workbook_to_bytes(&inner).unwrap();
+        let mut archive = zip::read::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+
+        // Read shared strings
+        let mut ss = String::new();
+        archive
+            .by_name("xl/sharedStrings.xml")
+            .unwrap()
+            .read_to_string(&mut ss)
+            .unwrap();
+
+        // The second hyperlink has no hyperlink_text, so URL "https://x.com/u"
+        // must appear as a shared string entry
+        assert!(
+            ss.contains("https://x.com/u"),
+            "shared strings must contain the URL as display text fallback: {ss}"
+        );
+
+        // Also verify the cell in sheet.xml references the correct shared string index
+        let mut sheet_xml = String::new();
+        archive
+            .by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut sheet_xml)
+            .unwrap();
+
+        // B1 is the hyperlink with no display text; it must have t="s" and <v> pointing
+        // to the shared string index for "https://x.com/u"
+        assert!(
+            sheet_xml.contains(r##"c r="B1" s="0" t="s""##),
+            "hyperlink cell B1 should be t=\"s\": {sheet_xml}"
+        );
+        // Verify <v> exists (the index may vary; just confirm there's a numeric <v>)
+        assert!(sheet_xml.contains("<v>"), "B1 should have a shared-string index <v>");
+    }
+
+    // ---- P1: sheet name XML escaping (lock-in) ----
+
+    /// Sheet names with special XML chars must be escaped in workbook.xml.
+    /// This is a lock-in test: the escaping is already implemented.
+    #[test]
+    fn test_sheet_name_xml_escaped() {
+        use std::io::{Cursor, Read};
+
+        let mut ws = Worksheet::new("A & B <x> \"q\"".into());
+        ws.set_id(1);
+        let mut inner = WorkbookInner::new();
+        inner.worksheets.push(ws);
+        let bytes = workbook_to_bytes(&inner).unwrap();
+
+        // Extract workbook.xml
+        let mut archive = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut wb = String::new();
+        archive
+            .by_name("xl/workbook.xml")
+            .unwrap()
+            .read_to_string(&mut wb)
+            .unwrap();
+
+        assert!(
+            wb.contains(r##"name="A &amp; B &lt;x&gt; &quot;q&quot;"##),
+            "sheet name must be XML-escaped: {wb}"
+        );
+        assert!(
+            !wb.contains(r##"name="A & B"##),
+            "raw unescaped chars would break workbook.xml: {wb}"
+        );
+    }
+
+    // ---- P2a: row style emission (lock-in) ----
+
+    /// A row with a style but no cells must still be emitted with s="M".
+    #[test]
+    fn test_row_style_emitted_in_sheet_xml() {
+        use std::io::{Cursor, Read};
+
+        let mut ws = Worksheet::new("Styled".into());
+        ws.set_id(1);
+        // Row 2 gets a style but no cells -- must still emit <row r="2" s="N">
+        ws.get_row(2)
+            .set_style(serde_json::json!({ "num_fmt": "0.00%" }))
+            .unwrap();
+        let mut inner = WorkbookInner::new();
+        inner.worksheets.push(ws);
+        let bytes = workbook_to_bytes(&inner).unwrap();
+
+        let mut archive = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut sheet = String::new();
+        archive
+            .by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut sheet)
+            .unwrap();
+
+        assert!(
+            sheet.contains(r##"<row r="2" s=""##),
+            "styled row 2 must emit <row r=\"2\" s=\"M\">: {sheet}"
+        );
+    }
+
+    // ---- P2b: hyperlink per-sheet rId isolation (lock-in) ----
+
+    /// Hyperlinks in different sheets get independent rId numbering and
+    /// separate .rels files.
+    #[test]
+    fn test_hyperlink_per_sheet_rid_isolation() {
+        use std::io::{Cursor, Read};
+
+        // Sheet 1: hyperlink at A1
+        let mut ws1 = Worksheet::new("Sheet1".into());
+        ws1.set_id(1);
+        ws1.insert_cell_value(1, 1, CellValue::hyperlink("https://example.com/s1", Some("S1".into())));
+
+        // Sheet 2: different hyperlink at A1
+        let mut ws2 = Worksheet::new("Sheet2".into());
+        ws2.set_id(2);
+        ws2.insert_cell_value(1, 1, CellValue::hyperlink("https://example.com/s2", Some("S2".into())));
+
+        let mut inner = WorkbookInner::new();
+        inner.worksheets.push(ws1);
+        inner.worksheets.push(ws2);
+        let bytes = workbook_to_bytes(&inner).unwrap();
+
+        let mut archive = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+
+        // Sheet 1 rels: rId1 -> s1 url
+        let mut rels1 = String::new();
+        archive
+            .by_name("xl/worksheets/_rels/sheet1.xml.rels")
+            .unwrap()
+            .read_to_string(&mut rels1)
+            .unwrap();
+        assert!(rels1.contains(r##"Id="rId1""##));
+        assert!(rels1.contains("https://example.com/s1"));
+
+        // Sheet 2 rels: rId1 -> s2 url (isolated!)
+        let mut rels2 = String::new();
+        archive
+            .by_name("xl/worksheets/_rels/sheet2.xml.rels")
+            .unwrap()
+            .read_to_string(&mut rels2)
+            .unwrap();
+        assert!(rels2.contains(r##"Id="rId1""##));
+        assert!(rels2.contains("https://example.com/s2"));
+
+        // Cross-check: no leakage
+        assert!(
+            !rels1.contains("https://example.com/s2"),
+            "rId must not leak across sheets"
+        );
+        assert!(
+            !rels2.contains("https://example.com/s1"),
+            "rId must not leak across sheets"
+        );
+
+        // Sheet XML must also have <hyperlinks> block for each sheet
+        let mut sheet1 = String::new();
+        archive
+            .by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut sheet1)
+            .unwrap();
+        assert!(
+            sheet1.contains("<hyperlinks"),
+            "Sheet 1 must have <hyperlinks>: {sheet1}"
+        );
+        assert!(sheet1.contains(r##"ref="A1" r:id="rId1""##));
+
+        let mut sheet2 = String::new();
+        archive
+            .by_name("xl/worksheets/sheet2.xml")
+            .unwrap()
+            .read_to_string(&mut sheet2)
+            .unwrap();
+        assert!(
+            sheet2.contains("<hyperlinks"),
+            "Sheet 2 must have <hyperlinks>: {sheet2}"
+        );
+        assert!(sheet2.contains(r##"ref="A1" r:id="rId1""##));
+    }
 }

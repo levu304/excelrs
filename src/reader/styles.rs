@@ -889,8 +889,8 @@ mod tests {
         assert_eq!(map.len(), 2); // s=0 and no-s are excluded
         assert_eq!(map.get(&(1, 2)), Some(&1)); // B1 = row 1, col 2
         assert_eq!(map.get(&(2, 1)), Some(&2)); // A2 = row 2, col 1
-        assert!(map.get(&(1, 1)).is_none()); // A1 = s=0, excluded
-        assert!(map.get(&(2, 2)).is_none()); // B2 = no s attr, excluded
+        assert!(!map.contains_key(&(1, 1))); // A1 = s=0, excluded
+        assert!(!map.contains_key(&(2, 2))); // B2 = no s attr, excluded
     }
 
     // -- Built-in numFmt resolution (Bug 1) --

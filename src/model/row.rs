@@ -1,10 +1,12 @@
 //! Row: a collection of cells indexed by column number.
 
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use napi_derive::napi;
 
 use super::cell::Cell;
+use crate::model::style::Style;
 use crate::types;
 
 /// A row in a worksheet.
@@ -18,8 +20,9 @@ use crate::types;
 pub struct Row {
     number: u32,
     cells: HashMap<u32, Cell>,
-    height: Option<f64>,
-    hidden: bool,
+    height: Arc<Mutex<Option<f64>>>,
+    hidden: Arc<Mutex<bool>>,
+    style: Arc<Mutex<Option<Style>>>,
 }
 
 #[napi]
@@ -29,8 +32,9 @@ impl Row {
         Row {
             number,
             cells: HashMap::new(),
-            height: None,
-            hidden: false,
+            height: Arc::new(Mutex::new(None)),
+            hidden: Arc::new(Mutex::new(false)),
+            style: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -43,24 +47,47 @@ impl Row {
 
     #[napi(getter)]
     pub fn height(&self) -> Option<f64> {
-        self.height
+        *self.height.lock().expect("Row height lock poisoned")
     }
 
     #[napi(setter)]
     pub fn set_height(&mut self, val: Option<f64>) {
-        self.height = val;
+        *self.height.lock().expect("Row height lock poisoned") = val;
     }
 
     // -- hidden --
 
     #[napi(getter)]
     pub fn hidden(&self) -> bool {
-        self.hidden
+        *self.hidden.lock().expect("Row hidden lock poisoned")
     }
 
     #[napi(setter)]
     pub fn set_hidden(&mut self, val: bool) {
-        self.hidden = val;
+        *self.hidden.lock().expect("Row hidden lock poisoned") = val;
+    }
+
+    // -- style --
+
+    #[napi(getter)]
+    pub fn style(&self) -> Option<Style> {
+        self.style.lock().expect("Row style lock poisoned").clone()
+    }
+
+    #[napi(setter)]
+    pub fn set_style(&mut self, val: serde_json::Value) -> napi::Result<()> {
+        if val.is_null() {
+            *self.style.lock().expect("Row style lock poisoned") = None;
+            return Ok(());
+        }
+        let style: Style = serde_json::from_value(val).map_err(|e| napi::Error::from_reason(format!("style: {e}")))?;
+        if style.is_empty() {
+            *self.style.lock().expect("Row style lock poisoned") = None;
+            return Ok(());
+        }
+        *self.style.lock().expect("Row style lock poisoned") =
+            Some(style.validate().map_err(|e| napi::Error::from_reason(e.to_string()))?);
+        Ok(())
     }
 
     /// Get cell by 1-indexed column number. Creates an empty cell if none exists.

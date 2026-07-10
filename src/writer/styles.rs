@@ -300,7 +300,7 @@ fn emit_fonts<W: Write>(w: &mut W, fonts: &[Font]) -> Result<(), ExcelrsError> {
             write_str(w, r#"<u/>"#)?;
         }
         if let Some(ref color) = f.color {
-            write_str(w, &format!(r#"<color rgb="{}"/>"#, color))?;
+            write_str(w, &format!(r#"<color rgb="{}"/>"#, escape(color)))?;
         }
         write_str(w, "</font>")?;
     }
@@ -317,19 +317,60 @@ fn emit_fills<W: Write>(w: &mut W, fills: &[Fill]) -> Result<(), ExcelrsError> {
 
     for f in fills {
         write_str(w, "<fill>")?;
-        let has_fg = f.foreground.is_some();
-        let has_bg = f.background.is_some();
-        if has_fg || has_bg {
-            write_str(w, &format!(r#"<patternFill patternType="{}">"#, f.kind))?;
-            if let Some(ref fg) = f.foreground {
-                write_str(w, &format!(r#"<fgColor rgb="{}"/>"#, fg))?;
+        if f.kind == "gradient" {
+            let (tag, attrs) = if f.gradient_type.as_deref() == Some("path") {
+                // Path gradient: left/right/top/bottom geometry
+                let mut a = String::from(r#"type="path""#);
+                if let Some(v) = f.gradient_left {
+                    a.push_str(&format!(r#" left="{}""#, v));
+                }
+                if let Some(v) = f.gradient_right {
+                    a.push_str(&format!(r#" right="{}""#, v));
+                }
+                if let Some(v) = f.gradient_top {
+                    a.push_str(&format!(r#" top="{}""#, v));
+                }
+                if let Some(v) = f.gradient_bottom {
+                    a.push_str(&format!(r#" bottom="{}""#, v));
+                }
+                ("gradientFill", a)
+            } else {
+                // Linear gradient (default): degree only
+                let mut a = String::from(r#"type="linear""#);
+                if let Some(deg) = f.gradient_degree {
+                    a.push_str(&format!(r#" degree="{}""#, deg));
+                }
+                ("gradientFill", a)
+            };
+            write_str(w, &format!("<{} {}>", tag, attrs))?;
+            if let Some(ref stops) = f.gradient_stops {
+                for stop in stops {
+                    write_str(
+                        w,
+                        &format!(
+                            r#"<stop position="{}"><color rgb="{}"/></stop>"#,
+                            stop.position,
+                            escape(&stop.color)
+                        ),
+                    )?;
+                }
             }
-            if let Some(ref bg) = f.background {
-                write_str(w, &format!(r#"<bgColor rgb="{}"/>"#, bg))?;
-            }
-            write_str(w, "</patternFill>")?;
+            write_str(w, "</gradientFill>")?;
         } else {
-            write_str(w, &format!(r#"<patternFill patternType="{}"/>"#, f.kind))?;
+            let has_fg = f.foreground.is_some();
+            let has_bg = f.background.is_some();
+            if has_fg || has_bg {
+                write_str(w, &format!(r#"<patternFill patternType="{}">"#, f.kind))?;
+                if let Some(ref fg) = f.foreground {
+                    write_str(w, &format!(r#"<fgColor rgb="{}"/>"#, escape(fg)))?;
+                }
+                if let Some(ref bg) = f.background {
+                    write_str(w, &format!(r#"<bgColor rgb="{}"/>"#, escape(bg)))?;
+                }
+                write_str(w, "</patternFill>")?;
+            } else {
+                write_str(w, &format!(r#"<patternFill patternType="{}"/>"#, f.kind))?;
+            }
         }
         write_str(w, "</fill>")?;
     }
@@ -343,12 +384,24 @@ fn emit_fills<W: Write>(w: &mut W, fills: &[Fill]) -> Result<(), ExcelrsError> {
 fn emit_borders<W: Write>(w: &mut W, borders: &[Border]) -> Result<(), ExcelrsError> {
     write_str(w, &format!(r#"<borders count="{}">"#, borders.len()))?;
     for b in borders {
-        write_str(w, "<border>")?;
+        // Build diagonal attributes on <border> element
+        let mut diag_attrs = String::new();
+        if let Some(true) = b.diagonal_up {
+            diag_attrs.push_str(r#" diagonalUp="1""#);
+        }
+        if let Some(true) = b.diagonal_down {
+            diag_attrs.push_str(r#" diagonalDown="1""#);
+        }
+        write_str(w, &format!("<border{}>", diag_attrs))?;
         emit_border_side(w, "left", &b.left)?;
         emit_border_side(w, "right", &b.right)?;
         emit_border_side(w, "top", &b.top)?;
         emit_border_side(w, "bottom", &b.bottom)?;
-        write_str(w, r#"<diagonal/>"#)?;
+        if b.diagonal.is_some() {
+            emit_border_side(w, "diagonal", &b.diagonal)?;
+        } else {
+            write_str(w, r#"<diagonal/>"#)?;
+        }
         write_str(w, "</border>")?;
     }
     write_str(w, "</borders>")?;
@@ -365,7 +418,7 @@ fn emit_border_side<W: Write>(
         Some(b) => {
             let style_attr = &b.style;
             let color = match &b.color {
-                Some(c) => format!(r#"<color rgb="{}"/>"#, c),
+                Some(c) => format!(r#"<color rgb="{}"/>"#, escape(c)),
                 None => String::new(),
             };
             write_str(w, &format!("<{side} style=\"{style_attr}\">{color}</{side}>"))
@@ -495,7 +548,7 @@ fn write_str<W: Write>(w: &mut W, s: &str) -> Result<(), ExcelrsError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::style::{BorderStyle, Fill};
+    use crate::model::style::{BorderStyle, Fill, GradientStop};
 
     // -- 4 dedup tests (per §9.2 budget) --
 
@@ -791,7 +844,6 @@ mod tests {
                 vertical: Some("middle".into()),
                 wrap_text: Some(true),
                 indent: Some(2),
-                ..Default::default()
             }),
             ..Default::default()
         })];
@@ -905,5 +957,211 @@ mod tests {
             table.cell_xfs[table.cell_indices[0] as usize].num_fmt_id,
             table.cell_xfs[table.cell_indices[2] as usize].num_fmt_id
         );
+    }
+
+    /// Linear gradient must NOT emit `angle` (invalid CT_GradientFill attr).
+    #[test]
+    fn test_emit_gradient_linear_has_no_angle() {
+        let fill = Fill {
+            kind: "gradient".into(),
+            gradient_type: Some("linear".into()),
+            gradient_degree: Some(45.0),
+            gradient_stops: Some(vec![
+                GradientStop {
+                    color: "FFFF0000".into(),
+                    position: 0.0,
+                },
+                GradientStop {
+                    color: "FF00FF00".into(),
+                    position: 1.0,
+                },
+            ]),
+            ..Default::default()
+        };
+        let table = build_style_table(&[Some(Style {
+            fill: Some(fill),
+            ..Default::default()
+        })]);
+        let mut buf = Vec::new();
+        emit_styles_xml(&mut buf, &table).unwrap();
+        let xml = String::from_utf8(buf).unwrap();
+
+        assert!(
+            xml.contains(r##"type="linear""##),
+            "linear gradient missing type attr: {xml}"
+        );
+        assert!(
+            xml.contains(r##"degree="45""##),
+            "linear gradient missing degree attr: {xml}"
+        );
+        assert!(
+            !xml.contains("angle="),
+            "angle is not a valid CT_GradientFill attribute: {xml}"
+        );
+    }
+
+    /// P3a — Gradient stop color is XML-escaped on emit.
+    #[test]
+    fn test_emit_gradient_stop_color_escaped() {
+        let mut xml = Vec::new();
+        let fills = vec![Fill {
+            kind: "gradient".into(),
+            gradient_type: Some("linear".into()),
+            gradient_stops: Some(vec![
+                GradientStop {
+                    position: 0.0,
+                    color: "FF&\">\"<".into(),
+                },
+                GradientStop {
+                    position: 1.0,
+                    color: "00000000".into(),
+                },
+            ]),
+            ..Default::default()
+        }];
+        emit_fills(&mut xml, &fills).unwrap();
+        let out = String::from_utf8(xml).unwrap();
+        assert!(
+            out.contains("FF&amp;&quot;&gt;&quot;&lt;"),
+            "stop color must be XML-escaped: {out}"
+        );
+        assert!(
+            !out.contains(r##"color="FF&""##),
+            "unescaped & or quote in stop color: {out}"
+        );
+    }
+
+    /// Path gradient must emit correct geometry attrs (left/right/top/bottom)
+    /// and must NOT emit `angle`.
+    #[test]
+    fn test_emit_gradient_path_emits_geometry() {
+        let fill = Fill {
+            kind: "gradient".into(),
+            gradient_type: Some("path".into()),
+            gradient_left: Some(0.0),
+            gradient_right: Some(1.0),
+            gradient_top: Some(0.0),
+            gradient_bottom: Some(1.0),
+            gradient_stops: Some(vec![
+                GradientStop {
+                    color: "FFFF0000".into(),
+                    position: 0.0,
+                },
+                GradientStop {
+                    color: "FF00FF00".into(),
+                    position: 1.0,
+                },
+            ]),
+            ..Default::default()
+        };
+        let table = build_style_table(&[Some(Style {
+            fill: Some(fill),
+            ..Default::default()
+        })]);
+        let mut buf = Vec::new();
+        emit_styles_xml(&mut buf, &table).unwrap();
+        let xml = String::from_utf8(buf).unwrap();
+
+        assert!(
+            xml.contains(r##"type="path""##),
+            "path gradient missing type attr: {xml}"
+        );
+        assert!(xml.contains(r##"left="0""##), "path gradient missing left: {xml}");
+        assert!(xml.contains(r##"right="1""##), "path gradient missing right: {xml}");
+        assert!(xml.contains(r##"top="0""##), "path gradient missing top: {xml}");
+        assert!(xml.contains(r##"bottom="1""##), "path gradient missing bottom: {xml}");
+        assert!(
+            !xml.contains("angle="),
+            "angle is not a valid CT_GradientFill attribute: {xml}"
+        );
+    }
+
+    /// Font color in emit_fonts must be XML-escaped (defense-in-depth).
+    #[test]
+    fn test_emit_font_color_escaped() {
+        let styles = vec![Some(Style {
+            font: Some(crate::model::style::Font {
+                color: Some("FF&<>\"'".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })];
+        let table = build_style_table(&styles);
+        let mut buf = Vec::new();
+        emit_styles_xml(&mut buf, &table).unwrap();
+        let xml = String::from_utf8(buf).unwrap();
+        assert!(
+            xml.contains("FF&amp;&lt;&gt;&quot;&apos;"),
+            "font color must be XML-escaped: {xml}"
+        );
+        assert!(!xml.contains(r##"color rgb="FF&""##), "unescaped font color: {xml}");
+    }
+
+    /// Pattern fill fgColor in emit_fills must be XML-escaped (defense-in-depth).
+    #[test]
+    fn test_emit_pattern_fill_fg_color_escaped() {
+        let styles = vec![Some(Style {
+            fill: Some(Fill {
+                kind: "solid".into(),
+                foreground: Some("FF&<>\"'".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })];
+        let table = build_style_table(&styles);
+        let mut buf = Vec::new();
+        emit_styles_xml(&mut buf, &table).unwrap();
+        let xml = String::from_utf8(buf).unwrap();
+        assert!(
+            xml.contains("FF&amp;&lt;&gt;&quot;&apos;"),
+            "fgColor must be XML-escaped: {xml}"
+        );
+        assert!(!xml.contains(r##"fgColor rgb="FF&""##), "unescaped fgColor: {xml}");
+    }
+
+    /// Pattern fill bgColor in emit_fills must be XML-escaped (defense-in-depth).
+    #[test]
+    fn test_emit_pattern_fill_bg_color_escaped() {
+        let styles = vec![Some(Style {
+            fill: Some(Fill {
+                kind: "solid".into(),
+                background: Some("FF&<>\"'".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })];
+        let table = build_style_table(&styles);
+        let mut buf = Vec::new();
+        emit_styles_xml(&mut buf, &table).unwrap();
+        let xml = String::from_utf8(buf).unwrap();
+        assert!(
+            xml.contains("FF&amp;&lt;&gt;&quot;&apos;"),
+            "bgColor must be XML-escaped: {xml}"
+        );
+        assert!(!xml.contains(r##"bgColor rgb="FF&""##), "unescaped bgColor: {xml}");
+    }
+
+    /// Border side color in emit_borders must be XML-escaped (defense-in-depth).
+    #[test]
+    fn test_emit_border_color_escaped() {
+        let styles = vec![Some(Style {
+            border: Some(crate::model::style::Border {
+                top: Some(BorderStyle {
+                    style: "thin".into(),
+                    color: Some("FF&<>\"'".into()),
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })];
+        let table = build_style_table(&styles);
+        let mut buf = Vec::new();
+        emit_styles_xml(&mut buf, &table).unwrap();
+        let xml = String::from_utf8(buf).unwrap();
+        assert!(
+            xml.contains("FF&amp;&lt;&gt;&quot;&apos;"),
+            "border color must be XML-escaped: {xml}"
+        );
+        assert!(!xml.contains(r##"color rgb="FF&""##), "unescaped border color: {xml}");
     }
 }
