@@ -12,7 +12,7 @@
 //!    model `Style` by looking up the sub-table indices.
 //!
 //! # v0.3.0 limitations
-//! - **Theme colors** (`<color theme="N"/>`)   → skipped (color = None).
+//! - **Theme colors** (`<color theme="N"/>`)   → resolved via ThemeColorScheme.
 //! - **Gradient fills** (`<gradientFill>`)      → skipped (fill = default Normal).
 //! - **Diagonal borders** (diagonal/diagonalUp/diagonalDown) → skipped.
 //! - **cellStyleXfs inheritance** (xfId)        → ignored; cellXf is used
@@ -31,6 +31,7 @@ use quick_xml::events::{attributes::Attribute, Event};
 use quick_xml::Reader as XmlReader;
 
 use crate::error::ExcelrsError;
+use crate::model::color::ThemeColorScheme;
 use crate::model::style::{Alignment, Border, BorderStyle, Fill, Font, Style};
 use crate::types;
 
@@ -231,6 +232,34 @@ fn str_attr<'a>(attrs: &'a [Attribute], name: &[u8]) -> Option<&'a str> {
     std::str::from_utf8(raw).ok()
 }
 
+/// Resolve a theme, indexed, or rgb color attribute to an 8-char ARGB hex string.
+///
+/// Priority: `theme` → `indexed` → `rgb`. Returns `None` when none are present.
+fn parse_color(attrs: &[Attribute], scheme: &ThemeColorScheme) -> Option<String> {
+    // Prefer theme, then indexed, then rgb
+    if let Some(theme_str) = str_attr(attrs, b"theme") {
+        if let Ok(index) = theme_str.parse::<usize>() {
+            let tint = f64_attr(attrs, b"tint");
+            let result = scheme.resolve_theme(index, tint);
+            if result.is_some() {
+                return result;
+            }
+        }
+    }
+    if let Some(idx_str) = str_attr(attrs, b"indexed") {
+        if let Ok(index) = idx_str.parse::<usize>() {
+            if let Some(color) = scheme.resolve_indexed(index) {
+                return Some(color);
+            }
+        }
+    }
+    // rgb attr — fallback
+    if let Some(rgb) = str_attr(attrs, b"rgb") {
+        return Some(rgb.to_uppercase());
+    }
+    None
+}
+
 // ---------------------------------------------------------------------------
 // xl/styles.xml parser
 // ---------------------------------------------------------------------------
@@ -245,7 +274,7 @@ enum StyleSection {
 }
 
 /// Parse the `xl/styles.xml` content into a `StyleTableRead`.
-pub fn parse_style_table(data: &[u8]) -> Result<StyleTableRead, ExcelrsError> {
+pub fn parse_style_table(data: &[u8], scheme: &ThemeColorScheme) -> Result<StyleTableRead, ExcelrsError> {
     let mut reader = XmlReader::from_reader(data);
 
     let mut num_fmts: Vec<(u32, String)> = Vec::new();
@@ -337,20 +366,19 @@ pub fn parse_style_table(data: &[u8]) -> Result<StyleTableRead, ExcelrsError> {
                     }
                     b"color" if font.is_some() => {
                         let attrs: Vec<_> = e.attributes().filter_map(|a| a.ok()).collect();
-                        if let Some(rgb) = str_attr(&attrs, b"rgb") {
+                        if let Some(color) = parse_color(&attrs, scheme) {
                             if let Some(ref mut f) = font {
-                                f.color = Some(rgb.to_uppercase());
+                                f.color = Some(color);
                             }
                         }
-                        // theme or indexed colors: skip (color stays None)
                     }
 
                     // color inside border side
                     b"color" if border_side.is_some() => {
                         let attrs: Vec<_> = e.attributes().filter_map(|a| a.ok()).collect();
-                        if let Some(rgb) = str_attr(&attrs, b"rgb") {
+                        if let Some(color) = parse_color(&attrs, scheme) {
                             if let Some((_, Some(ref mut style))) = border_side {
-                                style.color = Some(rgb.to_uppercase());
+                                style.color = Some(color);
                             }
                         }
                     }
@@ -358,17 +386,17 @@ pub fn parse_style_table(data: &[u8]) -> Result<StyleTableRead, ExcelrsError> {
                     // color inside fill
                     b"fgColor" if fill.is_some() || in_pattern_fill => {
                         let attrs: Vec<_> = e.attributes().filter_map(|a| a.ok()).collect();
-                        if let Some(rgb) = str_attr(&attrs, b"rgb") {
+                        if let Some(color) = parse_color(&attrs, scheme) {
                             if let Some(ref mut f) = fill {
-                                f.foreground = Some(rgb.to_uppercase());
+                                f.foreground = Some(color);
                             }
                         }
                     }
                     b"bgColor" if fill.is_some() || in_pattern_fill => {
                         let attrs: Vec<_> = e.attributes().filter_map(|a| a.ok()).collect();
-                        if let Some(rgb) = str_attr(&attrs, b"rgb") {
+                        if let Some(color) = parse_color(&attrs, scheme) {
                             if let Some(ref mut f) = fill {
-                                f.background = Some(rgb.to_uppercase());
+                                f.background = Some(color);
                             }
                         }
                     }
@@ -620,7 +648,7 @@ pub fn parse_styles_and_sheet_maps(
 
     // Parse xl/styles.xml (optional — some files lack it)
     let style_table = if let Ok(styles_bytes) = read_entry(&mut archive, "xl/styles.xml") {
-        parse_style_table(&styles_bytes)?
+        parse_style_table(&styles_bytes, &ThemeColorScheme::default())?
     } else {
         StyleTableRead::empty()
     };
@@ -654,7 +682,7 @@ mod tests {
         let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
         </styleSheet>"#;
-        let table = parse_style_table(xml).unwrap();
+        let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
         assert!(table.num_fmts.is_empty());
         assert!(table.fonts.is_empty());
         assert!(table.fills.is_empty());
@@ -679,7 +707,7 @@ mod tests {
             </font>
           </fonts>
         </styleSheet>"#;
-        let table = parse_style_table(xml).unwrap();
+        let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
         assert_eq!(table.fonts.len(), 2);
         let f0 = &table.fonts[0];
         assert_eq!(f0.name.as_deref(), Some("Calibri"));
@@ -704,7 +732,7 @@ mod tests {
             </patternFill></fill>
           </fills>
         </styleSheet>"#;
-        let table = parse_style_table(xml).unwrap();
+        let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
         assert_eq!(table.fills.len(), 2);
         assert_eq!(table.fills[0].kind, "none");
         assert_eq!(table.fills[1].kind, "solid");
@@ -726,7 +754,7 @@ mod tests {
             </border>
           </borders>
         </styleSheet>"#;
-        let table = parse_style_table(xml).unwrap();
+        let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
         assert_eq!(table.borders.len(), 2);
         assert!(table.borders[0].left.is_none());
 
@@ -750,7 +778,7 @@ mod tests {
             <numFmt numFmtId="165" formatCode="yyyy-mm-dd"/>
           </numFmts>
         </styleSheet>"#;
-        let table = parse_style_table(xml).unwrap();
+        let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
         assert_eq!(table.num_fmts.len(), 2);
         assert_eq!(table.num_fmts[0], (164, "0.00%".into()));
         assert_eq!(table.num_fmts[1], (165, "yyyy-mm-dd".into()));
@@ -771,7 +799,7 @@ mod tests {
             </xf>
           </cellXfs>
         </styleSheet>"#;
-        let table = parse_style_table(xml).unwrap();
+        let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
         assert_eq!(table.cell_xfs.len(), 3);
         assert!(table.cell_xfs[0].alignment.is_none());
         assert!(table.cell_xfs[1].alignment.is_none());
@@ -782,8 +810,127 @@ mod tests {
         assert_eq!(a.indent, Some(2));
     }
 
+    // -- Theme/indexed color resolution tests (v0.6.0) --
+
+    /// B1: font `<color theme="4"/>` resolves via accent1.
     #[test]
-    fn test_skip_theme_color() {
+    fn test_parse_font_theme_color() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <fonts count="2">
+            <font><sz val="11"/><name val="Calibri"/></font>
+            <font><sz val="14"/><name val="Arial"/><color theme="4"/></font>
+          </fonts>
+        </styleSheet>"#;
+        let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
+        assert_eq!(table.fonts[0].color, None);
+        assert_eq!(table.fonts[1].color.as_deref(), Some("FF4F81BD"));
+    }
+
+    /// B2: border `<left><color theme="1"/>` resolves via lt1.
+    #[test]
+    fn test_parse_border_theme_color() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <borders count="2">
+            <border><left/><right/><top/><bottom/><diagonal/></border>
+            <border>
+              <left style="thin"><color theme="1"/></left>
+              <right/><top/><bottom/><diagonal/>
+            </border>
+          </borders>
+        </styleSheet>"#;
+        let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
+        assert_eq!(table.borders.len(), 2);
+        assert!(table.borders[0].left.is_none());
+        let left = table.borders[1].left.as_ref().unwrap();
+        assert_eq!(left.style, "thin");
+        assert_eq!(left.color.as_deref(), Some("FFFFFFFF"));
+    }
+
+    /// B3: fill `<fgColor theme="6"/>` resolves via accent3.
+    #[test]
+    fn test_parse_fill_fg_theme() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <fills count="2">
+            <fill><patternFill patternType="none"/></fill>
+            <fill><patternFill patternType="solid">
+              <fgColor theme="6"/>
+            </patternFill></fill>
+          </fills>
+        </styleSheet>"#;
+        let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
+        assert_eq!(table.fills.len(), 2);
+        assert_eq!(table.fills[1].foreground.as_deref(), Some("FF9BBB59"));
+    }
+
+    /// B4: fill `<bgColor theme="3"/>` resolves via lt2.
+    #[test]
+    fn test_parse_fill_bg_theme() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <fills count="2">
+            <fill><patternFill patternType="none"/></fill>
+            <fill><patternFill patternType="solid">
+              <fgColor theme="4"/>
+              <bgColor theme="3"/>
+            </patternFill></fill>
+          </fills>
+        </styleSheet>"#;
+        let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
+        assert_eq!(table.fills[1].foreground.as_deref(), Some("FF4F81BD"));
+        assert_eq!(table.fills[1].background.as_deref(), Some("FFEEECE1"));
+    }
+
+    /// B5: font `<color theme="4" tint="-0.5"/>` resolves with tint darken.
+    #[test]
+    fn test_parse_font_theme_with_tint() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <fonts count="2">
+            <font><sz val="11"/><name val="Calibri"/></font>
+            <font><sz val="14"/><name val="Arial"/><color theme="4" tint="-0.5"/></font>
+          </fonts>
+        </styleSheet>"#;
+        let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
+        assert_eq!(table.fonts[1].color.as_deref(), Some("FF28415F"));
+    }
+
+    /// B6: `<color indexed="8"/>` resolves to system palette entry 8 (black).
+    #[test]
+    fn test_parse_color_indexed() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <fonts count="2">
+            <font><sz val="11"/><name val="Calibri"/></font>
+            <font><sz val="14"/><name val="Arial"/><color indexed="8"/></font>
+          </fonts>
+        </styleSheet>"#;
+        let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
+        assert_eq!(table.fonts[1].color.as_deref(), Some("FF000000"));
+    }
+
+    /// B7: `<color rgb="..."/>` path unchanged; absent color stays None.
+    #[test]
+    fn test_parse_no_color_attr_still_none() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <fonts count="3">
+            <font><sz val="11"/><name val="Calibri"/></font>
+            <font><sz val="14"/><name val="Arial"/><color rgb="FFFF0000"/></font>
+            <font><sz val="10"/><name val="Arial"/><color/></font>
+          </fonts>
+        </styleSheet>"#;
+        let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
+        assert_eq!(table.fonts[0].color, None);
+        assert_eq!(table.fonts[1].color.as_deref(), Some("FFFF0000"));
+        assert_eq!(table.fonts[2].color, None);
+    }
+
+    /// B8: REPLACES old test_skip_theme_color — theme="1" NOW resolves.
+    #[test]
+    fn test_resolve_theme_not_skipped() {
         let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
           <fonts count="1">
@@ -793,9 +940,24 @@ mod tests {
             </font>
           </fonts>
         </styleSheet>"#;
-        let table = parse_style_table(xml).unwrap();
+        let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
         assert_eq!(table.fonts.len(), 1);
-        assert!(table.fonts[0].color.is_none());
+        assert!(table.fonts[0].color.is_some());
+        assert_eq!(table.fonts[0].color.as_deref(), Some("FFFFFFFF"));
+    }
+
+    /// B9: default scheme resolves theme="4" even without real theme1.xml.
+    #[test]
+    fn test_default_scheme_when_theme1_absent() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <fonts count="2">
+            <font><sz val="11"/><name val="Calibri"/></font>
+            <font><sz val="14"/><name val="Arial"/><color theme="4"/></font>
+          </fonts>
+        </styleSheet>"#;
+        let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
+        assert_eq!(table.fonts[1].color.as_deref(), Some("FF4F81BD"));
     }
 
     // -- resolve_style tests --
@@ -908,7 +1070,7 @@ mod tests {
   </cellXfs>
 </styleSheet>"#
         );
-        parse_style_table(xml.as_bytes()).unwrap()
+        parse_style_table(xml.as_bytes(), &ThemeColorScheme::default()).unwrap()
     }
 
     #[test]
@@ -958,7 +1120,7 @@ mod tests {
             <xf numFmtId="999" fontId="0" fillId="0" borderId="0" xfId="0"/>
           </cellXfs>
         </styleSheet>"#;
-        let table = parse_style_table(xml).unwrap();
+        let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
         let style = table.resolve_style(1);
         assert!(style.is_none()); // 999 doesn't exist → whole style empty → None
     }
@@ -978,7 +1140,7 @@ mod tests {
             <xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="0"/>
           </cellXfs>
         </styleSheet>"#;
-        let table = parse_style_table(xml).unwrap();
+        let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
         // numFmt was the only non-default field; suppressing it leaves
         // an empty style → resolve_style returns None (Normal).
         assert!(
@@ -1002,7 +1164,7 @@ mod tests {
             <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="0"/>
           </cellXfs>
         </styleSheet>"#;
-        let table = parse_style_table(xml).unwrap();
+        let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
         // Font was the only non-default field; suppressing it → Normal.
         assert!(
             table.resolve_style(1).is_none(),
@@ -1025,7 +1187,7 @@ mod tests {
             <xf numFmtId="0" fontId="0" fillId="1" borderId="0" xfId="0" applyFill="0"/>
           </cellXfs>
         </styleSheet>"#;
-        let table = parse_style_table(xml).unwrap();
+        let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
         // Fill was the only non-default field; suppressing it → Normal.
         assert!(
             table.resolve_style(1).is_none(),
@@ -1048,7 +1210,7 @@ mod tests {
             <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="0"/>
           </cellXfs>
         </styleSheet>"#;
-        let table = parse_style_table(xml).unwrap();
+        let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
         // Border was the only non-default field; suppressing it leaves an
         // empty style → resolve_style returns None (Normal).
         assert!(
@@ -1071,7 +1233,7 @@ mod tests {
             </xf>
           </cellXfs>
         </styleSheet>"#;
-        let table = parse_style_table(xml).unwrap();
+        let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
         // Alignment was the only non-default field; suppressing it leaves an
         // empty style → resolve_style returns None (Normal).
         assert!(
@@ -1100,7 +1262,7 @@ mod tests {
             <xf numFmtId="0" fontId="1" fillId="1" borderId="0" xfId="0" applyFont="0"/>
           </cellXfs>
         </styleSheet>"#;
-        let table = parse_style_table(xml).unwrap();
+        let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
         let style = table.resolve_style(1).unwrap();
         // applyFont=0 → font suppressed
         assert!(style.font.is_none(), "applyFont=0 should suppress font");
@@ -1125,7 +1287,7 @@ mod tests {
             <xf numFmtId="14" fontId="1" fillId="0" borderId="0" xfId="0"/>
           </cellXfs>
         </styleSheet>"#;
-        let table = parse_style_table(xml).unwrap();
+        let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
         let style = table.resolve_style(1).unwrap();
         // No applyX attrs → defaults are true → both fields present
         assert_eq!(
