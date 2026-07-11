@@ -1,6 +1,7 @@
 pub mod cell;
 pub mod color;
 pub mod column;
+pub mod defined_name;
 pub mod row;
 pub mod style;
 pub mod workbook;

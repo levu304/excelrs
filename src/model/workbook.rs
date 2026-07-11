@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use napi_derive::napi;
 
+use super::defined_name::DefinedName;
 use super::workbook_inner::WorkbookInner;
 use super::worksheet::Worksheet;
 use crate::xlsx::WorkbookXlsx;
@@ -84,6 +85,51 @@ impl Workbook {
     #[napi(getter)]
     pub fn xlsx(&self) -> WorkbookXlsx {
         WorkbookXlsx::new(Arc::clone(&self.inner))
+    }
+
+    // -- Defined names (v0.7.0) --
+
+    /// Snapshot of all defined names in the workbook.
+    #[napi(getter)]
+    pub fn defined_names(&self) -> Vec<DefinedName> {
+        self.inner
+            .lock()
+            .expect("Workbook lock poisoned")
+            .defined_names()
+            .to_vec()
+    }
+
+    /// Add or upsert a defined name.
+    ///
+    /// Workbook-scope: matched by `name` alone.
+    /// Sheet-scope: matched by `name` + `sheet`.
+    #[napi]
+    pub fn add_defined_name(&mut self, name: String, value: String, sheet: Option<String>) {
+        self.inner
+            .lock()
+            .expect("Workbook lock poisoned")
+            .add_defined_name(name, value, sheet);
+    }
+
+    /// Remove a defined name by `name` (and optional `sheet`).
+    /// No-op if no matching name exists.
+    #[napi]
+    pub fn remove_defined_name(&mut self, name: String, sheet: Option<String>) {
+        self.inner
+            .lock()
+            .expect("Workbook lock poisoned")
+            .remove_defined_name(&name, sheet.as_deref());
+    }
+
+    /// Get a defined name by `name` (and optional `sheet`).
+    /// Returns `None` if not found.
+    #[napi]
+    pub fn get_defined_name(&self, name: String, sheet: Option<String>) -> Option<DefinedName> {
+        self.inner
+            .lock()
+            .expect("Workbook lock poisoned")
+            .get_defined_name(&name, sheet.as_deref())
+            .cloned()
     }
 }
 
@@ -181,6 +227,57 @@ mod tests {
         let wb = Workbook::from_inner(inner);
         assert_eq!(wb.worksheet_count(), 1);
         assert_eq!(wb.worksheets()[0].name(), "FromInner");
+    }
+
+    // -- defined names --
+
+    #[test]
+    fn test_napi_defined_names_default_empty() {
+        let wb = Workbook::new();
+        assert!(wb.defined_names().is_empty());
+    }
+
+    #[test]
+    fn test_napi_add_defined_name_global() {
+        let mut wb = Workbook::new();
+        wb.add_defined_name("Rate".into(), "0.08".into(), None);
+        let names = wb.defined_names();
+        assert_eq!(names.len(), 1);
+        assert_eq!(names[0].name, "Rate");
+        assert_eq!(names[0].value, "0.08");
+        assert!(names[0].sheet.is_none());
+    }
+
+    #[test]
+    fn test_napi_add_defined_name_sheet() {
+        let mut wb = Workbook::new();
+        wb.add_defined_name("Local".into(), "$A$1".into(), Some("Sheet1".into()));
+        let names = wb.defined_names();
+        assert_eq!(names.len(), 1);
+        assert_eq!(names[0].sheet.as_deref(), Some("Sheet1"));
+    }
+
+    #[test]
+    fn test_napi_remove_defined_name() {
+        let mut wb = Workbook::new();
+        wb.add_defined_name("X".into(), "1".into(), None);
+        wb.remove_defined_name("X".into(), None);
+        assert!(wb.defined_names().is_empty());
+    }
+
+    #[test]
+    fn test_napi_get_defined_name() {
+        let mut wb = Workbook::new();
+        wb.add_defined_name("Rate".into(), "0.08".into(), None);
+        let dn = wb.get_defined_name("Rate".into(), None);
+        assert!(dn.is_some());
+        assert_eq!(dn.unwrap().value, "0.08");
+    }
+
+    #[test]
+    fn test_napi_get_defined_name_missing() {
+        let wb = Workbook::new();
+        assert!(wb.get_defined_name("Missing".into(), None).is_none());
     }
 
     #[test]

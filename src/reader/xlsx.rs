@@ -24,6 +24,7 @@ use crate::model::workbook::Workbook;
 use crate::model::workbook_inner::WorkbookInner;
 
 use super::styles::{self, SheetStyleMap, StyleTableRead};
+use super::workbook;
 
 // ---------------------------------------------------------------------------
 // Public API — WorkbookInner variants (for WorkbookXlsx)
@@ -44,7 +45,13 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
     let (style_table, sheet_style_maps) = styles::parse_styles_and_sheet_maps(data, sheet_count)?;
 
     // Step 3: convert calamine model → excelrs model with styles
-    workbook_to_inner_model(&mut workbook, &style_table, &sheet_style_maps)
+    let mut inner = workbook_to_inner_model(&mut workbook, &style_table, &sheet_style_maps)?;
+
+    // Step 4: parse defined names from xl/workbook.xml
+    let defined_names = workbook::parse_defined_names(data, &sheet_names)?;
+    inner.set_defined_names(defined_names);
+
+    Ok(inner)
 }
 
 /// Read an .xlsx file from disk, returning a `WorkbookInner`.

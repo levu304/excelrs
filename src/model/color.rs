@@ -260,10 +260,7 @@ impl ThemeColorScheme {
                             let arr: [String; 56] = std::array::from_fn(|i| {
                                 indexed_acc.get(i).cloned().unwrap_or_else(|| {
                                     // Fall back to default system palette for entries not provided
-                                    SYSTEM_INDEXED_COLORS
-                                        .get(i)
-                                        .map(|s| s.to_string())
-                                        .unwrap_or_default()
+                                    SYSTEM_INDEXED_COLORS.get(i).map(|s| s.to_string()).unwrap_or_default()
                                 })
                             });
                             indexed_override = Some(arr);

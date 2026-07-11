@@ -27,6 +27,7 @@ use quick_xml::escape::escape;
 
 use crate::error::ExcelrsError;
 use crate::model::cell::Cell;
+use crate::model::defined_name::DefinedName;
 use crate::model::style::Style;
 use crate::model::workbook_inner::WorkbookInner;
 use crate::model::worksheet::Worksheet;
@@ -66,7 +67,7 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
 
         // xl/workbook.xml
         start_file(&mut zip, "xl/workbook.xml")?;
-        write_workbook_xml(&mut zip, &worksheets)?;
+        write_workbook_xml(&mut zip, &worksheets, &inner.defined_names)?;
 
         // xl/_rels/workbook.xml.rels
         start_file(&mut zip, "xl/_rels/workbook.xml.rels")?;
@@ -339,7 +340,11 @@ fn write_rels_rels<W: Write>(w: &mut W) -> Result<(), ExcelrsError> {
 // xl/workbook.xml
 // ---------------------------------------------------------------------------
 
-fn write_workbook_xml<W: Write>(w: &mut W, worksheets: &[Worksheet]) -> Result<(), ExcelrsError> {
+fn write_workbook_xml<W: Write>(
+    w: &mut W,
+    worksheets: &[Worksheet],
+    defined_names: &[DefinedName],
+) -> Result<(), ExcelrsError> {
     write_str(w, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#)?;
     write_str(
         w,
@@ -349,7 +354,6 @@ fn write_workbook_xml<W: Write>(w: &mut W, worksheets: &[Worksheet]) -> Result<(
     for (i, ws) in worksheets.iter().enumerate() {
         let name = ws.name();
         let name_esc = escape(&name);
-        // rId must match workbook.xml.rels: rId1=styles, rId2=sharedStrings, rId3+=worksheets
         let rid = i + 3;
         write_str(
             w,
@@ -362,6 +366,33 @@ fn write_workbook_xml<W: Write>(w: &mut W, worksheets: &[Worksheet]) -> Result<(
         )?;
     }
     write_str(w, "</sheets>")?;
+
+    if !defined_names.is_empty() {
+        write_str(w, "<definedNames>")?;
+        for dn in defined_names {
+            let sheet_attr = match &dn.sheet {
+                Some(s) => match worksheets.iter().position(|ws| ws.name() == s.as_str()) {
+                    Some(idx) => format!(r#" localSheetId="{}""#, idx),
+                    None => return Err(ExcelrsError::Write(format!(
+                        "Defined name '{}' references sheet '{}' which does not exist in the workbook",
+                        dn.name, s
+                    ))),
+                },
+                None => String::new(),
+            };
+            let name_esc = escape(&dn.name);
+            let value_esc = escape(&dn.value);
+            write_str(
+                w,
+                &format!(
+                    r#"<definedName name="{}"{}>{}</definedName>"#,
+                    name_esc, sheet_attr, value_esc
+                ),
+            )?;
+        }
+        write_str(w, "</definedNames>")?;
+    }
+
     write_str(w, "</workbook>")?;
     Ok(())
 }
@@ -1700,5 +1731,27 @@ mod tests {
             "Sheet 2 must have <hyperlinks>: {sheet2}"
         );
         assert!(sheet2.contains(r##"ref="A1" r:id="rId1""##));
+    }
+
+    #[test]
+    fn test_write_defined_name_unresolved_sheet_errors() {
+        let ws = Worksheet::new("Sheet1".into());
+        let worksheets = vec![ws];
+        let defined_names = vec![DefinedName::sheet_scoped("X", "1", "GhostSheet")];
+        let mut out = Vec::new();
+        let result = write_workbook_xml(&mut out, &worksheets, &defined_names);
+        assert!(result.is_err(), "should error on unresolved sheet scope");
+    }
+
+    #[test]
+    fn test_write_defined_name_resolved_sheet_ok() {
+        let ws = Worksheet::new("Sheet1".into());
+        let worksheets = vec![ws];
+        let defined_names = vec![DefinedName::sheet_scoped("X", "1", "Sheet1")];
+        let mut out = Vec::new();
+        let result = write_workbook_xml(&mut out, &worksheets, &defined_names);
+        assert!(result.is_ok(), "existing sheet should succeed");
+        let output = String::from_utf8(out).unwrap();
+        assert!(output.contains(r##"localSheetId="0""##), "should emit localSheetId");
     }
 }
