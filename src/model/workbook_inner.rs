@@ -192,6 +192,32 @@ mod tests {
     }
 
     #[test]
+    fn test_get_defined_name_scoped_and_global() {
+        let mut inner = WorkbookInner::new();
+        inner.add_defined_name("G".into(), "1".into(), None);
+        inner.add_defined_name("S".into(), "2".into(), Some("Sheet1".into()));
+
+        let g = inner.get_defined_name("G", None);
+        assert!(g.is_some());
+        let g = g.unwrap();
+        assert_eq!(g.value, "1");
+        assert!(g.sheet.is_none());
+
+        let s = inner.get_defined_name("S", Some("Sheet1"));
+        assert!(s.is_some());
+        let s = s.unwrap();
+        assert_eq!(s.value, "2");
+        assert_eq!(s.sheet.as_deref(), Some("Sheet1"));
+
+        // Scoped name not found as global
+        let missing = inner.get_defined_name("S", None);
+        assert!(missing.is_none());
+
+        // Completely missing
+        assert!(inner.get_defined_name("NotFound", None).is_none());
+    }
+
+    #[test]
     fn test_workbook_inner_set_defined_names() {
         let mut wb = WorkbookInner::new();
         wb.set_defined_names(vec![DefinedName::global("A", "1"), DefinedName::global("B", "2")]);

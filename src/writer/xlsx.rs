@@ -370,16 +370,16 @@ fn write_workbook_xml<W: Write>(
     if !defined_names.is_empty() {
         write_str(w, "<definedNames>")?;
         for dn in defined_names {
-            let sheet_attr = dn
-                .sheet
-                .as_ref()
-                .and_then(|s| {
-                    worksheets
-                        .iter()
-                        .position(|ws| ws.name() == s.as_str())
-                        .map(|idx| format!(r#" localSheetId="{}""#, idx))
-                })
-                .unwrap_or_default();
+            let sheet_attr = match &dn.sheet {
+                Some(s) => match worksheets.iter().position(|ws| ws.name() == s.as_str()) {
+                    Some(idx) => format!(r#" localSheetId="{}""#, idx),
+                    None => return Err(ExcelrsError::Write(format!(
+                        "Defined name '{}' references sheet '{}' which does not exist in the workbook",
+                        dn.name, s
+                    ))),
+                },
+                None => String::new(),
+            };
             let name_esc = escape(&dn.name);
             let value_esc = escape(&dn.value);
             write_str(
@@ -1731,5 +1731,27 @@ mod tests {
             "Sheet 2 must have <hyperlinks>: {sheet2}"
         );
         assert!(sheet2.contains(r##"ref="A1" r:id="rId1""##));
+    }
+
+    #[test]
+    fn test_write_defined_name_unresolved_sheet_errors() {
+        let ws = Worksheet::new("Sheet1".into());
+        let worksheets = vec![ws];
+        let defined_names = vec![DefinedName::sheet_scoped("X", "1", "GhostSheet")];
+        let mut out = Vec::new();
+        let result = write_workbook_xml(&mut out, &worksheets, &defined_names);
+        assert!(result.is_err(), "should error on unresolved sheet scope");
+    }
+
+    #[test]
+    fn test_write_defined_name_resolved_sheet_ok() {
+        let ws = Worksheet::new("Sheet1".into());
+        let worksheets = vec![ws];
+        let defined_names = vec![DefinedName::sheet_scoped("X", "1", "Sheet1")];
+        let mut out = Vec::new();
+        let result = write_workbook_xml(&mut out, &worksheets, &defined_names);
+        assert!(result.is_ok(), "existing sheet should succeed");
+        let output = String::from_utf8(out).unwrap();
+        assert!(output.contains(r##"localSheetId="0""##), "should emit localSheetId");
     }
 }

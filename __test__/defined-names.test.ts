@@ -157,3 +157,30 @@ test('F5: getDefinedName returns null for missing', () => {
   const wb = new Workbook()
   expect(wb.getDefinedName('Missing')).toBeNull()
 })
+
+test('F6: getDefinedName returns correct object', () => {
+  const wb = new Workbook()
+  wb.addDefinedName('G', '1')
+  wb.addWorksheet('Sheet1')
+  wb.addDefinedName('S', '2', 'Sheet1')
+
+  // Global
+  const g = wb.getDefinedName('G')
+  expect(g).not.toBeNull()
+  expect(g!.name).toBe('G')
+  expect(g!.value).toBe('1')
+  expect(g!.sheet).toBeUndefined()
+
+  // Sheet-scoped
+  const s = wb.getDefinedName('S', 'Sheet1')
+  expect(s).not.toBeNull()
+  expect(s!.name).toBe('S')
+  expect(s!.value).toBe('2')
+  expect(s!.sheet).toBe('Sheet1')
+
+  // Scoped name not found as global
+  expect(wb.getDefinedName('S')).toBeNull()
+
+  // Missing name
+  expect(wb.getDefinedName('Missing')).toBeNull()
+})

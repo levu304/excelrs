@@ -37,16 +37,14 @@ pub fn parse_defined_names(data: &[u8], sheet_names: &[String]) -> Result<Vec<De
     let mut current_name = String::new();
     let mut current_value = String::new();
     let mut current_sheet_id: Option<u32> = None;
-    let mut depth = 0u32;
 
     loop {
         match reader.read_event() {
             Ok(Event::Start(ref e)) => {
-                let qn = e.name();
+                let qn = e.local_name();
                 let tag = qn.as_ref();
                 if tag == b"definedNames" {
                     in_defined_names = true;
-                    depth = 0;
                 } else if tag == b"definedName" && in_defined_names {
                     in_defined_name = true;
                     current_name.clear();
@@ -63,9 +61,6 @@ pub fn parse_defined_names(data: &[u8], sheet_names: &[String]) -> Result<Vec<De
                             }
                         }
                     }
-                    depth = 0;
-                } else if in_defined_name {
-                    depth += 1;
                 }
             }
             Ok(Event::Text(ref e)) if in_defined_name => {
@@ -74,7 +69,7 @@ pub fn parse_defined_names(data: &[u8], sheet_names: &[String]) -> Result<Vec<De
                 }
             }
             Ok(Event::End(ref e)) => {
-                let qn = e.name();
+                let qn = e.local_name();
                 let tag = qn.as_ref();
                 if tag == b"definedNames" {
                     in_defined_names = false;
@@ -88,8 +83,6 @@ pub fn parse_defined_names(data: &[u8], sheet_names: &[String]) -> Result<Vec<De
                             sheet,
                         });
                     }
-                } else if in_defined_name && depth > 0 {
-                    depth -= 1;
                 }
             }
             Ok(Event::Eof) => break,
@@ -147,6 +140,18 @@ mod tests {
     #[test]
     fn test_parse_defined_names_global() {
         let data = make_workbook_xml(r#"<definedNames><definedName name="TaxRate">0.08</definedName></definedNames>"#);
+        let names = parse_defined_names(&data, &["Sheet1".into(), "Data".into()]).unwrap();
+        assert_eq!(names.len(), 1);
+        assert_eq!(names[0].name, "TaxRate");
+        assert_eq!(names[0].value, "0.08");
+        assert!(names[0].sheet.is_none());
+    }
+
+    #[test]
+    fn test_parse_defined_names_namespace_prefixed() {
+        let data = make_workbook_xml(
+            r#"<x:definedNames xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><x:definedName name="TaxRate">0.08</x:definedName></x:definedNames>"#,
+        );
         let names = parse_defined_names(&data, &["Sheet1".into(), "Data".into()]).unwrap();
         assert_eq!(names.len(), 1);
         assert_eq!(names[0].name, "TaxRate");
