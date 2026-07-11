@@ -6,7 +6,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.0] — 2026-07-11
+
+### Added
+
+- **Defined names (named ranges)** — read and write workbook-global and sheet-scoped (local) names via the napi API:
+  - `wb.addDefinedName(name, value, sheet?)` — add or upsert a name (sheet-scoped when `sheet` is given)
+  - `wb.removeDefinedName(name, sheet?)` — remove a name (no-op if absent)
+  - `wb.getDefinedName(name, sheet?)` — look up a name; returns `null` when not found
+  - `wb.definedNames` — getter returning all `DefinedName` objects
+- Reader parses `<definedNames>` from `xl/workbook.xml`, resolving `localSheetId` → sheet name; tolerant of namespace-prefixed elements and out-of-range IDs
+- Writer emits `<definedNames>` with correct `localSheetId` scoping; errors on unresolved sheet scope (prevents silent scope loss)
+
+### Changed
+
+- Bump version 0.6.0 → 0.7.0. No breaking public-API changes.
 
 ## [0.6.0] — 2026-07-11
 
@@ -198,6 +212,7 @@ first fully working release; v0.2.0 and v0.2.1 are superseded.
   and GitHub Release on tag push.
 - **Documentation** — complete spec (docs/spec.md), two architecture reviews.
 
+[0.7.0]: https://github.com/levu304/excelrs/releases/tag/v0.7.0
 [0.6.0]: https://github.com/levu304/excelrs/releases/tag/v0.6.0
 [0.5.0]: https://github.com/levu304/excelrs/releases/tag/v0.5.0
 [0.3.0]: https://github.com/levu304/excelrs/releases/tag/v0.3.0
