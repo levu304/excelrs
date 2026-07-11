@@ -9,6 +9,7 @@
 
 use chrono::{DateTime, Utc};
 
+use super::defined_name::DefinedName;
 use super::worksheet::Worksheet;
 
 /// Actual workbook state. Not exported via napi — always accessed through
@@ -18,6 +19,7 @@ pub struct WorkbookInner {
     pub worksheets: Vec<Worksheet>,
     pub created: DateTime<Utc>,
     pub modified: DateTime<Utc>,
+    pub defined_names: Vec<DefinedName>,
 }
 
 impl WorkbookInner {
@@ -27,6 +29,7 @@ impl WorkbookInner {
             worksheets: Vec::new(),
             created: now,
             modified: now,
+            defined_names: Vec::new(),
         }
     }
 
@@ -79,6 +82,40 @@ impl WorkbookInner {
     pub fn set_worksheets(&mut self, worksheets: Vec<Worksheet>) {
         self.worksheets = worksheets;
     }
+
+    pub fn defined_names(&self) -> &[DefinedName] {
+        &self.defined_names
+    }
+
+    pub fn set_defined_names(&mut self, names: Vec<DefinedName>) {
+        self.defined_names = names;
+        self.modified = Utc::now();
+    }
+
+    pub fn add_defined_name(&mut self, name: String, value: String, sheet: Option<String>) {
+        if let Some(existing) = self
+            .defined_names
+            .iter_mut()
+            .find(|dn| dn.name == name && dn.sheet == sheet)
+        {
+            existing.value = value;
+        } else {
+            self.defined_names.push(DefinedName { name, value, sheet });
+        }
+        self.modified = Utc::now();
+    }
+
+    pub fn remove_defined_name(&mut self, name: &str, sheet: Option<&str>) {
+        self.defined_names
+            .retain(|dn| !(dn.name == name && dn.sheet.as_deref() == sheet));
+        self.modified = Utc::now();
+    }
+
+    pub fn get_defined_name(&self, name: &str, sheet: Option<&str>) -> Option<&DefinedName> {
+        self.defined_names
+            .iter()
+            .find(|dn| dn.name == name && dn.sheet.as_deref() == sheet)
+    }
 }
 
 impl Default for WorkbookInner {
@@ -90,6 +127,78 @@ impl Default for WorkbookInner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_workbook_inner_defined_names_default_empty() {
+        let wb = WorkbookInner::new();
+        assert!(wb.defined_names().is_empty());
+    }
+
+    #[test]
+    fn test_workbook_inner_add_defined_name_global() {
+        let mut wb = WorkbookInner::new();
+        wb.add_defined_name("Rate".into(), "0.08".into(), None);
+        assert_eq!(wb.defined_names().len(), 1);
+        assert_eq!(wb.defined_names()[0].name, "Rate");
+        assert_eq!(wb.defined_names()[0].value, "0.08");
+        assert!(wb.defined_names()[0].sheet.is_none());
+    }
+
+    #[test]
+    fn test_workbook_inner_add_defined_name_sheet() {
+        let mut wb = WorkbookInner::new();
+        wb.add_defined_name("Local".into(), "$A$1".into(), Some("Sheet1".into()));
+        assert_eq!(wb.defined_names().len(), 1);
+        assert_eq!(wb.defined_names()[0].sheet.as_deref(), Some("Sheet1"));
+    }
+
+    #[test]
+    fn test_workbook_inner_add_defined_name_upsert() {
+        let mut wb = WorkbookInner::new();
+        wb.add_defined_name("X".into(), "1".into(), None);
+        wb.add_defined_name("X".into(), "2".into(), None);
+        assert_eq!(wb.defined_names().len(), 1);
+        assert_eq!(wb.defined_names()[0].value, "2");
+    }
+
+    #[test]
+    fn test_workbook_inner_remove_defined_name() {
+        let mut wb = WorkbookInner::new();
+        wb.add_defined_name("X".into(), "1".into(), None);
+        wb.remove_defined_name("X", None);
+        assert!(wb.defined_names().is_empty());
+    }
+
+    #[test]
+    fn test_workbook_inner_remove_defined_name_absent_noop() {
+        let mut wb = WorkbookInner::new();
+        wb.remove_defined_name("NonExistent", None);
+        assert!(wb.defined_names().is_empty());
+    }
+
+    #[test]
+    fn test_workbook_inner_get_defined_name() {
+        let mut wb = WorkbookInner::new();
+        wb.add_defined_name("Rate".into(), "0.08".into(), None);
+        let dn = wb.get_defined_name("Rate", None);
+        assert!(dn.is_some());
+        assert_eq!(dn.unwrap().value, "0.08");
+    }
+
+    #[test]
+    fn test_workbook_inner_get_defined_name_missing() {
+        let wb = WorkbookInner::new();
+        assert!(wb.get_defined_name("Missing", None).is_none());
+    }
+
+    #[test]
+    fn test_workbook_inner_set_defined_names() {
+        let mut wb = WorkbookInner::new();
+        wb.set_defined_names(vec![DefinedName::global("A", "1"), DefinedName::global("B", "2")]);
+        assert_eq!(wb.defined_names().len(), 2);
+        assert_eq!(wb.defined_names()[0].name, "A");
+        assert_eq!(wb.defined_names()[1].name, "B");
+    }
 
     #[test]
     fn test_workbook_inner_new() {

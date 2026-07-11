@@ -129,6 +129,28 @@ export declare class Workbook {
    * so reads through `.xlsx.read(buf)` mutate this workbook's state.
    */
   get xlsx(): WorkbookXlsx
+
+  // -- Defined names (v0.7.0) --
+
+  /** Snapshot of all defined names in the workbook. */
+  get definedNames(): Array<DefinedName>
+  /**
+   * Add or upsert a defined name.
+   *
+   * Workbook-scope: matched by `name` alone.
+   * Sheet-scope: matched by `name` + `sheet`.
+   */
+  addDefinedName(name: string, value: string, sheet?: string | null): void
+  /**
+   * Remove a defined name by `name` (and optional `sheet`).
+   * No-op if no matching name exists.
+   */
+  removeDefinedName(name: string, sheet?: string | null): void
+  /**
+   * Get a defined name by `name` (and optional `sheet`).
+   * Returns `null` if not found.
+   */
+  getDefinedName(name: string, sheet?: string | null): DefinedName | null
 }
 
 /**
@@ -294,6 +316,20 @@ export interface BorderStyle {
   style: string
   /** Line color (ARGB hex). Default: black (`"FF000000"` in exceljs). */
   color?: string
+}
+
+/**
+ * A defined (named) range in the workbook.
+ *
+ * - `name`: the name (case-sensitive per OOXML spec §18.2.7).
+ * - `value`: the raw text (no formula evaluation).
+ * - `sheet`: sheet scoping. `undefined` = workbook-global.
+ */
+export interface DefinedName {
+  name: string
+  value: string
+  /** Sheet scope: sheet name string, or `undefined` for workbook-global. */
+  sheet?: string
 }
 
 export interface CellValue {
