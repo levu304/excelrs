@@ -416,7 +416,7 @@ fn emit_border_side<W: Write>(
     match bs {
         None => write_str(w, &format!("<{side}/>")),
         Some(b) => {
-            let style_attr = &b.style;
+            let style_attr = escape(&b.style);
             let color = match &b.color {
                 Some(c) => format!(r#"<color rgb="{}"/>"#, escape(c)),
                 None => String::new(),
@@ -505,12 +505,12 @@ fn emit_alignment_child<W: Write>(w: &mut W, xf: &CellXf, alignments: &[Alignmen
 
     let mut parts: Vec<String> = Vec::new();
     if let Some(ref h) = alignment.horizontal {
-        parts.push(format!(r##"horizontal="{}""##, h));
+        parts.push(format!(r##"horizontal="{}""##, escape(h)));
     }
     if let Some(ref v) = alignment.vertical {
         // OOXML uses "center"; excelrs API uses "middle"
         let ooxml = if v == "middle" { "center" } else { v.as_str() };
-        parts.push(format!(r##"vertical="{}""##, ooxml));
+        parts.push(format!(r##"vertical="{}""##, escape(ooxml)));
     }
     if let Some(wt) = alignment.wrap_text {
         if wt {
@@ -1183,5 +1183,53 @@ mod tests {
             xml.contains(r##"<color rgb="FF4F81BD"/>"##),
             "theme-resolved ARGB must be emitted: {xml}"
         );
+    }
+
+    /// W1: border side `style` attribute is XML-escaped on emit.
+    #[test]
+    fn test_emit_border_style_escaped() {
+        let styles = vec![Some(Style {
+            border: Some(crate::model::style::Border {
+                top: Some(BorderStyle {
+                    style: "<&>\"'".into(),
+                    color: None,
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })];
+        let table = build_style_table(&styles);
+        let mut buf = Vec::new();
+        emit_styles_xml(&mut buf, &table).unwrap();
+        let xml = String::from_utf8(buf).unwrap();
+        assert!(
+            xml.contains(r##"style="&lt;&amp;&gt;&quot;&apos;""##),
+            "border style must be XML-escaped: {xml}"
+        );
+        assert!(!xml.contains(r##"style="<&>""##), "unescaped border style: {xml}");
+    }
+
+    /// W2: alignment `horizontal` is escaped; `middle`→`center` mapping intact.
+    #[test]
+    fn test_emit_alignment_escaped() {
+        let styles = vec![Some(Style {
+            alignment: Some(Alignment {
+                horizontal: Some("<&>\"'".into()),
+                vertical: Some("middle".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })];
+        let table = build_style_table(&styles);
+        let mut buf = Vec::new();
+        emit_styles_xml(&mut buf, &table).unwrap();
+        let xml = String::from_utf8(buf).unwrap();
+        assert!(
+            xml.contains(r##"horizontal="&lt;&amp;&gt;&quot;&apos;""##),
+            "alignment horizontal must be XML-escaped: {xml}"
+        );
+        assert!(!xml.contains(r##"horizontal="<&>""##), "unescaped horizontal: {xml}");
+        assert!(xml.contains(r##"vertical="center""##), "middle must map to center: {xml}");
+        assert!(!xml.contains(r##"vertical="middle""##), "must not emit raw middle: {xml}");
     }
 }
