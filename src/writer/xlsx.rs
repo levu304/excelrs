@@ -1093,7 +1093,8 @@ mod tests {
             error: None,
             error_title: None,
             error_style: None,
-        }).unwrap();
+        })
+        .unwrap();
 
         let mut inner = WorkbookInner::new();
         inner.worksheets.push(ws);
@@ -1134,7 +1135,7 @@ mod tests {
 
         // Column A has its own style
         let mut col_a = Column::new("A".into(), "a".into(), 10.0);
-        col_a.set_style(serde_json::json!({ "num_fmt": "0.00%" })).unwrap();
+        col_a.set_style(serde_json::json!({ "numFmt": "0.00%" })).unwrap();
         ws.set_columns(serde_json::to_value(&[col_a]).unwrap()).unwrap();
 
         ws.add_row(vec![serde_json::json!(0.123)]); // A1, gets column style
@@ -1180,7 +1181,7 @@ mod tests {
 
         // Cell with explicit style → wins over column
         let mut cell = Cell::new("A1".into(), 1, 1);
-        cell.set_style(serde_json::json!({ "num_fmt": "0.00%" })).unwrap();
+        cell.set_style(serde_json::json!({ "numFmt": "0.00%" })).unwrap();
         let map: BTreeMap<u32, Option<Style>> = [(1u32, Some(bold_col.clone()))].into();
         let result = effective_cell_style_with_fallback(&cell, &map);
         assert!(result.is_some());
@@ -1329,7 +1330,7 @@ mod tests {
                 "font": { "bold": true, "color": "FFFF0000" },
                 "fill": { "kind": "solid", "foreground": "FFFFFF00" },
                 "alignment": { "horizontal": "center", "vertical": "middle" },
-                "num_fmt": "0.00%",
+                "numFmt": "0.00%",
             }),
         )
         .unwrap();
@@ -1744,7 +1745,7 @@ mod tests {
         ws.set_id(1);
         // Row 2 gets a style but no cells -- must still emit <row r="2" s="N">
         ws.get_row(2)
-            .set_style(serde_json::json!({ "num_fmt": "0.00%" }))
+            .set_style(serde_json::json!({ "numFmt": "0.00%" }))
             .unwrap();
         let mut inner = WorkbookInner::new();
         inner.worksheets.push(ws);

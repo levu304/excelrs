@@ -2,14 +2,14 @@ name: Release
 
 on:
   push:
-    tags: ['v*']
+    tags: ["v*"]
   workflow_dispatch:
-
-permissions:
-  contents: write
 
 jobs:
   build:
+    permissions:
+      contents: read
+
     strategy:
       fail-fast: false
       matrix:
@@ -27,15 +27,21 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: >-
+          actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
 
       - name: Install Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: >-
+          actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
         with:
           cache: true
+          cache-key: cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Install Node.js 20
-        uses: actions/setup-node@v4
+        uses: >-
+          actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 20
 
@@ -44,6 +50,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
 
       - name: Build native addon
         run: npx napi build --platform --release --js native.js
@@ -55,7 +64,8 @@ jobs:
         run: pnpm test
 
       - name: Upload native artifact
-        uses: actions/upload-artifact@v4
+        uses: >-
+          actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: ${{ matrix.npm_dir }}
           path: excelrs.*.node
@@ -63,15 +73,22 @@ jobs:
   publish:
     needs: [build]
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      id-token: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: >-
+          actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
 
       - name: Install Node.js 20
-        uses: actions/setup-node@v4
+        uses: >-
+          actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 20
-          registry-url: 'https://registry.npmjs.org'
+          registry-url: "https://registry.npmjs.org"
 
       - name: Install pnpm
         run: corepack enable
@@ -80,7 +97,8 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Download platform artifacts
-        uses: actions/download-artifact@v4
+        uses: >-
+          actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           path: npm
 
@@ -88,23 +106,39 @@ jobs:
         run: |
           VERSION=$(node -p "require('./package.json').version")
           cat > npm/darwin-arm64/package.json <<EOF
-          { "name": "@levu304/excelrs-darwin-arm64", "version": "$VERSION", "os": ["darwin"], "cpu": ["arm64"], "main": "excelrs.darwin-arm64.node" }
+          {
+            "name": "@levu304/excelrs-darwin-arm64",
+            "version": "$VERSION",
+            "os": ["darwin"],
+            "cpu": ["arm64"],
+            "main": "excelrs.darwin-arm64.node"
+          }
           EOF
           cat > npm/linux-x64-gnu/package.json <<EOF
-          { "name": "@levu304/excelrs-linux-x64-gnu", "version": "$VERSION", "os": ["linux"], "cpu": ["x64"], "main": "excelrs.linux-x64-gnu.node" }
+          {
+            "name": "@levu304/excelrs-linux-x64-gnu",
+            "version": "$VERSION",
+            "os": ["linux"],
+            "cpu": ["x64"],
+            "main": "excelrs.linux-x64-gnu.node"
+          }
           EOF
           cat > npm/win32-x64-msvc/package.json <<EOF
-          { "name": "@levu304/excelrs-win32-x64-msvc", "version": "$VERSION", "os": ["win32"], "cpu": ["x64"], "main": "excelrs.win32-x64-msvc.node" }
+          {
+            "name": "@levu304/excelrs-win32-x64-msvc",
+            "version": "$VERSION",
+            "os": ["win32"],
+            "cpu": ["x64"],
+            "main": "excelrs.win32-x64-msvc.node"
+          }
           EOF
           echo "Platform package.json files created"
 
       - name: Publish platform packages
         run: |
           for dir in npm/*/; do
-            (cd "$dir" && npm publish --access public) || exit 1
+            (cd "$dir" && npm publish --provenance --access public) || exit 1
           done
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish to npm (main package)
         run: |
@@ -115,11 +149,12 @@ jobs:
               '@levu304/excelrs-linux-x64-gnu': pkg.version,
               '@levu304/excelrs-win32-x64-msvc': pkg.version
             };
-            require('fs').writeFileSync('./package.json', JSON.stringify(pkg, null, 2) + '\n');
+            require('fs').writeFileSync(
+            './package.json',
+            JSON.stringify(pkg, null, 2) + '\n'
+          );
           "
-          npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          npm publish --provenance --access public
 
       - name: Verify all 4 packages on npm
         run: |
@@ -130,17 +165,21 @@ jobs:
                      @levu304/excelrs-linux-x64-gnu \
                      @levu304/excelrs-win32-x64-msvc; do
             for attempt in 1 2 3 4 5; do
-              published=$(npm view "$pkg@$VERSION" version 2>/dev/null || echo "MISSING")
+              published=$(npm view "$pkg@$VERSION" version \
+                2>/dev/null || echo "MISSING")
               if [ "$published" = "$VERSION" ]; then
                 echo "OK: $pkg@$VERSION"
                 break
               fi
-              echo "  [attempt $attempt] $pkg@$VERSION not yet visible (got: $published)"
+              echo "  [attempt $attempt] $pkg@$VERSION" \
+                "not yet visible (got: $published)"
               sleep 3
             done
-            published=$(npm view "$pkg@$VERSION" version 2>/dev/null || echo "MISSING")
+            published=$(npm view "$pkg@$VERSION" version \
+              2>/dev/null || echo "MISSING")
             if [ "$published" != "$VERSION" ]; then
-              echo "FAIL: $pkg@$VERSION not on npm after 5 retries (got: $published)"
+              echo "FAIL: $pkg@$VERSION not on npm" \
+                "after 5 retries (got: $published)"
               exit 1
             fi
           done
@@ -161,7 +200,11 @@ jobs:
             ws.setCellStyle(1, 2, { font: { bold: true } });
             wb.xlsx.write()
               .then(buf => {
-                if (buf.length < 100) throw new Error('xlsx too small: ' + buf.length);
+                if (buf.length < 100) {
+                  throw new Error(
+                    'xlsx too small: ' + buf.length
+                  );
+                }
                 console.log('✓ native binding works, xlsx size:', buf.length);
               })
               .catch(err => {
@@ -172,6 +215,6 @@ jobs:
           rm -rf "$SMOKE_DIR"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          --generate-notes

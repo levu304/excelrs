@@ -10,10 +10,10 @@ test('wb.xlsx.read populates workbook from buffer', async () => {
   const wbjs = new ExcelJS.Workbook()
   wbjs.addWorksheet('TestSheet')
   wbjs.getWorksheet('TestSheet')!.getCell('A1').value = 42
-  const buf: Buffer = await wbjs.xlsx.writeBuffer() as Buffer
+  const buf = await wbjs.xlsx.writeBuffer()
 
   const wb = new Workbook()
-  await wb.xlsx.read(buf)
+  await wb.xlsx.read(buf as never)
 
   expect(wb.worksheetCount).toBe(1)
   expect(wb.getWorksheet('TestSheet')).toBeDefined()
@@ -24,13 +24,13 @@ test('wb.xlsx.readFile populates workbook from file', async () => {
   const wbjs = new ExcelJS.Workbook()
   wbjs.addWorksheet('FileSheet')
   wbjs.getWorksheet('FileSheet')!.getCell('B2').value = 'file test'
-  const buf: Buffer = await wbjs.xlsx.writeBuffer() as Buffer
+  const buf = await wbjs.xlsx.writeBuffer()
 
   const fs = await import('fs')
   const os = await import('os')
   const path = await import('path')
   const tmpFile = path.join(os.tmpdir(), `excelrs-xlsx-test-${Date.now()}.xlsx`)
-  fs.writeFileSync(tmpFile, buf)
+  fs.writeFileSync(tmpFile, buf as never)
 
   const wb = new Workbook()
   try {
@@ -109,8 +109,8 @@ test('getCell().style = {...} persists through write/read round-trip', async () 
 
   // Read back and verify style persists
   const readCell = ws2.getCell('A1')
-  expect(readCell.style.font.bold).toBe(true)
-  expect(readCell.style.font.color).toBe('FF00FF00')
+  expect(readCell.style!.font!.bold).toBe(true)
+  expect(readCell.style!.font!.color).toBe('FF00FF00')
 })
 
 test('row.getCell().value mutates persisted cell', () => {
@@ -186,14 +186,14 @@ test('round-trip excelrs write then exceljs read matches', async () => {
 
   // Read with exceljs
   const wbjs = new ExcelJS.Workbook()
-  await wbjs.xlsx.load(buf)
+  await wbjs.xlsx.load(buf as never)
 
   expect(wbjs.worksheets.length).toBe(1)
   const wsjs = wbjs.getWorksheet('Trip')!
 
-  const vA1 = (wsjs.getCell('A1').value as any)
+  const vA1 = wsjs.getCell('A1').value
   if (typeof vA1 === 'object' && vA1 !== null && 'result' in vA1) {
-    expect((vA1 as any).result).toBe(100)
+    expect((vA1 as { result: number }).result).toBe(100)
   } else {
     expect(vA1).toBe(100)
   }
@@ -215,10 +215,10 @@ test('round-trip exceljs write then excelrs read matches', async () => {
   wsjs.getCell('A1').value = 99
   wsjs.getCell('B1').value = 'keep'
 
-  const buf: Buffer = await wbjs.xlsx.writeBuffer() as Buffer
+  const buf = await wbjs.xlsx.writeBuffer()
 
   const wb = new Workbook()
-  await wb.xlsx.read(buf)
+  await wb.xlsx.read(buf as never)
 
   expect(wb.worksheetCount).toBe(1)
   const ws = wb.getWorksheet('Regression')!
@@ -259,10 +259,10 @@ test('wb.xlsx.read mutates the workbook in place', async () => {
   // Build a buffer with one sheet
   const wbjs = new ExcelJS.Workbook()
   wbjs.addWorksheet('Shared')
-  const buf: Buffer = await wbjs.xlsx.writeBuffer() as Buffer
+  const buf = await wbjs.xlsx.writeBuffer()
 
   // Read via xlsx handle — should mutate the original workbook
-  await wb.xlsx.read(buf)
+  await wb.xlsx.read(buf as never)
   expect(wb.worksheetCount).toBe(1)
   expect(wb.getWorksheet('Shared')).toBeDefined()
 })
@@ -278,8 +278,8 @@ test('wb.xlsx getter returns a new handle each time but shares state', async () 
   // But they share the same underlying state
   const wbjs = new ExcelJS.Workbook()
   wbjs.addWorksheet('SharedState')
-  const buf: Buffer = await wbjs.xlsx.writeBuffer() as Buffer
-  await h1.read(buf)
+  const buf = await wbjs.xlsx.writeBuffer()
+  await h1.read(buf as never)
 
   // h2 should see the same data because they share the inner Arc
   expect(h2).toBeDefined()

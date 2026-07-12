@@ -22,6 +22,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Bump version 0.6.0 → 0.7.0. No breaking public-API changes.
 
+## [0.8.2] — 2026-07-12
+
+### Fixed
+
+- Added tsconfig.json and @types/node to resolve TypeScript type errors in tests and type defs
+- Fixed stale camelCase/snake_case property mismatches in test files (gradientType, numFmt, wrapText, etc.)
+- Fixed null-safety and cast issues in test assertions
+- Added tsc --noEmit typecheck script
+
 ## [0.8.1] — 2026-07-12
 
 ### Changed

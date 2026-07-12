@@ -42,10 +42,12 @@ test('data validation round-trip via exceljs', async () => {
   const ExcelJS = await import('exceljs')
   const wbjs = new ExcelJS.default.Workbook()
   const xlws = wbjs.addWorksheet('Sheet1')
-  xlws.getCell('A1').value = 5
+  xlws.getCell('A1').value = 5 as never
 
   // exceljs v4.4.0 API: ws.dataValidations.add(address, { type, operator, formulae, ... })
-  xlws.dataValidations.add('A1', {
+  // exceljs v4.4.0 Worksheet type omits dataValidations.add();
+  // runtime supports it. Use `never` to bypass type without `any`.
+  (xlws as unknown as { dataValidations: { add: Function } }).dataValidations.add('A1', {
     type: 'whole',
     operator: 'between',
     formulae: [1, 10],
@@ -53,7 +55,7 @@ test('data validation round-trip via exceljs', async () => {
   })
 
   const raw = await wbjs.xlsx.writeBuffer()
-  const buf = raw instanceof Buffer ? raw : Buffer.from(raw as never)
+  const buf = raw instanceof Buffer ? raw : Buffer.from(raw)
 
   const wb = new Workbook()
   await wb.xlsx.read(buf)

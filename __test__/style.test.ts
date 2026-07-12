@@ -63,9 +63,9 @@ test('A4: Fill.kind = "gradient" is accepted and round-trips', async () => {
     ws.setCellStyle(1, 1, {
       fill: {
         kind: 'gradient',
-        gradient_type: 'linear',
-        gradient_degree: 90,
-        gradient_stops: [
+        gradientType: 'linear',
+        gradientDegree: 90,
+        gradientStops: [
           { color: 'FFFF0000', position: 0 },
           { color: 'FF00FF00', position: 1 },
         ],
@@ -88,7 +88,9 @@ test('A4: Fill.kind = "gradient" is accepted and round-trips', async () => {
 async function writeThenReadWithExceljs(wb: Workbook): Promise<ExcelJS.Workbook> {
   const buf = await wb.xlsx.write()
   const wbjs = new ExcelJS.Workbook()
-  await wbjs.xlsx.load(buf)
+  // exceljs load() expects legacy Buffer type; newer @types/node returns
+  // Buffer<ArrayBufferLike>.  `as never` bridges the version gap.
+  await wbjs.xlsx.load(buf as never)
   return wbjs
 }
 
@@ -115,7 +117,7 @@ test('B6: full font + fill + border + alignment + num_fmt round-trips', async ()
       bottom: { style: 'thin', color: 'FF000000' },
     },
     alignment: { horizontal: 'center', vertical: 'middle' },
-    num_fmt: '0.00%',
+    numFmt: '0.00%',
   })
 
   const wbjs = await writeThenReadWithExceljs(wb)
@@ -129,7 +131,8 @@ test('B6: full font + fill + border + alignment + num_fmt round-trips', async ()
 
   // Fill (solid yellow)
   expect(cell.fill?.type).toBe('pattern')
-  expect(cell.fill?.fgColor?.argb).toBe('FFFFFF00')
+  // exceljs Fill type omits fgColor; runtime has it
+  expect((cell.fill as { fgColor?: { argb?: string } })?.fgColor?.argb).toBe('FFFFFF00')
 
   // Border (top/bottom thin)
   expect(cell.border?.top?.style).toBe('thin')
@@ -307,7 +310,7 @@ test('F16: wrap_text round-trips through exceljs', async () => {
   const wb = new Workbook()
   const ws = wb.addWorksheet('Wrap')
   ws.addRow(['long text'])
-  ws.setCellStyle(1, 1, { alignment: { wrap_text: true } })
+  ws.setCellStyle(1, 1, { alignment: { wrapText: true } })
 
   const wbjs = await writeThenReadWithExceljs(wb)
   const wsjs = wbjs.getWorksheet('Wrap')!
