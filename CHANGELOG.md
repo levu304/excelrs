@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.8.1] — 2026-07-12
 
+### Changed
+
+- Bump version 0.7.0 → 0.8.1. No breaking public-API changes.
+
 ### Fixed
 
 - Fixed data validation element order in writer (now emits before `<hyperlinks>` per ECMA-376 schema requirement)
