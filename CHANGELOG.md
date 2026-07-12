@@ -22,6 +22,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Bump version 0.6.0 → 0.7.0. No breaking public-API changes.
 
+## [0.8.0] — 2026-07-12
+
+### Added
+
+- **Data validation** — per-worksheet data validation via `DataValidation` model:
+  - `ws.dataValidations` getter returning all validations on the sheet.
+  - `ws.addDataValidation(dv)` — add or upsert a validation by `sqref`.
+  - `ws.getDataValidation(sqref)` — look up by range; returns `null` when absent.
+  - `ws.removeDataValidation(sqref)` — remove by range; no-op if absent.
+- Writer emits `<dataValidations>` per sheet (after `<hyperlinks>`) with correct
+  `type`, `operator`, `sqref`, `<formula1>`/`<formula2>`, and boolean flags.
+- Reader parses `<dataValidations>` from each sheet XML via the zip archive,
+  attaching parsed validations to the corresponding `Worksheet`.
+- Supported types: `whole`, `decimal`, `list`, `date`, `time`, `textLength`,
+  `custom`. Full operator set; `allowBlank`, `showInputMessage`,
+  `showErrorMessage`, `errorStyle`, `prompt`, and `error` attributes.
+
+### Changed
+
+- Bump version 0.7.0 → 0.8.0. No breaking public-API changes.
+- docs/spec.md §9.3: "Data validation read/write" removed from future list,
+  recorded as shipped in new §9.2.2.
+
 ## [0.6.0] — 2026-07-11
 
 ### Added
@@ -212,6 +235,7 @@ first fully working release; v0.2.0 and v0.2.1 are superseded.
   and GitHub Release on tag push.
 - **Documentation** — complete spec (docs/spec.md), two architecture reviews.
 
+[0.8.0]: https://github.com/levu304/excelrs/releases/tag/v0.8.0
 [0.7.0]: https://github.com/levu304/excelrs/releases/tag/v0.7.0
 [0.6.0]: https://github.com/levu304/excelrs/releases/tag/v0.6.0
 [0.5.0]: https://github.com/levu304/excelrs/releases/tag/v0.5.0

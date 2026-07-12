@@ -129,8 +129,9 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
             let ws_row_indices = &ws_row_indices_base[row_offset..row_offset + row_count];
             row_offset += row_count;
 
-            // Collect hyperlinks for this sheet
+            // Collect hyperlinks and data validations for this sheet
             let hyperlinks = collect_sheet_hyperlinks(ws);
+            let data_validations = ws.get_data_validations();
 
             write_sheet_xml(
                 &mut zip,
@@ -139,6 +140,7 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
                 ws_cell_indices,
                 ws_row_indices,
                 &hyperlinks,
+                &data_validations,
             )?;
 
             // Write sheet-level relationships (for hyperlinks)
@@ -373,10 +375,12 @@ fn write_workbook_xml<W: Write>(
             let sheet_attr = match &dn.sheet {
                 Some(s) => match worksheets.iter().position(|ws| ws.name() == s.as_str()) {
                     Some(idx) => format!(r#" localSheetId="{}""#, idx),
-                    None => return Err(ExcelrsError::Write(format!(
-                        "Defined name '{}' references sheet '{}' which does not exist in the workbook",
-                        dn.name, s
-                    ))),
+                    None => {
+                        return Err(ExcelrsError::Write(format!(
+                            "Defined name '{}' references sheet '{}' which does not exist in the workbook",
+                            dn.name, s
+                        )))
+                    }
                 },
                 None => String::new(),
             };
@@ -490,6 +494,7 @@ fn write_sheet_xml<W: Write>(
     cell_style_indices: &[u32],
     row_style_indices: &[u32],
     hyperlinks: &[SheetHyperlink],
+    data_validations: &[crate::model::data_validation::DataValidation],
 ) -> Result<(), ExcelrsError> {
     write_str(w, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#)?;
     write_str(
@@ -529,6 +534,59 @@ fn write_sheet_xml<W: Write>(
             )?;
         }
         write_str(w, "</hyperlinks>")?;
+    }
+
+    // <dataValidations> - item 3 (v0.8.0)
+    if !data_validations.is_empty() {
+        write_str(w, &format!(r#"<dataValidations count="{}">#"#, data_validations.len()))?;
+        for dv in data_validations {
+            // Build the dataValidation XML element
+            let mut attrs = format!("sqref=\"{}\" type=\"{}\"", escape(&dv.sqref), escape(&dv.r#type));
+
+            if let Some(op) = &dv.operator {
+                attrs.push_str(&format!(" operator=\"{}\"", escape(op)));
+            }
+
+            if dv.allow_blank == Some(true) {
+                attrs.push_str(" allowBlank=\"1\"");
+            }
+
+            if dv.show_input_message == Some(true) {
+                attrs.push_str(" showInputMessage=\"1\"");
+            }
+
+            if dv.show_error_message == Some(true) {
+                attrs.push_str(" showErrorMessage=\"1\"");
+            }
+
+            if let Some(pt) = &dv.prompt_title {
+                attrs.push_str(&format!(" promptTitle=\"{}\"", escape(pt)));
+            }
+
+            if let Some(p) = &dv.prompt {
+                attrs.push_str(&format!(" prompt=\"{}\"", escape(p)));
+            }
+
+            if let Some(et) = &dv.error_title {
+                attrs.push_str(&format!(" errorTitle=\"{}\"", escape(et)));
+            }
+
+            if let Some(err) = &dv.error {
+                attrs.push_str(&format!(" error=\"{}\"", escape(err)));
+            }
+
+            if let Some(es) = &dv.error_style {
+                attrs.push_str(&format!(" errorStyle=\"{}\"", escape(es)));
+            }
+
+            write_str(w, &format!("<dataValidation {}>", attrs))?;
+            write_str(w, &format!("<formula1>{}</formula1>", escape(&dv.formula1)))?;
+            if let Some(f2) = &dv.formula2 {
+                write_str(w, &format!("<formula2>{}</formula2>", escape(f2)))?;
+            }
+            write_str(w, "</dataValidation>")?;
+        }
+        write_str(w, "</dataValidations>")?;
     }
 
     write_str(w, "</worksheet>")?;
