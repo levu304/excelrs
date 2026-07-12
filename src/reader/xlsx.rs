@@ -47,6 +47,14 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
     // Step 3: convert calamine model → excelrs model with styles
     let mut inner = workbook_to_inner_model(&mut workbook, &style_table, &sheet_style_maps)?;
 
+    // Step 3.5: parse data validations from sheet XML and attach to worksheets
+    let per_sheet_validations = parse_sheet_data_validations(data, sheet_count)?;
+    for (i, dvs) in per_sheet_validations.into_iter().enumerate() {
+        for dv in dvs {
+            inner.worksheets[i].insert_data_validation(dv);
+        }
+    }
+
     // Step 4: parse defined names from xl/workbook.xml
     let defined_names = workbook::parse_defined_names(data, &sheet_names)?;
     inner.set_defined_names(defined_names);
@@ -79,6 +87,140 @@ pub fn read_from_file(path: &Path) -> Result<Workbook, ExcelrsError> {
 // ---------------------------------------------------------------------------
 // Internal: convert calamine model → excelrs WorkbookInner
 // ---------------------------------------------------------------------------
+
+/// Parse data validations from `xl/worksheets/sheet{N}.xml` files.
+/// Returns a Vec of Vec where each inner Vec corresponds to a sheet's data validations.
+fn parse_sheet_data_validations(
+    data: &[u8],
+    sheet_count: usize,
+) -> Result<Vec<Vec<crate::model::data_validation::DataValidation>>, ExcelrsError> {
+    use std::io::Cursor;
+    let cursor = Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
+
+    let mut all_dv: Vec<Vec<crate::model::data_validation::DataValidation>> = Vec::with_capacity(sheet_count);
+
+    for i in 0..sheet_count {
+        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+        let dv = match archive.by_name(&path) {
+            Ok(mut entry) => {
+                let mut xml = String::new();
+                entry.read_to_string(&mut xml)?;
+                parse_datavalidations_from_xml(&xml)?
+            }
+            Err(_) => Vec::new(),
+        };
+        all_dv.push(dv);
+    }
+
+    Ok(all_dv)
+}
+
+/// Parse <dataValidations> elements from sheet XML and return DataValidation objects.
+fn parse_datavalidations_from_xml(
+    xml: &str,
+) -> Result<Vec<crate::model::data_validation::DataValidation>, ExcelrsError> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut validations = Vec::new();
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut in_dv = false;
+    let mut current_dv: Option<crate::model::data_validation::DataValidation> = None;
+    let mut formula_buf = String::new();
+    let mut in_formula1 = false;
+    let mut in_formula2 = false;
+
+    loop {
+        buf.clear();
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) => {
+                match e.name().as_ref() {
+                    b"dataValidation" => {
+                        in_dv = true;
+                        let mut dv = crate::model::data_validation::DataValidation {
+                            sqref: String::new(),
+                            r#type: String::new(),
+                            operator: None,
+                            formula1: String::new(),
+                            formula2: None,
+                            allow_blank: None,
+                            show_input_message: None,
+                            show_error_message: None,
+                            prompt: None,
+                            prompt_title: None,
+                            error: None,
+                            error_title: None,
+                            error_style: None,
+                        };
+
+                        // Parse attributes from dataValidation element
+                        for attr in e.attributes().flatten() {
+                            let key = String::from_utf8_lossy(attr.key.as_ref());
+                            let val = String::from_utf8_lossy(&attr.value);
+                            match key.as_ref() {
+                                "sqref" => dv.sqref = val.into_owned(),
+                                "type" => dv.r#type = val.into_owned(),
+                                "operator" => dv.operator = Some(val.into_owned()),
+                                "allowBlank" => dv.allow_blank = Some(val == "1"),
+                                "showInputMessage" => dv.show_input_message = Some(val == "1"),
+                                "showErrorMessage" => dv.show_error_message = Some(val == "1"),
+                                "promptTitle" => dv.prompt_title = Some(val.into_owned()),
+                                "prompt" => dv.prompt = Some(val.into_owned()),
+                                "errorTitle" => dv.error_title = Some(val.into_owned()),
+                                "error" => dv.error = Some(val.into_owned()),
+                                "errorStyle" => dv.error_style = Some(val.into_owned()),
+                                _ => {}
+                            }
+                        }
+                        current_dv = Some(dv);
+                    }
+                    b"formula1" if in_dv => {
+                        in_formula1 = true;
+                        formula_buf.clear();
+                    }
+                    b"formula2" if in_dv => {
+                        in_formula2 = true;
+                        formula_buf.clear();
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Text(ref e)) if (in_formula1 || in_formula2) => {
+                if let Ok(s) = e.unescape() {
+                    formula_buf.push_str(&s);
+                }
+            }
+            Ok(Event::End(ref e)) => match e.name().as_ref() {
+                b"dataValidation" => {
+                    if let Some(dv) = current_dv.take() {
+                        validations.push(dv);
+                    }
+                    in_dv = false;
+                }
+                b"formula1" if in_formula1 => {
+                    if let Some(ref mut dv) = current_dv {
+                        dv.formula1 = formula_buf.clone();
+                    }
+                    in_formula1 = false;
+                }
+                b"formula2" if in_formula2 => {
+                    if let Some(ref mut dv) = current_dv {
+                        dv.formula2 = Some(formula_buf.clone());
+                    }
+                    in_formula2 = false;
+                }
+                _ => {}
+            },
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(ExcelrsError::Parse(format!("XML parse error: {e}"))),
+            _ => {}
+        }
+    }
+
+    Ok(validations)
+}
 
 /// Convert a calamine `Sheets<R>` workbook into a `WorkbookInner`.
 ///

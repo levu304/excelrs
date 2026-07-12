@@ -260,6 +260,20 @@ export declare class Worksheet {
    * emission in the writer. Duplicate ranges are silently ignored.
    */
   mergeCells(range: string): void
+
+  // -- Data validation (v0.8.0) --
+
+  /** All data validations on this worksheet. */
+  get dataValidations(): Array<DataValidation>
+  /**
+   * Add or update a data validation. `dv` must include `sqref`, `type`, and `formula1`.
+   * Upserts by `sqref` (duplicate ranges overwrite). Throws on invalid type or empty sqref.
+   */
+  addDataValidation(dv: DataValidation): void
+  /** Get a data validation by sqref range string. Returns `null` if not found. */
+  getDataValidation(sqref: string): DataValidation | null
+  /** Remove a data validation by sqref range string. No-op if not found. */
+  removeDataValidation(sqref: string): void
 }
 
 /**
@@ -425,6 +439,35 @@ export interface RichTextRun {
   text: string
   /** Font formatting for this run (optional). */
   font?: Font
+}
+
+/**
+ * A data validation constraint on a cell range.
+ *
+ * - `sqref`: cell range reference (e.g. "A1:A10"). Required.
+ * - `type`: validation type: "whole" | "decimal" | "list" | "date" | "time" | "textLength" | "custom". Required.
+ * - `operator`: comparison operator. Required for whole/decimal/date/time/textLength.
+ * - `formula1`: first formula value. Required.
+ * - `formula2`: second formula value (for between/notBetween).
+ * - `allowBlank`: whether blank cells are allowed.
+ * - `showInputMessage`, `showErrorMessage`: display flags.
+ * - `prompt`, `promptTitle`: input prompt text/title.
+ * - `error`, `errorTitle`, `errorStyle`: error alert text/title/style ("stop", "warning", "information").
+ */
+export interface DataValidation {
+  sqref: string
+  type: string
+  operator?: string
+  formula1: string
+  formula2?: string
+  allowBlank?: boolean
+  showInputMessage?: boolean
+  showErrorMessage?: boolean
+  prompt?: string
+  promptTitle?: string
+  error?: string
+  errorTitle?: string
+  errorStyle?: string
 }
 
 /**
