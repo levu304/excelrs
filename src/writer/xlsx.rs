@@ -524,21 +524,9 @@ fn write_sheet_xml<W: Write>(
         write_str(w, "</mergeCells>")?;
     }
 
-    // <hyperlinks> — item 2 (v0.5.0)
-    if !hyperlinks.is_empty() {
-        write!(w, r#"<hyperlinks count="{}">"#, hyperlinks.len())?;
-        for h in hyperlinks {
-            write_str(
-                w,
-                &format!(r#"<hyperlink ref="{}" r:id="{}"/>"#, escape(&h.cell_ref), h.rid),
-            )?;
-        }
-        write_str(w, "</hyperlinks>")?;
-    }
-
     // <dataValidations> - item 3 (v0.8.0)
     if !data_validations.is_empty() {
-        write_str(w, &format!(r#"<dataValidations count="{}">#"#, data_validations.len()))?;
+        write_str(w, &format!(r#"<dataValidations count="{}">"#, data_validations.len()))?;
         for dv in data_validations {
             // Build the dataValidation XML element
             let mut attrs = format!("sqref=\"{}\" type=\"{}\"", escape(&dv.sqref), escape(&dv.r#type));
@@ -587,6 +575,18 @@ fn write_sheet_xml<W: Write>(
             write_str(w, "</dataValidation>")?;
         }
         write_str(w, "</dataValidations>")?;
+    }
+
+    // <hyperlinks> — item 2 (v0.5.0)
+    if !hyperlinks.is_empty() {
+        write!(w, r#"<hyperlinks count="{}">"#, hyperlinks.len())?;
+        for h in hyperlinks {
+            write_str(
+                w,
+                &format!(r#"<hyperlink ref="{}" r:id="{}"/>"#, escape(&h.cell_ref), h.rid),
+            )?;
+        }
+        write_str(w, "</hyperlinks>")?;
     }
 
     write_str(w, "</worksheet>")?;
@@ -1066,6 +1066,60 @@ mod tests {
         write_cell_xml(&mut buf, &cell, &string_indices, 42).unwrap();
         let xml = String::from_utf8(buf).unwrap();
         assert!(xml.contains(r#"s="42""#), "expected s=\"42\" in cell XML, got: {xml}");
+    }
+
+    /// Regression: the <dataValidations> open tag must be well-formed.
+    /// A raw-string delimiter typo previously emitted `<dataValidations count="1">#`
+    /// (stray '#'), invalid because CT_DataValidations permits only
+    /// <dataValidation> children. The reader tolerates stray text, so round-trip
+    /// tests did not catch it.
+    #[test]
+    fn test_write_datavalidation_no_stray_hash() {
+        use crate::model::data_validation::DataValidation;
+
+        let mut ws = Worksheet::new("DV".into());
+        ws.set_id(1);
+        ws.add_data_validation(DataValidation {
+            sqref: "A1".into(),
+            r#type: "whole".into(),
+            operator: Some("between".into()),
+            formula1: "1".into(),
+            formula2: Some("10".into()),
+            allow_blank: Some(false),
+            show_input_message: Some(false),
+            show_error_message: Some(false),
+            prompt: None,
+            prompt_title: None,
+            error: None,
+            error_title: None,
+            error_style: None,
+        }).unwrap();
+
+        let mut inner = WorkbookInner::new();
+        inner.worksheets.push(ws);
+        let bytes = workbook_to_bytes(&inner).unwrap();
+
+        use std::io::{Cursor, Read};
+        let mut archive = zip::read::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut sheet_xml = String::new();
+        archive
+            .by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut sheet_xml)
+            .unwrap();
+
+        assert!(
+            sheet_xml.contains("<dataValidations count=\"1\">"),
+            "dataValidations open tag must be well-formed, got: {sheet_xml}"
+        );
+        assert!(
+            !sheet_xml.contains("dataValidations count=\"1\">#"),
+            "stray '#' must not appear after the open tag, got: {sheet_xml}"
+        );
+        assert!(
+            sheet_xml.contains("<formula1>1</formula1>"),
+            "formula1 must be present, got: {sheet_xml}"
+        );
     }
 
     // ---- A7: column-level style fallback tests ----
