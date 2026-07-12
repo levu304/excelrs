@@ -108,3 +108,17 @@ test('no validations returns empty', async () => {
   expect(ws2.dataValidations.length).toBe(0)
   expect(ws2.getDataValidation('A1')).toBeNull()
 })
+
+test('allowBlank:false round-trips correctly', async () => {
+  const wb = new Workbook()
+  const ws = wb.addWorksheet('Sheet1')
+  ws.addRow([1])
+  ws.addDataValidation({ sqref: 'A1', type: 'whole', formula1: '1', allowBlank: false })
+  const buf = await wb.xlsx.write()
+  const wb2 = new Workbook()
+  await wb2.xlsx.read(buf)
+  const ws2 = wb2.getWorksheet('Sheet1')!
+  const dv = ws2.getDataValidation('A1')
+  expect(dv).not.toBeNull()
+  expect(dv!.allowBlank).toBe(false)
+})

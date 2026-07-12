@@ -116,6 +116,11 @@ fn parse_sheet_data_validations(
     Ok(all_dv)
 }
 
+/// Parse an OOXML boolean attribute. Accepts "1", "0", "true", "false" (case-insensitive).
+fn parse_ooxml_bool(val: &str) -> bool {
+    matches!(val.to_lowercase().as_str(), "1" | "true")
+}
+
 /// Parse <dataValidations> elements from sheet XML and return DataValidation objects.
 fn parse_datavalidations_from_xml(
     xml: &str,
@@ -163,9 +168,9 @@ fn parse_datavalidations_from_xml(
                                 "sqref" => dv.sqref = val.into_owned(),
                                 "type" => dv.r#type = val.into_owned(),
                                 "operator" => dv.operator = Some(val.into_owned()),
-                                "allowBlank" => dv.allow_blank = Some(val == "1"),
-                                "showInputMessage" => dv.show_input_message = Some(val == "1"),
-                                "showErrorMessage" => dv.show_error_message = Some(val == "1"),
+                                "allowBlank" => dv.allow_blank = Some(parse_ooxml_bool(&val)),
+                                "showInputMessage" => dv.show_input_message = Some(parse_ooxml_bool(&val)),
+                                "showErrorMessage" => dv.show_error_message = Some(parse_ooxml_bool(&val)),
                                 "promptTitle" => dv.prompt_title = Some(val.into_owned()),
                                 "prompt" => dv.prompt = Some(val.into_owned()),
                                 "errorTitle" => dv.error_title = Some(val.into_owned()),
@@ -192,10 +197,17 @@ fn parse_datavalidations_from_xml(
                     formula_buf.push_str(&s);
                 }
             }
+            Ok(Event::CData(ref e)) if (in_formula1 || in_formula2) => {
+                if let Ok(s) = std::str::from_utf8(e.as_ref()) {
+                    formula_buf.push_str(s);
+                }
+            }
             Ok(Event::End(ref e)) => match e.name().as_ref() {
                 b"dataValidation" => {
                     if let Some(dv) = current_dv.take() {
-                        validations.push(dv);
+                        if dv.validate().is_ok() {
+                            validations.push(dv);
+                        }
                     }
                     in_dv = false;
                 }
@@ -559,5 +571,86 @@ mod tests {
             zip.finish().unwrap();
         }
         buf
+    }
+
+    // -- data validation parse tests --
+
+    #[test]
+    fn test_parse_datavalidation_boolean_values() {
+        fn dv_xml(attrs: &str) -> String {
+            format!(
+                r##"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dataValidations count="1"><dataValidation sqref="A1" type="whole" {}><formula1>1</formula1></dataValidation></dataValidations></worksheet>"##,
+                attrs
+            )
+        }
+
+        let xml = dv_xml(r##"allowBlank="true" showInputMessage="false""##);
+        let dvs = parse_datavalidations_from_xml(&xml).unwrap();
+        assert_eq!(dvs.len(), 1);
+        assert_eq!(dvs[0].allow_blank, Some(true));
+        assert_eq!(dvs[0].show_input_message, Some(false));
+
+        let xml = dv_xml(r##"allowBlank="false""##);
+        let dvs = parse_datavalidations_from_xml(&xml).unwrap();
+        assert_eq!(dvs[0].allow_blank, Some(false));
+
+        let xml = dv_xml(r##"allowBlank="1""##);
+        let dvs = parse_datavalidations_from_xml(&xml).unwrap();
+        assert_eq!(dvs[0].allow_blank, Some(true));
+
+        let xml = dv_xml(r##"allowBlank="0""##);
+        let dvs = parse_datavalidations_from_xml(&xml).unwrap();
+        assert_eq!(dvs[0].allow_blank, Some(false));
+
+        let xml = dv_xml(r##"allowBlank="TRUE""##);
+        let dvs = parse_datavalidations_from_xml(&xml).unwrap();
+        assert_eq!(dvs[0].allow_blank, Some(true));
+
+        let xml = dv_xml(r##"showInputMessage="true""##);
+        let dvs = parse_datavalidations_from_xml(&xml).unwrap();
+        assert_eq!(dvs[0].show_input_message, Some(true));
+    }
+
+    #[test]
+    fn test_parse_datavalidation_cdata_formula() {
+        let xml = concat!(
+            r##"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"##,
+            r##"<dataValidations count="1"><dataValidation sqref="A1" type="custom">"##,
+            r##"<formula1><![CDATA[=A1>B1]]></formula1>"##,
+            r##"</dataValidation></dataValidations></worksheet>"##,
+        );
+        let dvs = parse_datavalidations_from_xml(xml).unwrap();
+        assert_eq!(dvs.len(), 1);
+        assert_eq!(dvs[0].formula1, "=A1>B1");
+
+        let xml2 = concat!(
+            r##"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"##,
+            r##"<dataValidations count="1"><dataValidation sqref="A1" type="whole">"##,
+            r##"<formula1>SUM(A1)</formula1>"##,
+            r##"</dataValidation></dataValidations></worksheet>"##,
+        );
+        let dvs = parse_datavalidations_from_xml(xml2).unwrap();
+        assert_eq!(dvs[0].formula1, "SUM(A1)");
+    }
+
+    #[test]
+    fn test_parse_datavalidation_malformed_type() {
+        let xml = concat!(
+            r##"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"##,
+            r##"<dataValidations count="1"><dataValidation sqref="A1" type="bogus">"##,
+            r##"<formula1>1</formula1>"##,
+            r##"</dataValidation></dataValidations></worksheet>"##,
+        );
+        let dvs = parse_datavalidations_from_xml(xml).unwrap();
+        assert!(dvs.is_empty(), "bogus type should be skipped");
+
+        let xml2 = concat!(
+            r##"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"##,
+            r##"<dataValidations count="1"><dataValidation sqref="A1" type="whole">"##,
+            r##"<formula1>1</formula1>"##,
+            r##"</dataValidation></dataValidations></worksheet>"##,
+        );
+        let dvs = parse_datavalidations_from_xml(xml2).unwrap();
+        assert_eq!(dvs.len(), 1);
     }
 }

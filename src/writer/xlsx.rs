@@ -547,16 +547,16 @@ fn write_sheet_xml<W: Write>(
                 attrs.push_str(&format!(" operator=\"{}\"", escape(op)));
             }
 
-            if dv.allow_blank == Some(true) {
-                attrs.push_str(" allowBlank=\"1\"");
+            if let Some(ab) = dv.allow_blank {
+                attrs.push_str(&format!(" allowBlank=\"{}\"", if ab { "1" } else { "0" }));
             }
 
-            if dv.show_input_message == Some(true) {
-                attrs.push_str(" showInputMessage=\"1\"");
+            if let Some(sim) = dv.show_input_message {
+                attrs.push_str(&format!(" showInputMessage=\"{}\"", if sim { "1" } else { "0" }));
             }
 
-            if dv.show_error_message == Some(true) {
-                attrs.push_str(" showErrorMessage=\"1\"");
+            if let Some(sem) = dv.show_error_message {
+                attrs.push_str(&format!(" showErrorMessage=\"{}\"", if sem { "1" } else { "0" }));
             }
 
             if let Some(pt) = &dv.prompt_title {

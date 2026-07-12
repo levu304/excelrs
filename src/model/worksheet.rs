@@ -423,7 +423,11 @@ impl Worksheet {
     }
 
     /// Insert a data validation into the worksheet (used by reader).
+    /// Skips invalid DVs (malformed type, empty sqref, etc.).
     pub fn insert_data_validation(&self, dv: DataValidation) {
+        if dv.validate().is_err() {
+            return;
+        }
         let mut validations = self
             .data_validations
             .lock()
