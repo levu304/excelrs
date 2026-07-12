@@ -129,8 +129,9 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
             let ws_row_indices = &ws_row_indices_base[row_offset..row_offset + row_count];
             row_offset += row_count;
 
-            // Collect hyperlinks for this sheet
+            // Collect hyperlinks and data validations for this sheet
             let hyperlinks = collect_sheet_hyperlinks(ws);
+            let data_validations = ws.get_data_validations();
 
             write_sheet_xml(
                 &mut zip,
@@ -139,6 +140,7 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
                 ws_cell_indices,
                 ws_row_indices,
                 &hyperlinks,
+                &data_validations,
             )?;
 
             // Write sheet-level relationships (for hyperlinks)
@@ -373,10 +375,12 @@ fn write_workbook_xml<W: Write>(
             let sheet_attr = match &dn.sheet {
                 Some(s) => match worksheets.iter().position(|ws| ws.name() == s.as_str()) {
                     Some(idx) => format!(r#" localSheetId="{}""#, idx),
-                    None => return Err(ExcelrsError::Write(format!(
-                        "Defined name '{}' references sheet '{}' which does not exist in the workbook",
-                        dn.name, s
-                    ))),
+                    None => {
+                        return Err(ExcelrsError::Write(format!(
+                            "Defined name '{}' references sheet '{}' which does not exist in the workbook",
+                            dn.name, s
+                        )))
+                    }
                 },
                 None => String::new(),
             };
@@ -490,6 +494,7 @@ fn write_sheet_xml<W: Write>(
     cell_style_indices: &[u32],
     row_style_indices: &[u32],
     hyperlinks: &[SheetHyperlink],
+    data_validations: &[crate::model::data_validation::DataValidation],
 ) -> Result<(), ExcelrsError> {
     write_str(w, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#)?;
     write_str(
@@ -517,6 +522,59 @@ fn write_sheet_xml<W: Write>(
             write_str(w, &format!(r#"<mergeCell ref="{}"/>"#, escape(range)))?;
         }
         write_str(w, "</mergeCells>")?;
+    }
+
+    // <dataValidations> - item 3 (v0.8.0)
+    if !data_validations.is_empty() {
+        write_str(w, &format!(r#"<dataValidations count="{}">"#, data_validations.len()))?;
+        for dv in data_validations {
+            // Build the dataValidation XML element
+            let mut attrs = format!("sqref=\"{}\" type=\"{}\"", escape(&dv.sqref), escape(&dv.r#type));
+
+            if let Some(op) = &dv.operator {
+                attrs.push_str(&format!(" operator=\"{}\"", escape(op)));
+            }
+
+            if let Some(ab) = dv.allow_blank {
+                attrs.push_str(&format!(" allowBlank=\"{}\"", if ab { "1" } else { "0" }));
+            }
+
+            if let Some(sim) = dv.show_input_message {
+                attrs.push_str(&format!(" showInputMessage=\"{}\"", if sim { "1" } else { "0" }));
+            }
+
+            if let Some(sem) = dv.show_error_message {
+                attrs.push_str(&format!(" showErrorMessage=\"{}\"", if sem { "1" } else { "0" }));
+            }
+
+            if let Some(pt) = &dv.prompt_title {
+                attrs.push_str(&format!(" promptTitle=\"{}\"", escape(pt)));
+            }
+
+            if let Some(p) = &dv.prompt {
+                attrs.push_str(&format!(" prompt=\"{}\"", escape(p)));
+            }
+
+            if let Some(et) = &dv.error_title {
+                attrs.push_str(&format!(" errorTitle=\"{}\"", escape(et)));
+            }
+
+            if let Some(err) = &dv.error {
+                attrs.push_str(&format!(" error=\"{}\"", escape(err)));
+            }
+
+            if let Some(es) = &dv.error_style {
+                attrs.push_str(&format!(" errorStyle=\"{}\"", escape(es)));
+            }
+
+            write_str(w, &format!("<dataValidation {}>", attrs))?;
+            write_str(w, &format!("<formula1>{}</formula1>", escape(&dv.formula1)))?;
+            if let Some(f2) = &dv.formula2 {
+                write_str(w, &format!("<formula2>{}</formula2>", escape(f2)))?;
+            }
+            write_str(w, "</dataValidation>")?;
+        }
+        write_str(w, "</dataValidations>")?;
     }
 
     // <hyperlinks> — item 2 (v0.5.0)
@@ -1008,6 +1066,60 @@ mod tests {
         write_cell_xml(&mut buf, &cell, &string_indices, 42).unwrap();
         let xml = String::from_utf8(buf).unwrap();
         assert!(xml.contains(r#"s="42""#), "expected s=\"42\" in cell XML, got: {xml}");
+    }
+
+    /// Regression: the <dataValidations> open tag must be well-formed.
+    /// A raw-string delimiter typo previously emitted `<dataValidations count="1">#`
+    /// (stray '#'), invalid because CT_DataValidations permits only
+    /// <dataValidation> children. The reader tolerates stray text, so round-trip
+    /// tests did not catch it.
+    #[test]
+    fn test_write_datavalidation_no_stray_hash() {
+        use crate::model::data_validation::DataValidation;
+
+        let mut ws = Worksheet::new("DV".into());
+        ws.set_id(1);
+        ws.add_data_validation(DataValidation {
+            sqref: "A1".into(),
+            r#type: "whole".into(),
+            operator: Some("between".into()),
+            formula1: "1".into(),
+            formula2: Some("10".into()),
+            allow_blank: Some(false),
+            show_input_message: Some(false),
+            show_error_message: Some(false),
+            prompt: None,
+            prompt_title: None,
+            error: None,
+            error_title: None,
+            error_style: None,
+        }).unwrap();
+
+        let mut inner = WorkbookInner::new();
+        inner.worksheets.push(ws);
+        let bytes = workbook_to_bytes(&inner).unwrap();
+
+        use std::io::{Cursor, Read};
+        let mut archive = zip::read::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut sheet_xml = String::new();
+        archive
+            .by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut sheet_xml)
+            .unwrap();
+
+        assert!(
+            sheet_xml.contains("<dataValidations count=\"1\">"),
+            "dataValidations open tag must be well-formed, got: {sheet_xml}"
+        );
+        assert!(
+            !sheet_xml.contains("dataValidations count=\"1\">#"),
+            "stray '#' must not appear after the open tag, got: {sheet_xml}"
+        );
+        assert!(
+            sheet_xml.contains("<formula1>1</formula1>"),
+            "formula1 must be present, got: {sheet_xml}"
+        );
     }
 
     // ---- A7: column-level style fallback tests ----

@@ -15,6 +15,7 @@ use napi_derive::napi;
 
 use super::cell::{Cell, CellValue};
 use super::column::Column;
+use super::data_validation::DataValidation;
 use super::row::Row;
 use crate::model::style::Style;
 use crate::types;
@@ -32,6 +33,7 @@ pub struct Worksheet {
     rows: Arc<Mutex<BTreeMap<u32, Row>>>,
     columns: Arc<Mutex<Vec<Column>>>,
     merged_ranges: Arc<Mutex<Vec<String>>>,
+    data_validations: Arc<Mutex<Vec<DataValidation>>>,
 }
 
 #[napi]
@@ -44,6 +46,7 @@ impl Worksheet {
             rows: Arc::new(Mutex::new(BTreeMap::new())),
             columns: Arc::new(Mutex::new(Vec::new())),
             merged_ranges: Arc::new(Mutex::new(Vec::new())),
+            data_validations: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -326,6 +329,56 @@ impl Worksheet {
         }
         Ok(())
     }
+
+    // -- data_validations --
+
+    /// Get all data validations for this worksheet.
+    #[napi(getter)]
+    pub fn data_validations(&self) -> Vec<DataValidation> {
+        self.data_validations
+            .lock()
+            .expect("Worksheet data_validations lock poisoned")
+            .clone()
+    }
+
+    /// Add or update a data validation. Upserts by sqref.
+    #[napi]
+    pub fn add_data_validation(&self, dv: DataValidation) -> napi::Result<()> {
+        dv.validate().map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+        let mut validations = self
+            .data_validations
+            .lock()
+            .expect("Worksheet data_validations lock poisoned");
+
+        // Upsert by sqref: remove old, add new
+        validations.retain(|v| v.sqref != dv.sqref);
+        validations.push(dv);
+        Ok(())
+    }
+
+    /// Get data validation for a specific cell reference (sqref).
+    #[napi]
+    pub fn get_data_validation(&self, sqref: String) -> Option<DataValidation> {
+        self.data_validations
+            .lock()
+            .expect("Worksheet data_validations lock poisoned")
+            .iter()
+            .find(|v| v.sqref == sqref)
+            .cloned()
+    }
+
+    /// Remove data validation for a specific cell reference (sqref).
+    #[napi]
+    pub fn remove_data_validation(&self, sqref: String) -> bool {
+        let mut validations = self
+            .data_validations
+            .lock()
+            .expect("Worksheet data_validations lock poisoned");
+        let old_len = validations.len();
+        validations.retain(|v| v.sqref != sqref);
+        validations.len() < old_len
+    }
 }
 
 // Internal methods (not exposed via napi)
@@ -367,6 +420,27 @@ impl Worksheet {
     /// Set the style on a cell at (row, col) — used by the reader.
     pub fn insert_cell_style(&self, row: u32, col: u32, style: Style) {
         self.with_cell_mut(row, col, |cell| cell.set_style_raw(Some(style)));
+    }
+
+    /// Insert a data validation into the worksheet (used by reader).
+    /// Skips invalid DVs (malformed type, empty sqref, etc.).
+    pub fn insert_data_validation(&self, dv: DataValidation) {
+        if dv.validate().is_err() {
+            return;
+        }
+        let mut validations = self
+            .data_validations
+            .lock()
+            .expect("Worksheet data_validations lock poisoned");
+        validations.push(dv);
+    }
+
+    /// Get all data validations for writing (used by writer).
+    pub fn get_data_validations(&self) -> Vec<DataValidation> {
+        self.data_validations
+            .lock()
+            .expect("Worksheet data_validations lock poisoned")
+            .clone()
     }
 }
 
