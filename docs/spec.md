@@ -1256,15 +1256,6 @@ The following items were explicitly **deferred from v0.2.0**. All six are now sh
 
 No remaining deferred style items.
 
-### 9.2.2 v0.8.0 — Data validation read/write
-
-**Scope:** Data validation read and write on a per-worksheet basis. Provides a
-`DataValidation` model type, `Worksheet` methods (`dataValidations` getter,
-`addDataValidation`, `getDataValidation`, `removeDataValidation`), writer
-emission of `<dataValidations>` in sheet XML, and reader parsing of the same.
-Standard OOXML types (`whole`, `decimal`, `list`, `date`, `time`, `textLength`,
-`custom`), operators, `allowBlank`, error/input messages are all supported.
-
 ### 9.3 Future (v0.3+)
 
 - CSV read/write (`Workbook.csv.readFile`, `Workbook.csv.writeFile`).
@@ -1272,6 +1263,8 @@ Standard OOXML types (`whole`, `decimal`, `list`, `date`, `time`, `textLength`,
 - Streaming XLSX writer.
 - Pivot table read/write.
 - Image read/write.
+- Data validation read/write.
+- Defined names (named ranges).
 - Cell comments/notes.
 - Conditional formatting.
 - Formula evaluation (integration with a Rust formula engine).
