@@ -1,4 +1,6 @@
 import { test, expect } from 'vitest'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { Workbook } from '../index'
 
 test('csv write produces correct output', async () => {
@@ -124,7 +126,7 @@ test('csv read file and write file round-trip', async () => {
   const wb = new Workbook()
   wb.addWorksheet('Sheet1').addRow([1, 2, 3])
 
-  const tmpFile = `/tmp/excelrs_test_csv_${Date.now()}.csv`
+  const tmpFile = path.join(tmpdir(), `excelrs_test_csv_${Date.now()}.csv`)
   await wb.csv.writeFile(tmpFile)
 
   const wb2 = new Workbook()
