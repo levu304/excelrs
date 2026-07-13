@@ -15,15 +15,15 @@
 | CSV write | shipped | v0.9.0 | Manual RFC 4180 serializer |
 | Streaming XLSX | n-a | — | Perf-oriented; deferred from v1 |
 | **Worksheet structure** | | | |
-| Rows / columns CRUD | shipped | v0.1.0 | getRow, getColumn, addRow, splice, etc. |
+| Rows / columns CRUD | partial | v0.1.0 | `getRow`/`addRow`/`getRows`/`columns()`; no `getColumn`/`splice`/`insertRow` |
 | Merge cells | shipped | v0.5.0 | mergeCells, unMergeCells |
 | Freeze / split panes | planned | — | `<sheetViews>` not implemented |
 | Auto filters | planned | — | `autoFilter` attribute not implemented |
-| Insert / splice rows | shipped | v0.1.0 | insertRow, insertRows, spliceRows |
-| Duplicate row | shipped | v0.1.0 | DuplicateRow |
+| Insert / splice rows | planned | — | `insertRow`/`insertRows`/`spliceRows` not implemented |
+| Duplicate row | planned | — | `DuplicateRow` not implemented |
 | Column widths / headers | shipped | v0.1.0 | |
-| Outline levels (rows/cols) | shipped | v0.5.0? | Check |
-| Page breaks | shipped | v0.1.0? | |
+| Outline levels (rows/cols) | planned | — | Row/col grouping (`outlineLvl`) not implemented |
+| Page breaks | planned | — | `rowBreaks`/`colBreaks` not implemented |
 | **Cell values & types** | | | |
 | Number, String, Bool, Error | shipped | v0.1.0 | |
 | Formula (read/write) | shipped | v0.1.0 | Stored as string formula + cached value |
