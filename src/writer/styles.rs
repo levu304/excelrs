@@ -1229,7 +1229,13 @@ mod tests {
             "alignment horizontal must be XML-escaped: {xml}"
         );
         assert!(!xml.contains(r##"horizontal="<&>""##), "unescaped horizontal: {xml}");
-        assert!(xml.contains(r##"vertical="center""##), "middle must map to center: {xml}");
-        assert!(!xml.contains(r##"vertical="middle""##), "must not emit raw middle: {xml}");
+        assert!(
+            xml.contains(r##"vertical="center""##),
+            "middle must map to center: {xml}"
+        );
+        assert!(
+            !xml.contains(r##"vertical="middle""##),
+            "must not emit raw middle: {xml}"
+        );
     }
 }

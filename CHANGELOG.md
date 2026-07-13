@@ -31,6 +31,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Bump version 0.6.0 → 0.7.0. No breaking public-API changes.
 
+## [0.9.0] — 2026-07-13
+
+### Added
+
+- **CSV read/write** — read and write RFC 4180 CSV via a `WorkbookCsv` async
+  handle obtained through `wb.csv`:
+  - `csv.read(buf)` / `csv.readFile(path)` — parse CSV into a single "Sheet1"
+    worksheet; numeric inference on read (f64-parsable fields → Number cells);
+    optional `delimiter` parameter (default `,`).
+  - `csv.write()` / `csv.writeFile(path)` — serialize the **first** worksheet
+    to CSV (CSV is single-sheet); formula cells emit their cached value;
+    optional `delimiter` (default `,`) and `withBom` (default `false`).
+  - Manual RFC 4180 parser/serializer; no new dependencies.
+  - See `docs/spec.md` §9.2.3 for the full capability description.
+
+### Changed
+
+- Bump version 0.8.2 → 0.9.0. No breaking public-API changes.
+- docs/spec.md §9.3: "CSV read/write" removed from future list,
+  recorded as shipped in new §9.2.3.
+
+## [0.8.2] — 2026-07-12
+
+### Fixed
+
+- Added tsconfig.json and @types/node to resolve TypeScript type errors in tests and type defs
+- Fixed stale camelCase/snake_case property mismatches in test files (gradientType, numFmt, wrapText, etc.)
+- Fixed null-safety and cast issues in test assertions
+- Added tsc --noEmit typecheck script
+
 ## [0.8.1] — 2026-07-12
 
 ### Changed

@@ -13,6 +13,7 @@ use napi_derive::napi;
 use super::defined_name::DefinedName;
 use super::workbook_inner::WorkbookInner;
 use super::worksheet::Worksheet;
+use crate::csv::WorkbookCsv;
 use crate::xlsx::WorkbookXlsx;
 
 /// Top-level workbook document.
@@ -85,6 +86,15 @@ impl Workbook {
     #[napi(getter)]
     pub fn xlsx(&self) -> WorkbookXlsx {
         WorkbookXlsx::new(Arc::clone(&self.inner))
+    }
+
+    /// Returns a `WorkbookCsv` handle for async CSV I/O.
+    ///
+    /// The handle shares the same underlying `Arc<Mutex<WorkbookInner>>`
+    /// as the parent Workbook.
+    #[napi(getter)]
+    pub fn csv(&self) -> WorkbookCsv {
+        WorkbookCsv::new(Arc::clone(&self.inner))
     }
 
     // -- Defined names (v0.7.0) --

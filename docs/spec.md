@@ -1265,9 +1265,15 @@ emission of `<dataValidations>` in sheet XML, and reader parsing of the same.
 Standard OOXML types (`whole`, `decimal`, `list`, `date`, `time`, `textLength`,
 `custom`), operators, `allowBlank`, error/input messages are all supported.
 
+### 9.2.3 v0.9.0 — CSV read/write
+
+**Scope:** CSV read and write via a `WorkbookCsv` async handle obtained through
+`wb.csv`. Provides `read`/`readFile` (RFC 4180 parser, numeric inference on
+read, optional delimiter) and `write`/`writeFile` (serializes the first
+worksheet only — CSV is single-sheet).
+
 ### 9.3 Future (v0.3+)
 
-- CSV read/write (`Workbook.csv.readFile`, `Workbook.csv.writeFile`).
 - Streaming XLSX reader (row-by-row for large files).
 - Streaming XLSX writer.
 - Pivot table read/write.

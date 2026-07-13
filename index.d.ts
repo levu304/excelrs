@@ -129,6 +129,13 @@ export declare class Workbook {
    * so reads through `.xlsx.read(buf)` mutate this workbook's state.
    */
   get xlsx(): WorkbookXlsx
+  /**
+   * Returns a `WorkbookCsv` handle for async CSV I/O.
+   *
+   * The handle shares the same underlying `Arc<Mutex<WorkbookInner>>`,
+   * so reads through `.csv.read(buf)` mutate this workbook's state.
+   */
+  get csv(): WorkbookCsv
 
   // -- Defined names (v0.7.0) --
 
@@ -178,6 +185,44 @@ export declare class WorkbookXlsx {
   write(): Promise<Buffer>
   /** Write the workbook to an .xlsx file on disk.  Async. */
   writeFile(path: string): Promise<void>
+}
+
+/**
+ * Async CSV read/write handle.
+ *
+ * Obtained via `Workbook.csv` getter. Shares the same underlying
+ * `Arc<Mutex<WorkbookInner>>` as the parent Workbook.
+ *
+ * RFC 4180 parser & serializer (manual, no extra deps). Numeric inference
+ * on read, single-sheet on write, optional delimiter and BOM support.
+ */
+export declare class WorkbookCsv {
+  /**
+   * Parse a CSV `Buffer` into a single worksheet ("Sheet1"), replacing
+   * the workbook's existing worksheets in place.
+   *
+   * An optional `delimiter` overrides the field separator (default `,`).
+   */
+  read(buffer: Buffer, delimiter?: string | undefined | null): Promise<void>
+  /**
+   * Read a CSV file from disk into a single worksheet ("Sheet1").
+   *
+   * An optional `delimiter` overrides the field separator (default `,`).
+   */
+  readFile(path: string, delimiter?: string | undefined | null): Promise<void>
+  /**
+   * Serialize the first worksheet to a CSV `Buffer`.
+   *
+   * Optional `delimiter` (default `,`) and `withBom` (default `false`).
+   * Only `worksheets[0]` is written (CSV is single-sheet).
+   */
+  write(delimiter?: string | undefined | null, withBom?: boolean | undefined | null): Promise<Buffer>
+  /**
+   * Serialize the first worksheet to a CSV file on disk.
+   *
+   * Optional `delimiter` (default `,`) and `withBom` (default `false`).
+   */
+  writeFile(path: string, delimiter?: string | undefined | null, withBom?: boolean | undefined | null): Promise<void>
 }
 
 /**
