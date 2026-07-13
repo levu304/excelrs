@@ -108,7 +108,6 @@ pub fn parse_csv(data: &[u8], delimiter: u8) -> Result<WorkbookInner> {
     let mut current_row: Vec<String> = Vec::new();
     let mut field = String::new();
     let mut quoted = false;
-    let mut has_content = false;
     let mut chars = s.chars().peekable();
 
     macro_rules! emit_field {
@@ -119,15 +118,7 @@ pub fn parse_csv(data: &[u8], delimiter: u8) -> Result<WorkbookInner> {
 
     macro_rules! emit_row {
         () => {{
-            if !current_row.is_empty() {
-                // Trim trailing empty fields
-                while current_row.last().map(|f| f.is_empty()).unwrap_or(false) {
-                    current_row.pop();
-                }
-            }
-            if !current_row.is_empty() || rows.is_empty() {
-                rows.push(std::mem::take(&mut current_row));
-            }
+            rows.push(std::mem::take(&mut current_row));
         }};
     }
 
@@ -161,19 +152,14 @@ pub fn parse_csv(data: &[u8], delimiter: u8) -> Result<WorkbookInner> {
             // Anything else → accumulate in current field
             _ => {
                 field.push(ch);
-                has_content = true;
             }
         }
     }
 
-    // Flush last field + row (only if there was actual content)
-    if has_content || field.is_empty() {
+    // Flush last field + row if there's pending content (no trailing newline)
+    if !current_row.is_empty() || !field.is_empty() {
         emit_field!();
-        if !current_row.is_empty() && (has_content || !rows.is_empty()) {
-            emit_row!();
-        }
-    } else {
-        emit_field!();
+        emit_row!();
     }
 
     // Build workbook
@@ -216,11 +202,21 @@ pub fn serialize_csv(inner: &WorkbookInner, delimiter: u8, with_bom: bool) -> Re
     }
 
     let d = delimiter as char;
+    let max_row = ws.row_count();
     let mut output = String::new();
+    let mut prev_row_num = 0u32;
 
     for row in &all_rows {
+        let rn = row.number();
+        // Emit blank rows for gaps between previous row and this one
+        for _ in 0..(rn - prev_row_num - 1) {
+            output.push('\n');
+        }
+        prev_row_num = rn;
+
         let max_col = row.max_col();
         if max_col == 0 {
+            output.push('\n');
             continue;
         }
 
@@ -229,9 +225,6 @@ pub fn serialize_csv(inner: &WorkbookInner, delimiter: u8, with_bom: bool) -> Re
         let mut col_texts: Vec<Option<String>> = vec![None; col_count];
 
         for cell in row.sorted_cells() {
-            if cell.is_effectively_empty() {
-                continue;
-            }
             let idx = (cell.col() - 1) as usize;
             if idx < col_count {
                 col_texts[idx] = Some(cell_value_to_text(&cell.value()));
@@ -244,9 +237,16 @@ pub fn serialize_csv(inner: &WorkbookInner, delimiter: u8, with_bom: bool) -> Re
                 output.push(d);
             }
             if let Some(text) = maybe_text {
-                output.push_str(&quote_field(text, delimiter));
+                if !text.is_empty() {
+                    output.push_str(&quote_field(text, delimiter));
+                }
             }
         }
+        output.push('\n');
+    }
+
+    // Fill trailing blank rows up to max_row
+    for _ in 0..(max_row - prev_row_num) {
         output.push('\n');
     }
 
@@ -627,5 +627,54 @@ mod tests {
         let content = std::fs::read_to_string(&tmp).unwrap();
         assert_eq!(content, "99\n");
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    // ---- Round-trip regression tests (F1 & F2) ----
+
+    #[test]
+    fn test_round_trip_trailing_empty_column() {
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("Sheet1".into());
+        ws.add_row(vec![
+            serde_json::json!(1),
+            serde_json::json!(2),
+            serde_json::Value::Null,
+        ]);
+
+        let bytes = serialize_csv(&inner, b',', false).unwrap();
+        let result = String::from_utf8(bytes.clone()).unwrap();
+        assert_eq!(result, "1,2,\n");
+
+        // Parse back
+        let parsed = parse_csv(&bytes, b',').unwrap();
+        let pws = &parsed.worksheets[0];
+        assert_eq!(pws.row_count(), 1);
+        assert_eq!(pws.column_count(), 3);
+
+        // Re-serialize
+        let bytes2 = serialize_csv(&parsed, b',', false).unwrap();
+        let result2 = String::from_utf8(bytes2).unwrap();
+        assert_eq!(result2, "1,2,\n");
+    }
+
+    #[test]
+    fn test_round_trip_sparse_rows() {
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("Sheet1".into());
+        ws.insert_cell_value(1, 1, CellValue::string("r1"));
+        ws.insert_cell_value(5, 1, CellValue::string("r5"));
+
+        let bytes = serialize_csv(&inner, b',', false).unwrap();
+        let result = String::from_utf8(bytes.clone()).unwrap();
+        assert_eq!(result, "r1\n\n\n\nr5\n");
+
+        // Parse back
+        let parsed = parse_csv(&bytes, b',').unwrap();
+        let pws = &parsed.worksheets[0];
+        assert_eq!(pws.row_count(), 5);
+
+        let cell_a5 = pws.get_cell_by_address("A5".into());
+        assert_eq!(cell_a5.value().string, Some("r5".into()));
+        assert_eq!(cell_a5.value().value_type, "String");
     }
 }
