@@ -706,7 +706,14 @@ mod tests {
         assert_eq!(out, "\nr2\n\n\n\n\nr7\n");
         let p = parse_csv(out.as_bytes(), b',').unwrap();
         assert_eq!(p.worksheets[0].row_count(), 7);
-        assert_eq!(p.worksheets[0].get_cell_by_address("A7".into()).value().string.as_deref(), Some("r7"));
+        assert_eq!(
+            p.worksheets[0]
+                .get_cell_by_address("A7".into())
+                .value()
+                .string
+                .as_deref(),
+            Some("r7")
+        );
     }
 
     #[test]
@@ -715,7 +722,10 @@ mod tests {
         let p = parse_csv(b"r1\r\n\r\n\r\n\r\nr5\r\n", b',').unwrap();
         let ws = &p.worksheets[0];
         assert_eq!(ws.row_count(), 5);
-        assert_eq!(ws.get_cell_by_address("A5".into()).value().string.as_deref(), Some("r5"));
+        assert_eq!(
+            ws.get_cell_by_address("A5".into()).value().string.as_deref(),
+            Some("r5")
+        );
     }
 
     #[test]
