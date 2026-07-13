@@ -6,31 +6,6 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.8.2] — 2026-07-12
-
-### Fixed
-
-- Added tsconfig.json and @types/node to resolve TypeScript type errors in tests and type defs
-- Fixed stale camelCase/snake_case property mismatches in test files (gradientType, numFmt, wrapText, etc.)
-- Fixed null-safety and cast issues in test assertions
-- Added tsc --noEmit typecheck script
-
-## [0.7.0] — 2026-07-11
-
-### Added
-
-- **Defined names (named ranges)** — read and write workbook-global and sheet-scoped (local) names via the napi API:
-  - `wb.addDefinedName(name, value, sheet?)` — add or upsert a name (sheet-scoped when `sheet` is given)
-  - `wb.removeDefinedName(name, sheet?)` — remove a name (no-op if absent)
-  - `wb.getDefinedName(name, sheet?)` — look up a name; returns `null` when not found
-  - `wb.definedNames` — getter returning all `DefinedName` objects
-- Reader parses `<definedNames>` from `xl/workbook.xml`, resolving `localSheetId` → sheet name; tolerant of namespace-prefixed elements and out-of-range IDs
-- Writer emits `<definedNames>` with correct `localSheetId` scoping; errors on unresolved sheet scope (prevents silent scope loss)
-
-### Changed
-
-- Bump version 0.6.0 → 0.7.0. No breaking public-API changes.
-
 ## [0.9.0] — 2026-07-13
 
 ### Added
@@ -60,6 +35,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed stale camelCase/snake_case property mismatches in test files (gradientType, numFmt, wrapText, etc.)
 - Fixed null-safety and cast issues in test assertions
 - Added tsc --noEmit typecheck script
+
+## [0.7.0] — 2026-07-11
+
+### Added
+
+- **Defined names (named ranges)** — read and write workbook-global and sheet-scoped (local) names via the napi API:
+  - `wb.addDefinedName(name, value, sheet?)` — add or upsert a name (sheet-scoped when `sheet` is given)
+  - `wb.removeDefinedName(name, sheet?)` — remove a name (no-op if absent)
+  - `wb.getDefinedName(name, sheet?)` — look up a name; returns `null` when not found
+  - `wb.definedNames` — getter returning all `DefinedName` objects
+- Reader parses `<definedNames>` from `xl/workbook.xml`, resolving `localSheetId` → sheet name; tolerant of namespace-prefixed elements and out-of-range IDs
+- Writer emits `<definedNames>` with correct `localSheetId` scoping; errors on unresolved sheet scope (prevents silent scope loss)
+
+### Changed
+
+- Bump version 0.6.0 → 0.7.0. No breaking public-API changes.
 
 ## [0.8.1] — 2026-07-12
 
