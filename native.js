@@ -591,5 +591,6 @@ module.exports.Cell = nativeBinding.Cell
 module.exports.Column = nativeBinding.Column
 module.exports.Row = nativeBinding.Row
 module.exports.Workbook = nativeBinding.Workbook
+module.exports.WorkbookCsv = nativeBinding.WorkbookCsv
 module.exports.WorkbookXlsx = nativeBinding.WorkbookXlsx
 module.exports.Worksheet = nativeBinding.Worksheet
