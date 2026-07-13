@@ -77,7 +77,7 @@ pub struct GradientStop {
 /// Cell fill: kind, foreground, background, and pattern.
 #[napi(object)]
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct Fill {
     /// Fill kind: `"none"` | `"solid"` | `"pattern"` | `"gradient"`.
     pub kind: String,
@@ -150,7 +150,7 @@ pub struct BorderStyle {
 /// All cell-border sides plus diagonals. Each side is optional; `None` means no border.
 #[napi(object)]
 #[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct Border {
     pub top: Option<BorderStyle>,
     pub right: Option<BorderStyle>,
@@ -174,7 +174,7 @@ pub struct Border {
 /// Cell content alignment and text wrapping.
 #[napi(object)]
 #[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct Alignment {
     /// Horizontal: `"left"` | `"center"` | `"right"` | `"fill"` | `"justify"`.
     pub horizontal: Option<String>,
@@ -196,7 +196,7 @@ pub struct Alignment {
 /// specific fields.
 #[napi(object)]
 #[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct Style {
     pub font: Option<Font>,
     pub fill: Option<Fill>,
@@ -501,7 +501,7 @@ mod tests {
                 "bottom": { "style": "thin", "color": "FF000000" }
             },
             "alignment": { "horizontal": "center", "vertical": "middle" },
-            "num_fmt": "0.00%"
+            "numFmt": "0.00%"
         });
         let style: Style = serde_json::from_value(raw).unwrap();
         let validated = style.validate().unwrap();
@@ -846,7 +846,7 @@ mod tests {
         // This test validates that serialize-deserialize round-trips correctly:
         // the Style object is fully replaced, not merged.
         let raw = serde_json::json!({
-            "num_fmt": "0.00%"
+            "numFmt": "0.00%"
         });
         let style: Style = serde_json::from_value(raw).unwrap();
         assert!(style.font.is_none()); // not filled in from any "previous" style

@@ -15,10 +15,10 @@ use crate::model::style::Style;
 /// (e.g. defining only column B), pass the `colNum` explicitly.
 #[napi]
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Column {
     /// 1-indexed column number. 0 = auto-assign in set_columns.
-    /// Accepts `colNum` (camelCase) from JS serde deserialization.
-    #[serde(default, rename = "colNum")]
+    #[serde(default)]
     pub(crate) col_num: u32,
     header: String,
     key: String,

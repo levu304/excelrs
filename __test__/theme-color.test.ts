@@ -14,7 +14,7 @@ async function exceljsToExcelrs(make: (ws: ExcelJS.Worksheet) => void): Promise<
   make(ws)
   const buf = await wbjs.xlsx.writeBuffer()
   const wb = new Workbook()
-  await wb.xlsx.read(buf as Buffer)
+  await wb.xlsx.read(buf as never)
   return wb
 }
 
@@ -38,7 +38,7 @@ test('F1: font theme color resolves to default accent1 ARGB', async () => {
 test('F2: font theme color with tint resolves approximately', async () => {
   const wb = await exceljsToExcelrs((ws) => {
     ws.getCell('A1').value = 'hello'
-    ws.getCell('A1').font = { color: { theme: 4, tint: -0.5 } }
+    ws.getCell('A1').font = { color: { theme: 4, tint: -0.5 } as unknown as ExcelJS.Color }
   })
   const color = wb.getWorksheet('Sheet1')!.getCell('A1').style?.font?.color
   expect(color).toBeDefined()
@@ -84,11 +84,11 @@ test('F5: round-trip themed ARGB through excelrs write', async () => {
   const wsIn = wbjsIn.addWorksheet('Sheet1')
   wsIn.getCell('A1').value = 'hello'
   wsIn.getCell('A1').font = { color: { theme: 4 } }
-  const bufIn = (await wbjsIn.xlsx.writeBuffer()) as Buffer
+  const bufIn = await wbjsIn.xlsx.writeBuffer()
 
   // 2. Read with excelrs
   const wb = new Workbook()
-  await wb.xlsx.read(bufIn)
+  await wb.xlsx.read(bufIn as never)
   const colorIn = wb.getWorksheet('Sheet1')!.getCell('A1').style?.font?.color
   expect(colorIn).toBe('FF4F81BD')
 
@@ -97,7 +97,9 @@ test('F5: round-trip themed ARGB through excelrs write', async () => {
 
   // 4. Read with ExcelJS
   const wbjsOut = new ExcelJS.Workbook()
-  await wbjsOut.xlsx.load(bufOut)
+  // exceljs load() expects legacy Buffer type; newer @types/node returns
+  // Buffer<ArrayBufferLike>.  `as never` bridges the version gap.
+  await wbjsOut.xlsx.load(bufOut as never)
   const colorOut = wbjsOut.getWorksheet('Sheet1')!.getCell('A1').font?.color
   expect(colorOut?.argb?.toUpperCase()).toBe('FF4F81BD')
 })
@@ -122,7 +124,7 @@ test('F6: default scheme resolves when theme1.xml has standard palette', async (
 test('F7: indexed color resolves to system palette entry', async () => {
   const wb = await exceljsToExcelrs((ws) => {
     ws.getCell('A1').value = 'hello'
-    ws.getCell('A1').fill = { type: 'pattern', pattern: 'solid', fgColor: { indexed: 8 } }
+    ws.getCell('A1').fill = { type: 'pattern', pattern: 'solid', fgColor: { indexed: 8 } as unknown as ExcelJS.Color }
   })
   const color = wb.getWorksheet('Sheet1')!.getCell('A1').style?.fill?.foreground
   expect(color).toBeDefined()

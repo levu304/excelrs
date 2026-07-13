@@ -7,7 +7,7 @@ import { Workbook } from '../index'
 // ---------------------------------------------------------------------------
 
 /** Build a test .xlsx buffer using exceljs for reference content. */
-async function buildTestBuffer(): Promise<Buffer> {
+async function buildTestBuffer() {
   const wb = new ExcelJS.Workbook()
   const ws = wb.addWorksheet('Sheet1')
 
@@ -33,8 +33,7 @@ async function buildTestBuffer(): Promise<Buffer> {
   ws2.getCell('A1').value = 'Name'
   ws2.getCell('B1').value = 'Age'
 
-  const buf: Buffer = await wb.xlsx.writeBuffer() as Buffer
-  return buf
+  return wb.xlsx.writeBuffer()
 }
 
 // ---------------------------------------------------------------------------
@@ -44,7 +43,7 @@ async function buildTestBuffer(): Promise<Buffer> {
 test('readXlsxBuffer reads all sheets and cell types', async () => {
   const buf = await buildTestBuffer()
   const wb = new Workbook()
-  await wb.xlsx.read(buf)
+  await wb.xlsx.read(buf as never)
 
   expect(wb.worksheetCount).toBe(2)
 
@@ -110,10 +109,10 @@ test('readXlsxBuffer reads all sheets and cell types', async () => {
 test('readXlsxBuffer handles empty worksheets', async () => {
   const wbjs = new ExcelJS.Workbook()
   wbjs.addWorksheet('Empty')
-  const buf: Buffer = await wbjs.xlsx.writeBuffer() as Buffer
+  const buf = await wbjs.xlsx.writeBuffer()
 
   const wb = new Workbook()
-  await wb.xlsx.read(buf)
+  await wb.xlsx.read(buf as never)
   expect(wb.worksheetCount).toBe(1)
   const ws = wb.getWorksheet('Empty')!
   expect(ws.name).toBe('Empty')
@@ -137,14 +136,14 @@ test('readXlsxFile reads from file path', async () => {
   const wbjs = new ExcelJS.Workbook()
   const ws = wbjs.addWorksheet('FileTest')
   ws.getCell('A1').value = 99
-  const buf: Buffer = await wbjs.xlsx.writeBuffer() as Buffer
+  const buf = await wbjs.xlsx.writeBuffer()
 
   // Write to temp file
   const fs = await import('fs')
   const os = await import('os')
   const path = await import('path')
   const tmpFile = path.join(os.tmpdir(), `excelrs-test-${Date.now()}.xlsx`)
-  fs.writeFileSync(tmpFile, buf)
+  fs.writeFileSync(tmpFile, buf as never)
 
   const wb = new Workbook()
   try {
@@ -170,9 +169,9 @@ test('readXlsxBuffer handles multi-cell formula references', async () => {
   }
   ws.getCell('A6').value = { formula: 'SUM(A1:A5)' }
 
-  const buf: Buffer = await wbjs.xlsx.writeBuffer() as Buffer
+  const buf = await wbjs.xlsx.writeBuffer()
   const wb = new Workbook()
-  await wb.xlsx.read(buf)
+  await wb.xlsx.read(buf as never)
 
   const cell = wb.getWorksheet('FormulaTest')!.getCell('A6')
   expect(cell.formula).toBeTruthy()
@@ -187,9 +186,9 @@ test('readXlsxBuffer handles long strings', async () => {
   const ws = wbjs.addWorksheet('LongStr')
   ws.getCell('A1').value = longStr
 
-  const buf: Buffer = await wbjs.xlsx.writeBuffer() as Buffer
+  const buf = await wbjs.xlsx.writeBuffer()
   const wb = new Workbook()
-  await wb.xlsx.read(buf)
+  await wb.xlsx.read(buf as never)
 
   const cell = wb.getWorksheet('LongStr')!.getCell('A1')
   expect(cell.value.valueType).toBe('String')

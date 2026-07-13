@@ -6,6 +6,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.2] — 2026-07-12
+
+### Fixed
+
+- Added tsconfig.json and @types/node to resolve TypeScript type errors in tests and type defs
+- Fixed stale camelCase/snake_case property mismatches in test files (gradientType, numFmt, wrapText, etc.)
+- Fixed null-safety and cast issues in test assertions
+- Added tsc --noEmit typecheck script
+
 ## [0.7.0] — 2026-07-11
 
 ### Added

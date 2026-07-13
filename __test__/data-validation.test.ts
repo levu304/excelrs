@@ -43,9 +43,9 @@ test('data validation round-trip via exceljs', async () => {
   const wbjs = new ExcelJS.default.Workbook()
   const xlws = wbjs.addWorksheet('Sheet1')
   xlws.getCell('A1').value = 5
-
-  // exceljs v4.4.0 API: ws.dataValidations.add(address, { type, operator, formulae, ... })
-  xlws.dataValidations.add('A1', {
+  // exceljs v4.4.0 Worksheet type omits dataValidations.add() from its public API,
+  // but it works at runtime. Defensive `;` protects against ASI merging with the line above.
+  ;(xlws as unknown as { dataValidations: { add: Function } }).dataValidations.add('A1', {
     type: 'whole',
     operator: 'between',
     formulae: [1, 10],
@@ -53,7 +53,7 @@ test('data validation round-trip via exceljs', async () => {
   })
 
   const raw = await wbjs.xlsx.writeBuffer()
-  const buf = raw instanceof Buffer ? raw : Buffer.from(raw as never)
+  const buf = raw instanceof Buffer ? raw : Buffer.from(raw)
 
   const wb = new Workbook()
   await wb.xlsx.read(buf)

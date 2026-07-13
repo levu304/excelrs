@@ -41,14 +41,15 @@ test('CellValue setter throws on undefined (napi-rs constraint)', () => {
   const cell = new Cell('F6', 6, 6)
   // napi-rs does not convert JS `undefined` to serde_json::Value — throws instead.
   // Use `null` explicitly to set a Null value.
-  expect(() => { cell.value = undefined }).toThrow()
+  expect(() => { cell.value = undefined as never }).toThrow()
 })
 
 test('readonly fields are not writable from JS', () => {
   const cell = new Cell('A1', 1, 1)
   // These should be readonly — TS would catch at compile time, but at runtime
   // the assignment is silently ignored or throws in strict mode
-  expect(() => { (cell as any).address = 'B2' }).toThrow()
+  // Cast through unknown to set readonly property at runtime
+  expect(() => { (cell as unknown as { address: string }).address = 'B2' }).toThrow()
 })
 
 test('serial get/set round-trip preserves value', () => {
