@@ -217,6 +217,8 @@ jobs:
           rm -rf "$SMOKE_DIR"
 
       - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: >-
           gh release create "$GITHUB_REF_NAME"
           --generate-notes
