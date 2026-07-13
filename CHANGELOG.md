@@ -6,6 +6,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] — 2026-07-13
+
+### Added
+
+- **ExcelJS porting roadmap** — `ROADMAP.md` at repo root: full ExcelJS (pinned 4.4.0) → excelrs parity matrix (30 feature areas, status `shipped`/`partial`/`planned`/`n-a`) plus a prioritized porting roadmap sequenced across v0.11.0 → post-v1.
+- **`exceljs-parity` OpenSpec capability** — tracks parity and governs how the porting roadmap is derived, prioritized, and consumed by future releases.
+
+### Changed
+
+- Synced `theme-color-references` and `indexed-color-references` specs to `openspec/specs/` (shipped in v0.6.0; previously unsynced).
+- Archived OpenSpec changes `v0-10-0-exceljs-roadmap-align` and `v0.6.0-theme-color-references`.
+
+### Notes
+
+- Docs-only release. No runtime or public-API changes. `package.json` intentionally **not** bumped (stays `0.9.0`); no npm publish. Tag `v0.10.0` is a roadmap milestone marker only.
+
 ## [0.9.0] — 2026-07-13
 
 ### Added
@@ -277,6 +293,8 @@ first fully working release; v0.2.0 and v0.2.1 are superseded.
   and GitHub Release on tag push.
 - **Documentation** — complete spec (docs/spec.md), two architecture reviews.
 
+[0.10.0]: https://github.com/levu304/excelrs/releases/tag/v0.10.0
+[0.9.0]: https://github.com/levu304/excelrs/releases/tag/v0.9.0
 [0.8.0]: https://github.com/levu304/excelrs/releases/tag/v0.8.0
 [0.8.1]: https://github.com/levu304/excelrs/releases/tag/v0.8.1
 [0.7.0]: https://github.com/levu304/excelrs/releases/tag/v0.7.0
