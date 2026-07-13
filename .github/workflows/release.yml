@@ -73,6 +73,8 @@ jobs:
   publish:
     needs: [build]
     runs-on: ubuntu-22.04
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
     permissions:
       contents: write
       id-token: write
@@ -137,7 +139,7 @@ jobs:
       - name: Publish platform packages
         run: |
           for dir in npm/*/; do
-            (cd "$dir" && npm publish --provenance --access public) || exit 1
+            (cd "$dir" && npm publish --access public) || exit 1
           done
 
       - name: Publish to npm (main package)
@@ -154,7 +156,7 @@ jobs:
             JSON.stringify(pkg, null, 2) + '\n'
           );
           "
-          npm publish --provenance --access public
+          npm publish --access public
 
       - name: Verify all 4 packages on npm
         run: |
