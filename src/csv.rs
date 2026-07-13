@@ -202,7 +202,6 @@ pub fn serialize_csv(inner: &WorkbookInner, delimiter: u8, with_bom: bool) -> Re
     }
 
     let d = delimiter as char;
-    let max_row = ws.row_count();
     let mut output = String::new();
     let mut prev_row_num = 0u32;
 
@@ -242,11 +241,6 @@ pub fn serialize_csv(inner: &WorkbookInner, delimiter: u8, with_bom: bool) -> Re
                 }
             }
         }
-        output.push('\n');
-    }
-
-    // Fill trailing blank rows up to max_row
-    for _ in 0..(max_row - prev_row_num) {
         output.push('\n');
     }
 
@@ -676,5 +670,70 @@ mod tests {
         let cell_a5 = pws.get_cell_by_address("A5".into());
         assert_eq!(cell_a5.value().string, Some("r5".into()));
         assert_eq!(cell_a5.value().value_type, "String");
+    }
+
+    #[test]
+    fn test_quoted_trailing_empty() {
+        let p = parse_csv(br#""a",b,"#, b',').unwrap();
+        let ws = &p.worksheets[0];
+        assert_eq!(ws.row_count(), 1);
+        assert_eq!(ws.column_count(), 3);
+        assert_eq!(ws.get_cell_by_address("A1".into()).value().string.as_deref(), Some("a"));
+        assert_eq!(ws.get_cell_by_address("B1".into()).value().string.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn test_multi_trailing_empty() {
+        assert_eq!(parse_csv(b"a,b,,\n", b',').unwrap().worksheets[0].column_count(), 4);
+        assert_eq!(parse_csv(b"a,,,\n", b',').unwrap().worksheets[0].column_count(), 4);
+    }
+
+    #[test]
+    fn test_empty_quote_no_loss() {
+        let e = parse_csv(b"1,,\"\"", b',').unwrap();
+        assert_eq!(e.worksheets[0].column_count(), 3);
+        let e2 = parse_csv(&serialize_csv(&e, b',', false).unwrap(), b',').unwrap();
+        assert_eq!(e2.worksheets[0].column_count(), 3);
+    }
+
+    #[test]
+    fn test_sparse_middle_end() {
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("Sheet1".into());
+        ws.insert_cell_value(2, 1, CellValue::string("r2"));
+        ws.insert_cell_value(7, 1, CellValue::string("r7"));
+        let out = String::from_utf8(serialize_csv(&inner, b',', false).unwrap()).unwrap();
+        assert_eq!(out, "\nr2\n\n\n\n\nr7\n");
+        let p = parse_csv(out.as_bytes(), b',').unwrap();
+        assert_eq!(p.worksheets[0].row_count(), 7);
+        assert_eq!(p.worksheets[0].get_cell_by_address("A7".into()).value().string.as_deref(), Some("r7"));
+    }
+
+    #[test]
+    fn test_crlf_sparse_rows() {
+        // CRLF endings, blank lines between data must preserve positions
+        let p = parse_csv(b"r1\r\n\r\n\r\n\r\nr5\r\n", b',').unwrap();
+        let ws = &p.worksheets[0];
+        assert_eq!(ws.row_count(), 5);
+        assert_eq!(ws.get_cell_by_address("A5".into()).value().string.as_deref(), Some("r5"));
+    }
+
+    #[test]
+    fn test_custom_delimiter_trailing() {
+        let p = parse_csv(b"a;b;", b';').unwrap();
+        assert_eq!(p.worksheets[0].column_count(), 3);
+    }
+
+    #[test]
+    fn test_round_trip_idempotent() {
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("Sheet1".into());
+        ws.insert_cell_value(1, 1, CellValue::string("r1"));
+        ws.insert_cell_value(5, 1, CellValue::string("r5"));
+        let s1 = serialize_csv(&inner, b',', false).unwrap();
+        let s2 = serialize_csv(&parse_csv(&s1, b',').unwrap(), b',', false).unwrap();
+        let s3 = serialize_csv(&parse_csv(&s2, b',').unwrap(), b',', false).unwrap();
+        assert_eq!(s1, s2);
+        assert_eq!(s2, s3);
     }
 }
