@@ -85,7 +85,9 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
         for (ref_, url) in &links {
             // Resolve cell address to set a Hyperlink CellValue
             if let Some((row, col)) = ref_to_rowcol(ref_) {
-                let cv = CellValue::hyperlink(url.clone(), None);
+                let existing = inner.worksheets[i].get_cell_by_rc(row, col);
+                let display_text = existing.value().string.filter(|s| !s.is_empty());
+                let cv = CellValue::hyperlink(url.clone(), display_text);
                 inner.worksheets[i].insert_cell_value(row, col, cv);
             }
         }
@@ -305,7 +307,7 @@ fn parse_autofilter_from_xml(xml: &str) -> Option<String> {
     loop {
         buf.clear();
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Empty(ref e)) if e.name().as_ref() == b"autoFilter" => {
+            Ok(Event::Empty(ref e)) | Ok(Event::Start(ref e)) if e.name().as_ref() == b"autoFilter" => {
                 for attr in e.attributes().flatten() {
                     if attr.key.as_ref() == b"ref" {
                         return Some(String::from_utf8_lossy(&attr.value).into_owned());
@@ -325,7 +327,10 @@ fn parse_autofilter_from_xml(xml: &str) -> Option<String> {
 // Sheet views reader (v0.11.0) — freeze/split panes
 // ---------------------------------------------------------------------------
 
-fn parse_sheet_views(data: &[u8], sheet_count: usize) -> Result<Vec<Vec<crate::model::sheet_view::SheetView>>, ExcelrsError> {
+fn parse_sheet_views(
+    data: &[u8],
+    sheet_count: usize,
+) -> Result<Vec<Vec<crate::model::sheet_view::SheetView>>, ExcelrsError> {
     use std::io::Cursor;
     let cursor = Cursor::new(data);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
@@ -376,9 +381,15 @@ fn parse_views_from_xml(xml: &str) -> Vec<crate::model::sheet_view::SheetView> {
                 if let Some(ref mut sv) = current {
                     for attr in e.attributes().flatten() {
                         match attr.key.as_ref() {
-                            b"xSplit" => sv.x_split = Some(std::str::from_utf8(&attr.value).unwrap_or("0").parse().unwrap_or(0)),
-                            b"ySplit" => sv.y_split = Some(std::str::from_utf8(&attr.value).unwrap_or("0").parse().unwrap_or(0)),
-                            b"topLeftCell" => sv.top_left_cell = Some(String::from_utf8_lossy(&attr.value).into_owned()),
+                            b"xSplit" => {
+                                sv.x_split = Some(std::str::from_utf8(&attr.value).unwrap_or("0").parse().unwrap_or(0))
+                            }
+                            b"ySplit" => {
+                                sv.y_split = Some(std::str::from_utf8(&attr.value).unwrap_or("0").parse().unwrap_or(0))
+                            }
+                            b"topLeftCell" => {
+                                sv.top_left_cell = Some(String::from_utf8_lossy(&attr.value).into_owned())
+                            }
                             b"activePane" => sv.active_pane = Some(String::from_utf8_lossy(&attr.value).into_owned()),
                             _ => {}
                         }
@@ -412,7 +423,10 @@ fn parse_boolean_flag(val: &[u8]) -> Option<bool> {
     }
 }
 
-fn parse_sheet_protection(data: &[u8], sheet_count: usize) -> Result<Vec<Option<crate::model::sheet_protection::SheetProtection>>, ExcelrsError> {
+fn parse_sheet_protection(
+    data: &[u8],
+    sheet_count: usize,
+) -> Result<Vec<Option<crate::model::sheet_protection::SheetProtection>>, ExcelrsError> {
     use std::io::Cursor;
     let cursor = Cursor::new(data);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
@@ -507,7 +521,10 @@ fn parse_sheet_hyperlinks(data: &[u8], sheet_count: usize) -> Result<Vec<Vec<(St
     Ok(per_sheet)
 }
 
-fn parse_sheet_rels(archive: &mut zip::ZipArchive<Cursor<&[u8]>>, path: &str) -> std::collections::HashMap<String, String> {
+fn parse_sheet_rels(
+    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    path: &str,
+) -> std::collections::HashMap<String, String> {
     use quick_xml::events::Event;
     use quick_xml::Reader;
 
@@ -596,7 +613,9 @@ fn ref_to_rowcol(ref_: &str) -> Option<(u32, u32)> {
         return None;
     }
     let row: u32 = row_str.parse().ok()?;
-    let col: u32 = col_str.chars().fold(0, |acc, c| acc * 26 + (c.to_ascii_uppercase() as u32 - 'A' as u32 + 1));
+    let col: u32 = col_str
+        .chars()
+        .fold(0, |acc, c| acc * 26 + (c.to_ascii_uppercase() as u32 - 'A' as u32 + 1));
     Some((row, col))
 }
 
@@ -1036,6 +1055,16 @@ mod tests {
         let xml = r##"<worksheet><sheetData></sheetData></worksheet>"##;
         let result = parse_autofilter_from_xml(xml);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_autofilter_start_with_children() {
+        let xml = r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <autoFilter ref="A1:C10"><filterColumn colId="0"><filters><filter val="x"/></filters></filterColumn></autoFilter>
+</worksheet>"##;
+        let result = parse_autofilter_from_xml(xml);
+        assert_eq!(result, Some("A1:C10".to_string()));
     }
 
     // -----------------------------------------------------------------------

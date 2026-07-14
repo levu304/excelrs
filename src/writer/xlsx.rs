@@ -603,6 +603,12 @@ fn emit_sheet_protection<W: Write>(w: &mut W, ws: &Worksheet) -> Result<(), Exce
     if let Some(v) = sp.sort {
         attrs.push_str(if v { " sort=\"1\"" } else { " sort=\"0\"" });
     }
+    if let Some(v) = &sp.password_hash {
+        attrs.push_str(&format!(" passwordHash=\"{}\"", escape(v)));
+    }
+    if let Some(v) = &sp.salt_value {
+        attrs.push_str(&format!(" saltValue=\"{}\"", escape(v)));
+    }
     write_str(w, &format!("<sheetProtection{}/>", attrs))?;
     Ok(())
 }
@@ -1987,6 +1993,40 @@ mod tests {
         assert!(sheet2.contains(r##"ref="A1" r:id="rId1""##));
     }
 
+    /// F2: hyperlink display text survives round-trip
+    #[test]
+    fn test_hyperlink_display_text_round_trip() {
+        use crate::reader::xlsx::workbook_inner_from_bytes;
+
+        let mut ws = Worksheet::new("HyperlinkText".into());
+        ws.set_id(1);
+
+        // Insert a hyperlink with display text
+        ws.insert_cell_value(
+            1,
+            1,
+            CellValue::hyperlink("https://example.com/target", Some("Display Me".into())),
+        );
+
+        let mut inner = WorkbookInner::new();
+        inner.worksheets.push(ws);
+
+        let bytes = workbook_to_bytes(&inner).unwrap();
+        let re_read = workbook_inner_from_bytes(&bytes).unwrap();
+
+        let cell = re_read.worksheets()[0].get_cell_by_address("A1".into());
+        assert_eq!(
+            cell.value().hyperlink_text.as_deref(),
+            Some("Display Me"),
+            "hyperlink display text must survive round-trip"
+        );
+        assert_eq!(
+            cell.value().hyperlink.as_deref(),
+            Some("https://example.com/target"),
+            "hyperlink URL must survive round-trip"
+        );
+    }
+
     #[test]
     fn test_write_defined_name_unresolved_sheet_errors() {
         let ws = Worksheet::new("Sheet1".into());
@@ -2007,6 +2047,43 @@ mod tests {
         assert!(result.is_ok(), "existing sheet should succeed");
         let output = String::from_utf8(out).unwrap();
         assert!(output.contains(r##"localSheetId="0""##), "should emit localSheetId");
+    }
+
+    /// F3: password_hash/salt_value survive round-trip
+    #[test]
+    fn test_password_hash_salt_round_trip() {
+        use crate::model::sheet_protection::SheetProtection;
+        use crate::reader::xlsx::workbook_inner_from_bytes;
+
+        let mut ws = Worksheet::new("PwHash".into());
+        ws.set_id(1);
+
+        let sp = SheetProtection {
+            password_hash: Some("abc123".into()),
+            salt_value: Some("xyz789".into()),
+            ..Default::default()
+        };
+        ws.set_protection(Some(sp));
+
+        let mut inner = WorkbookInner::new();
+        inner.worksheets.push(ws);
+
+        let bytes = workbook_to_bytes(&inner).unwrap();
+        let re_read = workbook_inner_from_bytes(&bytes).unwrap();
+
+        let read_sp = re_read.worksheets()[0].protection();
+        assert!(read_sp.is_some(), "protection should survive round-trip");
+        let read_sp = read_sp.unwrap();
+        assert_eq!(
+            read_sp.password_hash.as_deref(),
+            Some("abc123"),
+            "password_hash should round-trip"
+        );
+        assert_eq!(
+            read_sp.salt_value.as_deref(),
+            Some("xyz789"),
+            "salt_value should round-trip"
+        );
     }
 
     // ---- v0.11.0 round-trip: autoFilter, views, protection, hyperlinks ----
@@ -2043,6 +2120,8 @@ mod tests {
             select_locked_cells: Some(true),
             format_cells: Some(false),
             sort: Some(true),
+            password_hash: Some("abc123".into()),
+            salt_value: Some("xyz789".into()),
             ..Default::default()
         };
         ws.set_protection(Some(sp));
@@ -2082,6 +2161,16 @@ mod tests {
         assert_eq!(read_sp.select_locked_cells, Some(true));
         assert_eq!(read_sp.format_cells, Some(false));
         assert_eq!(read_sp.sort, Some(true));
+        assert_eq!(
+            read_sp.password_hash.as_deref(),
+            Some("abc123"),
+            "password_hash should round-trip"
+        );
+        assert_eq!(
+            read_sp.salt_value.as_deref(),
+            Some("xyz789"),
+            "salt_value should round-trip"
+        );
 
         // Assert hyperlink survived
         let cell_a1 = ws2.get_cell_by_address("A1".into());
