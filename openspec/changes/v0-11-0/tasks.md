@@ -62,14 +62,22 @@ Order F1->F2->F3; cargo test --lib; +3 tests (295->298).
 - password_hash/salt_value not exposed to JS API (round-trip)
 - parse_boolean_flag edge; reader 4x zip reopen (perf)
 
-## 7. Fix unescape bug (QA follow-up)
+## 7. Fix unescape bug (QA follow-up) TDD
 
-TDD QA (6.3) XML-special-character XML-escaped quick-xml +1 (298->299); passwordHash/saltValue round-trip (HIGH) src/reader/xlsx.rs:465
-RED: quote/amp/lt/gt; GREEN: use quick_xml::escape::unescape; decode passwordHash/saltValue on read
+QA audit of F3 (6.3) recommended hardening the password test with
+XML-special-character values to exercise the escaping path. The
+strengthened test caught a real bug: reader stored passwordHash/
+saltValue in XML-escaped form because quick-xml 0.36.2 attributes()
+does not decode entities. Fix: decode on read via unescape().
++1 test (298->299); commit 575b701.
 
+### F4 escaped passwordHash/saltValue corrupt round-trip (HIGH) src/reader/xlsx.rs:465
+
+- [x] 7.1.1 RED: test_password_hash_salt_xml_escaping; value with quote/amp/lt/gt; assert decoded
+- [x] 7.1.2 GREEN: use quick_xml::escape::unescape; decode passwordHash/saltValue on read
 - [x] 7.1.3 VERIFY: cargo test --lib test_password_hash_salt (plain + escaping)
 
 ### Out of scope
 
-- other sheetProtection attrs booleans (no entities); unchanged
+- other sheetProtection attrs are booleans (no entities); unchanged
 - custom-entity expansion: quick-xml non-validating, only 5 predefined; safe
