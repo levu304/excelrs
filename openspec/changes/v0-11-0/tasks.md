@@ -32,3 +32,28 @@
 - [x] 5.2 Update `CHANGELOG.md` with the v0.11.0 entry covering all four features.
 - [x] 5.3 Update ROADMAP.md parity matrix: hyperlinks (read), auto-filter, freeze panes, sheet protection → `shipped` (v0.11.0).
 - [ ] 5.4 Archive this change via `openspec archive v0-11-0` so the four capability specs and the `exceljs-parity` delta land in `openspec/specs/` (post-merge cleanup).
+
+## 6. Fix review findings (PR #13) TDD
+
+Debugger confirmed 3 findings on v0-11-0 @dfdf188.
+Green tests miss them (Empty XML forms only).
+Order F1->F2->F3; cargo test --lib; +3 tests (295->298).
+
+### F1 autoFilter Start not parsed (HIGH) src/reader/xlsx.rs:308
+- [ ] 6.1.1 RED: test_parse_autofilter_start_with_children Some(A1:C10)
+- [ ] 6.1.2 GREEN: match Empty|Start autoFilter; Some(ref)
+- [ ] 6.1.3 VERIFY: cargo test --lib test_parse_autofilter
+
+### F2 hyperlink read drops display text (HIGH) src/reader/xlsx.rs:88
+- [ ] 6.2.1 RED: round-trip A1; assert hyperlink_text == Some(Example)
+- [ ] 6.2.2 GREEN: Step 3.9 preserve text 2nd arg CellValue::hyperlink
+- [ ] 6.2.3 VERIFY: cargo test --lib test_hyperlink
+
+### F3 password stripped on re-save (RISK) src/writer/xlsx.rs:606
+- [ ] 6.3.1 RED: set_protection_inner(password_hash/salt_value)
+- [ ] 6.3.2 GREEN: emit_sheet_protection emit passwordHash/saltValue
+- [ ] 6.3.3 VERIFY: cargo test --lib test_sheet_protection
+
+### Out of scope
+- password_hash/salt_value not exposed to JS API (round-trip)
+- parse_boolean_flag edge; reader 4x zip reopen (perf)
