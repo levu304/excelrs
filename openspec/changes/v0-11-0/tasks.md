@@ -40,19 +40,19 @@ Green tests miss them (Empty XML forms only).
 Order F1->F2->F3; cargo test --lib; +3 tests (295->298).
 
 ### F1 autoFilter Start not parsed (HIGH) src/reader/xlsx.rs:308
-- [ ] 6.1.1 RED: test_parse_autofilter_start_with_children Some(A1:C10)
-- [ ] 6.1.2 GREEN: match Empty|Start autoFilter; Some(ref)
-- [ ] 6.1.3 VERIFY: cargo test --lib test_parse_autofilter
+- [x] 6.1.1 RED: test_parse_autofilter_start_with_children Some(A1:C10)
+- [x] 6.1.2 GREEN: match Empty|Start autoFilter; Some(ref)
+- [x] 6.1.3 VERIFY: cargo test --lib test_parse_autofilter
 
 ### F2 hyperlink read drops display text (HIGH) src/reader/xlsx.rs:88
-- [ ] 6.2.1 RED: round-trip A1; assert hyperlink_text == Some(Example)
-- [ ] 6.2.2 GREEN: Step 3.9 preserve text 2nd arg CellValue::hyperlink
-- [ ] 6.2.3 VERIFY: cargo test --lib test_hyperlink
+- [x] 6.2.1 RED: round-trip A1; assert hyperlink_text == Some(Example)
+- [x] 6.2.2 GREEN: Step 3.9 preserve text 2nd arg CellValue::hyperlink
+- [x] 6.2.3 VERIFY: cargo test --lib test_hyperlink
 
 ### F3 password stripped on re-save (RISK) src/writer/xlsx.rs:606
-- [ ] 6.3.1 RED: set_protection_inner(password_hash/salt_value)
-- [ ] 6.3.2 GREEN: emit_sheet_protection emit passwordHash/saltValue
-- [ ] 6.3.3 VERIFY: cargo test --lib test_sheet_protection
+- [x] 6.3.1 RED: set_protection_inner(password_hash/salt_value)
+- [x] 6.3.2 GREEN: emit_sheet_protection emit passwordHash/saltValue
+- [x] 6.3.3 VERIFY: cargo test --lib test_sheet_protection
 
 ### Out of scope
 - password_hash/salt_value not exposed to JS API (round-trip)
