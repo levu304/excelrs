@@ -28,6 +28,9 @@ use std::collections::HashMap;
 use std::io::Read;
 
 use quick_xml::events::{attributes::Attribute, Event};
+
+/// Maximum decompressed bytes per zip entry (16 MiB). Used to prevent zip-bomb OOM.
+const MAX_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
 use quick_xml::Reader as XmlReader;
 
 use crate::error::ExcelrsError;
@@ -189,11 +192,11 @@ impl StyleTableRead {
 
 /// Read the full content of a zip entry into a `Vec<u8>`.
 fn read_entry<R: Read + std::io::Seek>(archive: &mut zip::ZipArchive<R>, path: &str) -> Result<Vec<u8>, ExcelrsError> {
-    let mut entry = archive
+    let entry = archive
         .by_name(path)
         .map_err(|_| ExcelrsError::Parse(format!("Missing zip entry: '{path}'")))?;
     let mut buf = Vec::new();
-    entry.read_to_end(&mut buf)?;
+    entry.take(MAX_ENTRY_BYTES).read_to_end(&mut buf)?;
     Ok(buf)
 }
 
@@ -461,9 +464,9 @@ pub fn parse_style_table(data: &[u8], scheme: &ThemeColorScheme) -> Result<Style
                     }
                     b"color" if in_gradient_fill && current_gradient_stop.is_some() => {
                         let attrs: Vec<_> = e.attributes().filter_map(|a| a.ok()).collect();
-                        if let Some(c) = str_attr(&attrs, b"rgb") {
+                        if let Some(c) = parse_color(&attrs, scheme) {
                             if let Some(ref mut stop) = current_gradient_stop {
-                                stop.color = c.to_owned();
+                                stop.color = c;
                             }
                         }
                     }
@@ -715,9 +718,9 @@ pub fn parse_styles_and_sheet_maps(
 
     // Resolve theme color scheme from xl/theme/theme1.xml (optional)
     let scheme = match archive.by_name("xl/theme/theme1.xml") {
-        Ok(mut entry) => {
+        Ok(entry) => {
             let mut data = String::new();
-            entry.read_to_string(&mut data)?;
+            entry.take(MAX_ENTRY_BYTES).read_to_string(&mut data)?;
             ThemeColorScheme::from_xml(&data).unwrap_or_default()
         }
         Err(_) => ThemeColorScheme::default(),
@@ -835,6 +838,42 @@ mod tests {
         assert_eq!(stops.len(), 1);
         assert_eq!(stops[0].color, "FF00FF00");
         assert_eq!(stops[0].position, 0.0);
+    }
+
+    #[test]
+    fn test_parse_gradient_fill_theme_stop() {
+        // Regression for finding #2: theme/indexed gradient stops must resolve,
+        // not parse to an empty string.
+        let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <fills count="3">
+            <fill><patternFill patternType="none"/></fill>
+            <fill><patternFill patternType="gray125"/></fill>
+            <fill>
+              <gradientFill type="linear" degree="45">
+                <stop position="0"><color theme="4"/></stop>
+                <stop position="1" color="FFFF0000"/>
+              </gradientFill>
+            </fill>
+          </fills>
+          <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+          <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+          <cellXfs count="2">
+            <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+            <xf numFmtId="0" fontId="0" fillId="2" borderId="0" xfId="0"/>
+          </cellXfs>
+        </styleSheet>"#;
+        let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
+        let fill = &table.fills[2];
+        assert_eq!(fill.kind, "gradient");
+        let stops = fill.gradient_stops.as_ref().unwrap();
+        assert_eq!(stops.len(), 2);
+        // Child-element theme color resolved (was "" before fix)
+        assert_eq!(stops[0].color, "FF4F81BD");
+        assert_eq!(stops[0].position, 0.0);
+        // Attribute-form color still works
+        assert_eq!(stops[1].color, "FFFF0000");
+        assert_eq!(stops[1].position, 1.0);
     }
 
     #[test]

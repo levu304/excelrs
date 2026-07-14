@@ -28,6 +28,12 @@ use super::styles::{self, SheetStyleMap, StyleTableRead};
 use super::workbook;
 
 // ---------------------------------------------------------------------------
+
+/// Maximum decompressed bytes per zip entry (16 MiB). Used to prevent zip-bomb OOM.
+const MAX_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Maximum XML reader events per sheet parse. Used to prevent runaway parsing.
+const MAX_EVENTS: usize = 5_000_000;
 // Public API — WorkbookInner variants (for WorkbookXlsx)
 // ---------------------------------------------------------------------------
 
@@ -151,9 +157,9 @@ fn parse_sheet_data_validations(
     for i in 0..sheet_count {
         let path = format!("xl/worksheets/sheet{}.xml", i + 1);
         let dv = match archive.by_name(&path) {
-            Ok(mut entry) => {
+            Ok(entry) => {
                 let mut xml = String::new();
-                entry.read_to_string(&mut xml)?;
+                entry.take(MAX_ENTRY_BYTES).read_to_string(&mut xml)?;
                 parse_datavalidations_from_xml(&xml)?
             }
             Err(_) => Vec::new(),
@@ -185,8 +191,13 @@ fn parse_datavalidations_from_xml(
     let mut in_formula1 = false;
     let mut in_formula2 = false;
 
+    let mut events: u64 = 0;
     loop {
         buf.clear();
+        events += 1;
+        if events > MAX_EVENTS as u64 {
+            break;
+        }
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
                 match e.name().as_ref() {
@@ -295,9 +306,9 @@ fn parse_sheet_auto_filters(data: &[u8], sheet_count: usize) -> Result<Vec<Optio
     for i in 0..sheet_count {
         let path = format!("xl/worksheets/sheet{}.xml", i + 1);
         let af = match archive.by_name(&path) {
-            Ok(mut entry) => {
+            Ok(entry) => {
                 let mut xml = String::new();
-                entry.read_to_string(&mut xml)?;
+                entry.take(MAX_ENTRY_BYTES).read_to_string(&mut xml)?;
                 parse_autofilter_from_xml(&xml)
             }
             Err(_) => None,
@@ -314,8 +325,13 @@ fn parse_autofilter_from_xml(xml: &str) -> Option<String> {
 
     let mut reader = Reader::from_str(xml);
     let mut buf = Vec::new();
+    let mut events: u64 = 0;
     loop {
         buf.clear();
+        events += 1;
+        if events > MAX_EVENTS as u64 {
+            break;
+        }
         match reader.read_event_into(&mut buf) {
             Ok(Event::Empty(ref e)) | Ok(Event::Start(ref e)) if e.name().as_ref() == b"autoFilter" => {
                 for attr in e.attributes().flatten() {
@@ -349,9 +365,9 @@ fn parse_sheet_views(
     for i in 0..sheet_count {
         let path = format!("xl/worksheets/sheet{}.xml", i + 1);
         let views = match archive.by_name(&path) {
-            Ok(mut entry) => {
+            Ok(entry) => {
                 let mut xml = String::new();
-                entry.read_to_string(&mut xml)?;
+                entry.take(MAX_ENTRY_BYTES).read_to_string(&mut xml)?;
                 parse_views_from_xml(&xml)
             }
             Err(_) => Vec::new(),
@@ -372,8 +388,13 @@ fn parse_views_from_xml(xml: &str) -> Vec<crate::model::sheet_view::SheetView> {
     let mut in_sheet_view = false;
     let mut current: Option<crate::model::sheet_view::SheetView> = None;
 
+    let mut events: u64 = 0;
     loop {
         buf.clear();
+        events += 1;
+        if events > MAX_EVENTS as u64 {
+            break;
+        }
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) if e.name().as_ref() == b"sheetView" => {
                 in_sheet_view = true;
@@ -445,9 +466,9 @@ fn parse_sheet_protection(
     for i in 0..sheet_count {
         let path = format!("xl/worksheets/sheet{}.xml", i + 1);
         let prot = match archive.by_name(&path) {
-            Ok(mut entry) => {
+            Ok(entry) => {
                 let mut xml = String::new();
-                entry.read_to_string(&mut xml)?;
+                entry.take(MAX_ENTRY_BYTES).read_to_string(&mut xml)?;
                 parse_sheet_protection_from_xml(&xml)
             }
             Err(_) => None,
@@ -466,8 +487,13 @@ fn parse_sheet_protection_from_xml(xml: &str) -> Option<crate::model::sheet_prot
     let mut reader = Reader::from_str(xml);
     let mut buf = Vec::new();
 
+    let mut events: u64 = 0;
     loop {
         buf.clear();
+        events += 1;
+        if events > MAX_EVENTS as u64 {
+            break;
+        }
         match reader.read_event_into(&mut buf) {
             Ok(Event::Empty(ref e)) | Ok(Event::Start(ref e)) if e.name().as_ref() == b"sheetProtection" => {
                 let mut sp = crate::model::sheet_protection::SheetProtection::default();
@@ -525,9 +551,9 @@ fn parse_sheet_hyperlinks(data: &[u8], sheet_count: usize) -> Result<Vec<Vec<(St
 
         let rels = parse_sheet_rels(&mut archive, &rels_path);
         let links = match archive.by_name(&path) {
-            Ok(mut entry) => {
+            Ok(entry) => {
                 let mut xml = String::new();
-                entry.read_to_string(&mut xml)?;
+                entry.take(MAX_ENTRY_BYTES).read_to_string(&mut xml)?;
                 parse_hyperlinks_from_xml(&xml, &rels)
             }
             Err(_) => Vec::new(),
@@ -547,9 +573,9 @@ fn parse_sheet_rels(
 
     let mut rels = std::collections::HashMap::new();
     let xml = match archive.by_name(path) {
-        Ok(mut entry) => {
+        Ok(entry) => {
             let mut s = String::new();
-            let _ = entry.read_to_string(&mut s);
+            let _ = entry.take(MAX_ENTRY_BYTES).read_to_string(&mut s);
             s
         }
         Err(_) => return rels,
@@ -557,8 +583,13 @@ fn parse_sheet_rels(
 
     let mut reader = Reader::from_str(&xml);
     let mut buf = Vec::new();
+    let mut events: u64 = 0;
     loop {
         buf.clear();
+        events += 1;
+        if events > MAX_EVENTS as u64 {
+            break;
+        }
         match reader.read_event_into(&mut buf) {
             Ok(Event::Empty(ref e)) | Ok(Event::Start(ref e)) if e.name().as_ref() == b"Relationship" => {
                 let mut rid = String::new();
@@ -590,8 +621,13 @@ fn parse_hyperlinks_from_xml(xml: &str, rels: &std::collections::HashMap<String,
     let mut reader = Reader::from_str(xml);
     let mut buf = Vec::new();
 
+    let mut events: u64 = 0;
     loop {
         buf.clear();
+        events += 1;
+        if events > MAX_EVENTS as u64 {
+            break;
+        }
         match reader.read_event_into(&mut buf) {
             Ok(Event::Empty(ref e)) | Ok(Event::Start(ref e)) if e.name().as_ref() == b"hyperlink" => {
                 let mut cell_ref = String::new();
@@ -770,9 +806,9 @@ fn parse_sheet_rich_text(data: &[u8], sheet_count: usize) -> Vec<Vec<(u32, u32, 
     for i in 0..sheet_count {
         let path = format!("xl/worksheets/sheet{}.xml", i + 1);
         let cells = match archive.by_name(&path) {
-            Ok(mut entry) => {
+            Ok(entry) => {
                 let mut xml = String::new();
-                if entry.read_to_string(&mut xml).is_ok() {
+                if entry.take(MAX_ENTRY_BYTES).read_to_string(&mut xml).is_ok() {
                     parse_inline_str_rich_text(&xml)
                 } else {
                     Vec::new()
@@ -787,6 +823,10 @@ fn parse_sheet_rich_text(data: &[u8], sheet_count: usize) -> Vec<Vec<(u32, u32, 
 
 /// Parse `<c t="inlineStr"><is><r>...</r></is></c>` elements from a sheet XML string.
 fn parse_inline_str_rich_text(xml: &str) -> Vec<(u32, u32, Vec<RichTextRun>)> {
+    parse_inline_str_rich_text_with(xml, MAX_EVENTS)
+}
+
+fn parse_inline_str_rich_text_with(xml: &str, max_events: usize) -> Vec<(u32, u32, Vec<RichTextRun>)> {
     use quick_xml::events::Event;
     use quick_xml::Reader;
 
@@ -805,9 +845,14 @@ fn parse_inline_str_rich_text(xml: &str) -> Vec<(u32, u32, Vec<RichTextRun>)> {
     let mut current_text = String::new();
     let mut current_font = Font::default();
     let mut has_rpr = false;
+    let mut events: u64 = 0;
 
     loop {
         buf.clear();
+        events += 1;
+        if events > max_events as u64 {
+            break;
+        }
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => match e.name().as_ref() {
                 b"c" => {
@@ -865,7 +910,7 @@ fn parse_inline_str_rich_text(xml: &str) -> Vec<(u32, u32, Vec<RichTextRun>)> {
                         }
                     }
                 }
-                b"name" if in_rpr => {
+                b"rFont" if in_rpr => {
                     for attr in e.attributes().flatten() {
                         if attr.key.as_ref() == b"val" {
                             current_font.name = Some(String::from_utf8_lossy(&attr.value).into_owned());
@@ -1405,6 +1450,44 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_inline_str_rich_text_run_font_name() {
+        // rFont val must be captured as font name.
+        let xml = r##"<worksheet>
+        <sheetData>
+          <row r="1">
+            <c r="A1" t="inlineStr"><is><r><rPr><rFont val="Arial"/><sz val="12"/></rPr><t>Hi</t></r></is></c>
+          </row>
+        </sheetData>
+        </worksheet>"##;
+        let cells = parse_inline_str_rich_text(xml);
+        assert_eq!(cells.len(), 1);
+        assert_eq!(cells[0].2.len(), 1);
+        let f = cells[0].2[0].font.as_ref().unwrap();
+        assert_eq!(f.name, Some("Arial".into()));
+    }
+
+    #[test]
+    fn test_parse_inline_str_rich_text_event_cap() {
+        // Finding #4: parser must stop after max_events, not loop unbounded.
+        // 3 cells, each 1 run (~10 events per cell; commit happens at </c>).
+        let mut cells_xml = String::new();
+        for c in 1..=3 {
+            cells_xml.push_str(&format!(
+                "<row r='{}'><c r='A{}' t='inlineStr'><is><r><t>r{}</t></r></is></c></row>",
+                c, c, c
+            ));
+        }
+        let xml = format!("<worksheet><sheetData>{}</sheetData></worksheet>", cells_xml);
+        // cap below total → only the first cell is committed, rest truncated
+        let cells = parse_inline_str_rich_text_with(&xml, 15);
+        assert!(cells.len() < 3, "event cap not enforced: got {} cells", cells.len());
+        assert_eq!(cells.len(), 1);
+        // cap above total → all cells parsed
+        let cells2 = parse_inline_str_rich_text_with(&xml, 1000);
+        assert_eq!(cells2.len(), 3);
+    }
+
+    #[test]
     fn test_parse_inline_str_rich_text_plain_cell_not_affected() {
         // A regular string cell (not inlineStr) must not produce rich text.
         let xml = r##"<worksheet><sheetData><row r="1">
@@ -1511,6 +1594,7 @@ mod tests {
                     font: Some(Font {
                         bold: Some(true),
                         size: Some(14.0),
+                        name: Some("Arial".into()),
                         ..Default::default()
                     }),
                 },
@@ -1531,6 +1615,7 @@ mod tests {
         assert_eq!(runs[0].text, "Hello ");
         assert_eq!(runs[0].font.as_ref().unwrap().bold, Some(true));
         assert_eq!(runs[0].font.as_ref().unwrap().size, Some(14.0));
+        assert_eq!(runs[0].font.as_ref().unwrap().name.as_deref(), Some("Arial"));
         assert_eq!(runs[1].text, "World");
         assert!(runs[1].font.is_none());
     }
