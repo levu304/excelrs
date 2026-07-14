@@ -11,6 +11,9 @@ use quick_xml::Reader as XmlReader;
 use crate::error::ExcelrsError;
 use crate::model::defined_name::DefinedName;
 
+const MAX_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_EVENTS: usize = 5_000_000;
+
 /// Parse `<definedName>` entries from `xl/workbook.xml`.
 ///
 /// Returns an empty `Vec` when no `<definedNames>` element exists.
@@ -21,11 +24,11 @@ pub fn parse_defined_names(data: &[u8], sheet_names: &[String]) -> Result<Vec<De
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
 
     let mut buf = Vec::new();
-    let mut entry = match archive.by_name("xl/workbook.xml") {
+    let entry = match archive.by_name("xl/workbook.xml") {
         Ok(e) => e,
         Err(_) => return Ok(Vec::new()),
     };
-    entry.read_to_end(&mut buf)?;
+    entry.take(MAX_ENTRY_BYTES).read_to_end(&mut buf)?;
     let xml = String::from_utf8_lossy(&buf);
 
     let mut reader = XmlReader::from_str(&xml);
@@ -38,7 +41,12 @@ pub fn parse_defined_names(data: &[u8], sheet_names: &[String]) -> Result<Vec<De
     let mut current_value = String::new();
     let mut current_sheet_id: Option<u32> = None;
 
+    let mut events: u64 = 0;
     loop {
+        events += 1;
+        if events > MAX_EVENTS as u64 {
+            break;
+        }
         match reader.read_event() {
             Ok(Event::Start(ref e)) => {
                 let qn = e.local_name();

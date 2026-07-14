@@ -31,6 +31,7 @@ use quick_xml::events::{attributes::Attribute, Event};
 
 /// Maximum decompressed bytes per zip entry (16 MiB). Used to prevent zip-bomb OOM.
 const MAX_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_EVENTS: usize = 5_000_000;
 use quick_xml::Reader as XmlReader;
 
 use crate::error::ExcelrsError;
@@ -309,7 +310,12 @@ pub fn parse_style_table(data: &[u8], scheme: &ThemeColorScheme) -> Result<Style
     // Track the index of the current xf in cell_xfs (for alignment children).
     // The ParsedCellXf is pushed immediately even before alignment is parsed.
     let mut xf_idx: Option<usize> = None;
+    let mut events: u64 = 0;
     loop {
+        events += 1;
+        if events > MAX_EVENTS as u64 {
+            break;
+        }
         match reader.read_event() {
             Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
                 let tag = e.local_name().as_ref().to_vec();
@@ -675,7 +681,12 @@ pub fn parse_sheet_cell_styles(data: &[u8]) -> Result<SheetStyleMap, ExcelrsErro
 
     let mut result: HashMap<(u32, u32), u32> = HashMap::new();
 
+    let mut events: u64 = 0;
     loop {
+        events += 1;
+        if events > MAX_EVENTS as u64 {
+            break;
+        }
         match reader.read_event() {
             Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) if e.local_name().as_ref() == b"c" => {
                 let attrs: Vec<_> = e.attributes().filter_map(|a| a.ok()).collect();
