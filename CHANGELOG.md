@@ -22,6 +22,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Docs-only release. No runtime or public-API changes. `package.json` intentionally **not** bumped (stays `0.9.0`); no npm publish. Tag `v0.10.0` is a roadmap milestone marker only.
 
+## [0.11.0] — 2026-07-14
+
+### Added
+
+- **Hyperlinks (read)** — Parse `<hyperlinks>` from sheet XML and resolve `r:id` via `xl/worksheets/_rels/sheetN.xml.rels`. `CellValue` hyperlink/`hyperlink_text` round-trip is now closed (write shipped v0.5.0).
+- **Auto filters** — Read and write `<autoFilter ref>` attribute on worksheets. Exposed as `ws.autoFilter`.
+- **Freeze panes / split views** — Read and write `<sheetViews><sheetView><pane>` state. Exposed as `ws.views` array of `SheetView` descriptors.
+- **Sheet protection** — Read and write `<sheetProtection>` boolean flags. Exposed as `ws.protection`.
+
+### Changed
+
+- Parity matrix advances `hyperlinks` (read), `auto-filter`, freeze panes, and sheet protection from `planned` to `shipped`.
+- Bumped `excelrs` to `0.11.0` (npm) / `0.11.0` (Cargo).
+
 ## [0.9.0] — 2026-07-13
 
 ### Added

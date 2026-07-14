@@ -1,6 +1,6 @@
 # excelrs → ExcelJS Porting Roadmap
 
-**Generated:** 2026-07-13 | **ExcelJS version pinned:** [4.4.0](https://www.npmjs.com/package/exceljs/v/4.4.0) | **excelrs version:** 0.9.0
+**Generated:** 2026-07-14 | **ExcelJS version pinned:** [4.4.0](https://www.npmjs.com/package/exceljs/v/4.4.0) | **excelrs version:** 0.11.0
 
 ---
 
@@ -17,8 +17,8 @@
 | **Worksheet structure** | | | |
 | Rows / columns CRUD | partial | v0.1.0 | `getRow`/`addRow`/`getRows`/`columns()`; no `getColumn`/`splice`/`insertRow` |
 | Merge cells | shipped | v0.5.0 | mergeCells, unMergeCells |
-| Freeze / split panes | planned | — | `<sheetViews>` not implemented |
-| Auto filters | planned | — | `autoFilter` attribute not implemented |
+| Freeze / split panes | shipped | v0.11.0 | `<sheetViews><pane>` read/write implemented; `ws.views` |
+| Auto filters | shipped | v0.11.0 | `<autoFilter ref>` read/write; `ws.autoFilter` |
 | Insert / splice rows | planned | — | `insertRow`/`insertRows`/`spliceRows` not implemented |
 | Duplicate row | planned | — | `DuplicateRow` not implemented |
 | Column widths / headers | shipped | v0.1.0 | |
@@ -30,7 +30,7 @@
 | Shared formula | shipped | v0.1.0? | Expanded on write |
 | Array formula | n-a | — | Rare; deferred |
 | Date/DateTime | partial | v0.1.0 | Read → ISO-8601 string; JS `new Date()` not preserved as Date type on write |
-| Hyperlink | partial | v0.5.0 | Write emitted; reader doesn't parse `<hyperlinks>` |
+| Hyperlink | shipped | v0.11.0 | Full read/write round-trip; r:id → URL resolution via sheet rels |
 | RichText | partial | v0.5.0 | Write emitted; reader doesn't parse inlineStr |
 | **Styles** | | | |
 | Font (name, size, color, bold, italic, etc.) | shipped | v0.2.0+/v0.3.0 | Full round-trip |
@@ -58,7 +58,7 @@
 | Properties (defaultRowHeight, etc.) | planned | — | Not implemented |
 | Page setup / print | planned | — | Not implemented (pageMargins, orientation, paperSize, printArea, etc.) |
 | Headers and footers | planned | — | Not implemented |
-| Sheet protection | planned | — | Not implemented |
+| Sheet protection | shipped | v0.11.0 | `<sheetProtection>` read/write; `ws.protection` |
 | **Other features** | | | |
 | Comments | planned | — | Whole new OOXML part (`xl/commentsN.xml`) |
 | Images / drawings | planned | — | Whole new OOXML part (`xl/drawings/`) |
@@ -81,14 +81,9 @@
 
 Prioritization: **compat value dominates effort** (D3). Items are ordered by compat value (high → low), then by effort (low → high within a tier).
 
-### [v0.11.0] — Quick-win data completeness (low effort, high compat impact)
+### [v0.11.0] — ✅ Shipped (2026-07-14)
 
-| Rank | Feature | Effort | Rationale |
-| ------ | --------- | -------- | ----------- |
-| 1 | **Hyperlinks (read)** | low | Write already ships (v0.5.0). Add `<hyperlinks>` parsing in reader. Closes a visible gap: ExcelJS users expect `cell.value = { hyperlink: '…', text: '…' }` to round-trip. |
-| 2 | **Auto filters** | low | Single `<autoFilter ref="…">` attribute on worksheet; trivial to emit and parse. ExcelJS exposes `ws.autoFilter = 'A1:C1'`. High visibility feature. |
-| 3 | **Freeze panes / split views** | low | `<sheetViews><sheetView><pane>`, `<sheetView state="frozen">`. Straightforward OOXML. ExcelJS: `worksheet.views = [{state: 'frozen', xSplit:…}]`. |
-| 4 | **Sheet protection** | low | `<sheetProtection>` element with boolean flags. ExcelJS: `ws.properties.protection = { … }`. |
+Quick-win data completeness: hyperlinks (read), auto filters, freeze panes, sheet protection — all four `planned` → `shipped`.
 
 ### [v0.12.0] — Rich content round-trip (medium effort)
 
@@ -128,14 +123,3 @@ Prioritization: **compat value dominates effort** (D3). Items are ordered by com
 The §9.2.1 deferred-items table lists six items shipped in v0.5.0–v0.6.0. All claims are **accurate** — they correctly record what shipped and in which version. However, the table has not been updated since v0.6.0: it does not account for v0.7.0 (defined names), v0.8.0 (data validation), or v0.9.0 (CSV). No stale or incorrect claims found — just an incomplete picture.
 
 The spec document's version (v1.4.1) and `§1 Scope` also still reference v0.6.0 as the "current" scope. This is cosmetic — the content is still valid — but the metadata headers should be bumped when the spec is next modified.
-
----
-
-## Change Stubs (seeded)
-
-The top-ranked items for v0.11.0 are:
-
-- `v0-11-0-hyperlinks-read` — Add `<hyperlinks>` parsing to the reader
-- `v0-11-0-auto-filters` — Add `autoFilter` attribute support
-
-These can be created with `openspec new change <name>` when v0.10.0 is archived.

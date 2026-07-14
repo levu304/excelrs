@@ -55,6 +55,42 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
         }
     }
 
+    // Step 3.6: parse auto-filter ranges from sheet XML and attach
+    let per_sheet_auto_filters = parse_sheet_auto_filters(data, sheet_count)?;
+    for (i, af) in per_sheet_auto_filters.into_iter().enumerate() {
+        if let Some(ref range) = af {
+            inner.worksheets[i].set_auto_filter_range(Some(range.clone()));
+        }
+    }
+
+    // Step 3.7: parse sheet views (freeze/split panes) and attach
+    let per_sheet_views = parse_sheet_views(data, sheet_count)?;
+    for (i, views) in per_sheet_views.into_iter().enumerate() {
+        if !views.is_empty() {
+            inner.worksheets[i].set_views_inner(views);
+        }
+    }
+
+    // Step 3.8: parse sheet protection flags and attach
+    let per_sheet_protection = parse_sheet_protection(data, sheet_count)?;
+    for (i, prot) in per_sheet_protection.into_iter().enumerate() {
+        if let Some(sp) = prot {
+            inner.worksheets[i].set_protection_inner(Some(sp));
+        }
+    }
+
+    // Step 3.9: parse hyperlinks + resolve r:id via sheet rels
+    let per_sheet_hyperlinks = parse_sheet_hyperlinks(data, sheet_count)?;
+    for (i, links) in per_sheet_hyperlinks.into_iter().enumerate() {
+        for (ref_, url) in &links {
+            // Resolve cell address to set a Hyperlink CellValue
+            if let Some((row, col)) = ref_to_rowcol(ref_) {
+                let cv = CellValue::hyperlink(url.clone(), None);
+                inner.worksheets[i].insert_cell_value(row, col, cv);
+            }
+        }
+    }
+
     // Step 4: parse defined names from xl/workbook.xml
     let defined_names = workbook::parse_defined_names(data, &sheet_names)?;
     inner.set_defined_names(defined_names);
@@ -232,6 +268,336 @@ fn parse_datavalidations_from_xml(
     }
 
     Ok(validations)
+}
+
+// ---------------------------------------------------------------------------
+// Sheet auto-filter reader (v0.11.0)
+// ---------------------------------------------------------------------------
+
+fn parse_sheet_auto_filters(data: &[u8], sheet_count: usize) -> Result<Vec<Option<String>>, ExcelrsError> {
+    use std::io::Cursor;
+    let cursor = Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
+    let mut per_sheet = Vec::with_capacity(sheet_count);
+
+    for i in 0..sheet_count {
+        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+        let af = match archive.by_name(&path) {
+            Ok(mut entry) => {
+                let mut xml = String::new();
+                entry.read_to_string(&mut xml)?;
+                parse_autofilter_from_xml(&xml)
+            }
+            Err(_) => None,
+        };
+        per_sheet.push(af);
+    }
+
+    Ok(per_sheet)
+}
+
+fn parse_autofilter_from_xml(xml: &str) -> Option<String> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Empty(ref e)) if e.name().as_ref() == b"autoFilter" => {
+                for attr in e.attributes().flatten() {
+                    if attr.key.as_ref() == b"ref" {
+                        return Some(String::from_utf8_lossy(&attr.value).into_owned());
+                    }
+                }
+                return None;
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
+// Sheet views reader (v0.11.0) — freeze/split panes
+// ---------------------------------------------------------------------------
+
+fn parse_sheet_views(data: &[u8], sheet_count: usize) -> Result<Vec<Vec<crate::model::sheet_view::SheetView>>, ExcelrsError> {
+    use std::io::Cursor;
+    let cursor = Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
+    let mut per_sheet = Vec::with_capacity(sheet_count);
+
+    for i in 0..sheet_count {
+        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+        let views = match archive.by_name(&path) {
+            Ok(mut entry) => {
+                let mut xml = String::new();
+                entry.read_to_string(&mut xml)?;
+                parse_views_from_xml(&xml)
+            }
+            Err(_) => Vec::new(),
+        };
+        per_sheet.push(views);
+    }
+
+    Ok(per_sheet)
+}
+
+fn parse_views_from_xml(xml: &str) -> Vec<crate::model::sheet_view::SheetView> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut views = Vec::new();
+    let mut in_sheet_view = false;
+    let mut current: Option<crate::model::sheet_view::SheetView> = None;
+
+    loop {
+        buf.clear();
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) if e.name().as_ref() == b"sheetView" => {
+                in_sheet_view = true;
+                let mut sv = crate::model::sheet_view::SheetView::default();
+                for attr in e.attributes().flatten() {
+                    match attr.key.as_ref() {
+                        b"state" => sv.state = Some(String::from_utf8_lossy(&attr.value).into_owned()),
+                        b"topLeftCell" => sv.top_left_cell = Some(String::from_utf8_lossy(&attr.value).into_owned()),
+                        _ => {}
+                    }
+                }
+                current = Some(sv);
+            }
+            Ok(Event::Empty(ref e)) if e.name().as_ref() == b"pane" && in_sheet_view => {
+                if let Some(ref mut sv) = current {
+                    for attr in e.attributes().flatten() {
+                        match attr.key.as_ref() {
+                            b"xSplit" => sv.x_split = Some(std::str::from_utf8(&attr.value).unwrap_or("0").parse().unwrap_or(0)),
+                            b"ySplit" => sv.y_split = Some(std::str::from_utf8(&attr.value).unwrap_or("0").parse().unwrap_or(0)),
+                            b"topLeftCell" => sv.top_left_cell = Some(String::from_utf8_lossy(&attr.value).into_owned()),
+                            b"activePane" => sv.active_pane = Some(String::from_utf8_lossy(&attr.value).into_owned()),
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            Ok(Event::End(ref e)) if e.name().as_ref() == b"sheetView" => {
+                in_sheet_view = false;
+                if let Some(sv) = current.take() {
+                    views.push(sv);
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+    views
+}
+
+// ---------------------------------------------------------------------------
+// Sheet protection reader (v0.11.0)
+// ---------------------------------------------------------------------------
+
+fn parse_boolean_flag(val: &[u8]) -> Option<bool> {
+    let s = String::from_utf8_lossy(val);
+    match s.to_lowercase().as_str() {
+        "1" | "true" => Some(true),
+        "0" | "false" => Some(false),
+        _ => None,
+    }
+}
+
+fn parse_sheet_protection(data: &[u8], sheet_count: usize) -> Result<Vec<Option<crate::model::sheet_protection::SheetProtection>>, ExcelrsError> {
+    use std::io::Cursor;
+    let cursor = Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
+    let mut per_sheet = Vec::with_capacity(sheet_count);
+
+    for i in 0..sheet_count {
+        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+        let prot = match archive.by_name(&path) {
+            Ok(mut entry) => {
+                let mut xml = String::new();
+                entry.read_to_string(&mut xml)?;
+                parse_sheet_protection_from_xml(&xml)
+            }
+            Err(_) => None,
+        };
+        per_sheet.push(prot);
+    }
+
+    Ok(per_sheet)
+}
+
+fn parse_sheet_protection_from_xml(xml: &str) -> Option<crate::model::sheet_protection::SheetProtection> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+
+    loop {
+        buf.clear();
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Empty(ref e)) | Ok(Event::Start(ref e)) if e.name().as_ref() == b"sheetProtection" => {
+                let mut sp = crate::model::sheet_protection::SheetProtection::default();
+                for attr in e.attributes().flatten() {
+                    match attr.key.as_ref() {
+                        b"locked" => sp.locked = parse_boolean_flag(&attr.value),
+                        b"autoFilter" => sp.auto_filter = parse_boolean_flag(&attr.value),
+                        b"deleteColumns" => sp.delete_columns = parse_boolean_flag(&attr.value),
+                        b"deleteRows" => sp.delete_rows = parse_boolean_flag(&attr.value),
+                        b"formatCells" => sp.format_cells = parse_boolean_flag(&attr.value),
+                        b"formatColumns" => sp.format_columns = parse_boolean_flag(&attr.value),
+                        b"formatRows" => sp.format_rows = parse_boolean_flag(&attr.value),
+                        b"insertColumns" => sp.insert_columns = parse_boolean_flag(&attr.value),
+                        b"insertHyperlinks" => sp.insert_hyperlinks = parse_boolean_flag(&attr.value),
+                        b"insertRows" => sp.insert_rows = parse_boolean_flag(&attr.value),
+                        b"pivotTables" => sp.pivot_tables = parse_boolean_flag(&attr.value),
+                        b"selectLockedCells" => sp.select_locked_cells = parse_boolean_flag(&attr.value),
+                        b"selectUnlockedCells" => sp.select_unlocked_cells = parse_boolean_flag(&attr.value),
+                        b"sort" => sp.sort = parse_boolean_flag(&attr.value),
+                        b"passwordHash" => sp.password_hash = Some(String::from_utf8_lossy(&attr.value).into_owned()),
+                        b"saltValue" => sp.salt_value = Some(String::from_utf8_lossy(&attr.value).into_owned()),
+                        _ => {}
+                    }
+                }
+                return Some(sp);
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
+// Hyperlinks reader (v0.11.0)
+// ---------------------------------------------------------------------------
+
+fn parse_sheet_hyperlinks(data: &[u8], sheet_count: usize) -> Result<Vec<Vec<(String, String)>>, ExcelrsError> {
+    use std::io::Cursor;
+    let cursor = Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
+    let mut per_sheet = Vec::with_capacity(sheet_count);
+
+    for i in 0..sheet_count {
+        let sheet_num = i + 1;
+        let path = format!("xl/worksheets/sheet{}.xml", sheet_num);
+        let rels_path = format!("xl/worksheets/_rels/sheet{}.xml.rels", sheet_num);
+
+        let rels = parse_sheet_rels(&mut archive, &rels_path);
+        let links = match archive.by_name(&path) {
+            Ok(mut entry) => {
+                let mut xml = String::new();
+                entry.read_to_string(&mut xml)?;
+                parse_hyperlinks_from_xml(&xml, &rels)
+            }
+            Err(_) => Vec::new(),
+        };
+        per_sheet.push(links);
+    }
+
+    Ok(per_sheet)
+}
+
+fn parse_sheet_rels(archive: &mut zip::ZipArchive<Cursor<&[u8]>>, path: &str) -> std::collections::HashMap<String, String> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut rels = std::collections::HashMap::new();
+    let xml = match archive.by_name(path) {
+        Ok(mut entry) => {
+            let mut s = String::new();
+            let _ = entry.read_to_string(&mut s);
+            s
+        }
+        Err(_) => return rels,
+    };
+
+    let mut reader = Reader::from_str(&xml);
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Empty(ref e)) | Ok(Event::Start(ref e)) if e.name().as_ref() == b"Relationship" => {
+                let mut rid = String::new();
+                let mut target = String::new();
+                for attr in e.attributes().flatten() {
+                    match attr.key.as_ref() {
+                        b"Id" => rid = String::from_utf8_lossy(&attr.value).into_owned(),
+                        b"Target" => target = String::from_utf8_lossy(&attr.value).into_owned(),
+                        _ => {}
+                    }
+                }
+                if !rid.is_empty() && !target.is_empty() {
+                    rels.insert(rid, target);
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+    rels
+}
+
+fn parse_hyperlinks_from_xml(xml: &str, rels: &std::collections::HashMap<String, String>) -> Vec<(String, String)> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut links = Vec::new();
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+
+    loop {
+        buf.clear();
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Empty(ref e)) | Ok(Event::Start(ref e)) if e.name().as_ref() == b"hyperlink" => {
+                let mut cell_ref = String::new();
+                let mut rid = String::new();
+                for attr in e.attributes().flatten() {
+                    match attr.key.as_ref() {
+                        b"ref" => cell_ref = String::from_utf8_lossy(&attr.value).into_owned(),
+                        b"r:id" | b"id" => rid = String::from_utf8_lossy(&attr.value).into_owned(),
+                        _ => {}
+                    }
+                }
+                if !cell_ref.is_empty() {
+                    let url = rels.get(&rid).cloned();
+                    if let Some(url) = url {
+                        links.push((cell_ref, url));
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+    links
+}
+
+/// Parse a cell reference like "A1" or "AB123" into (row, col) (1-based).
+fn ref_to_rowcol(ref_: &str) -> Option<(u32, u32)> {
+    let ref_ = ref_.trim();
+    if ref_.is_empty() {
+        return None;
+    }
+    let col_str: String = ref_.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+    let row_str: String = ref_.chars().skip_while(|c| c.is_ascii_alphabetic()).collect();
+    if col_str.is_empty() || row_str.is_empty() {
+        return None;
+    }
+    let row: u32 = row_str.parse().ok()?;
+    let col: u32 = col_str.chars().fold(0, |acc, c| acc * 26 + (c.to_ascii_uppercase() as u32 - 'A' as u32 + 1));
+    Some((row, col))
 }
 
 /// Convert a calamine `Sheets<R>` workbook into a `WorkbookInner`.
@@ -652,5 +1018,136 @@ mod tests {
         );
         let dvs = parse_datavalidations_from_xml(xml2).unwrap();
         assert_eq!(dvs.len(), 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // autoFilter parser tests (v0.11.0)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_autofilter_found() {
+        let xml = r##"<worksheet><autoFilter ref="A1:C10"/></worksheet>"##;
+        let result = parse_autofilter_from_xml(xml);
+        assert_eq!(result.as_deref(), Some("A1:C10"));
+    }
+
+    #[test]
+    fn test_parse_autofilter_absent() {
+        let xml = r##"<worksheet><sheetData></sheetData></worksheet>"##;
+        let result = parse_autofilter_from_xml(xml);
+        assert!(result.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // SheetView parser tests (v0.11.0)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_views_frozen_pane() {
+        let xml = r##"<worksheet><sheetViews><sheetView state="frozen"><pane xSplit="2" ySplit="1" topLeftCell="C2" activePane="bottomRight"/></sheetView></sheetViews></worksheet>"##;
+        let views = parse_views_from_xml(xml);
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].state.as_deref(), Some("frozen"));
+        assert_eq!(views[0].x_split, Some(2));
+        assert_eq!(views[0].y_split, Some(1));
+        assert_eq!(views[0].top_left_cell.as_deref(), Some("C2"));
+        assert_eq!(views[0].active_pane.as_deref(), Some("bottomRight"));
+    }
+
+    #[test]
+    fn test_parse_views_absent() {
+        let xml = r##"<worksheet><sheetData></sheetData></worksheet>"##;
+        let views = parse_views_from_xml(xml);
+        assert!(views.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // SheetProtection parser tests (v0.11.0)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_sheet_protection_some_flags() {
+        let xml = r##"<worksheet><sheetProtection selectLockedCells="1" formatCells="0"/></worksheet>"##;
+        let sp = parse_sheet_protection_from_xml(xml);
+        assert!(sp.is_some());
+        let sp = sp.unwrap();
+        assert_eq!(sp.select_locked_cells, Some(true));
+        assert_eq!(sp.format_cells, Some(false));
+        assert_eq!(sp.locked, None);
+    }
+
+    #[test]
+    fn test_parse_sheet_protection_absent() {
+        let xml = r##"<worksheet><sheetData></sheetData></worksheet>"##;
+        let sp = parse_sheet_protection_from_xml(xml);
+        assert!(sp.is_none());
+    }
+
+    #[test]
+    fn test_parse_boolean_flag_true() {
+        assert_eq!(parse_boolean_flag(b"1"), Some(true));
+        assert_eq!(parse_boolean_flag(b"true"), Some(true));
+        assert_eq!(parse_boolean_flag(b"TRUE"), Some(true));
+    }
+
+    #[test]
+    fn test_parse_boolean_flag_false() {
+        assert_eq!(parse_boolean_flag(b"0"), Some(false));
+        assert_eq!(parse_boolean_flag(b"false"), Some(false));
+    }
+
+    #[test]
+    fn test_parse_boolean_flag_absent() {
+        assert_eq!(parse_boolean_flag(b""), None);
+        assert_eq!(parse_boolean_flag(b"yes"), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Hyperlinks parser tests (v0.11.0)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_hyperlinks_with_rels() {
+        let xml = r##"<worksheet><hyperlinks><hyperlink ref="B2" r:id="rId1"/></hyperlinks></worksheet>"##;
+        let mut rels = std::collections::HashMap::new();
+        rels.insert("rId1".into(), "https://example.com".into());
+        let links = parse_hyperlinks_from_xml(xml, &rels);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0], ("B2".to_string(), "https://example.com".to_string()));
+    }
+
+    #[test]
+    fn test_parse_hyperlinks_no_rels() {
+        let xml = r##"<worksheet><hyperlinks><hyperlink ref="B2" r:id="rId1"/></hyperlinks></worksheet>"##;
+        let rels = std::collections::HashMap::new();
+        let links = parse_hyperlinks_from_xml(xml, &rels);
+        assert!(links.is_empty(), "no rels → no match");
+    }
+
+    #[test]
+    fn test_parse_hyperlinks_absent() {
+        let xml = r##"<worksheet><sheetData></sheetData></worksheet>"##;
+        let rels = std::collections::HashMap::new();
+        let links = parse_hyperlinks_from_xml(xml, &rels);
+        assert!(links.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // ref_to_rowcol tests (v0.11.0)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_ref_to_rowcol_a1() {
+        assert_eq!(ref_to_rowcol("A1"), Some((1, 1)));
+    }
+
+    #[test]
+    fn test_ref_to_rowcol_aa42() {
+        assert_eq!(ref_to_rowcol("AA42"), Some((42, 27)));
+    }
+
+    #[test]
+    fn test_ref_to_rowcol_empty() {
+        assert_eq!(ref_to_rowcol(""), None);
     }
 }

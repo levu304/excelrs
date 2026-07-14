@@ -306,6 +306,25 @@ export declare class Worksheet {
    */
   mergeCells(range: string): void
 
+  // -- Auto filter (v0.11.0) --
+
+  /** Get the auto-filter range string (e.g. "A1:C1") or `null` if unset. */
+  get autoFilter(): string | null
+  /** Set the auto-filter range. Pass `null` or `""` to clear. */
+  set autoFilter(val: string | null)
+
+  // -- Views (v0.11.0) --
+
+  /** Freeze/split pane view descriptors. Empty array if no views. */
+  get views(): Array<SheetView>
+  set views(val: Array<SheetView>)
+
+  // -- Protection (v0.11.0) --
+
+  /** Sheet protection flags, or `null` if unprotected. */
+  get protection(): SheetProtection | null
+  set protection(val: SheetProtection | null)
+
   // -- Data validation (v0.8.0) --
 
   /** All data validations on this worksheet. */
@@ -513,6 +532,38 @@ export interface DataValidation {
   error?: string
   errorTitle?: string
   errorStyle?: string
+}
+
+/** Sheet protection flags (v0.11.0). Each flag `true` means the action is allowed when the sheet is protected. */
+export interface SheetProtection {
+  locked?: boolean
+  autoFilter?: boolean
+  deleteColumns?: boolean
+  deleteRows?: boolean
+  formatCells?: boolean
+  formatColumns?: boolean
+  formatRows?: boolean
+  insertColumns?: boolean
+  insertHyperlinks?: boolean
+  insertRows?: boolean
+  pivotTables?: boolean
+  selectLockedCells?: boolean
+  selectUnlockedCells?: boolean
+  sort?: boolean
+}
+
+/** Freeze/split pane view descriptor (v0.11.0). */
+export interface SheetView {
+  /** Pane state: "frozen", "split", or absent. */
+  state?: string
+  /** Horizontal split (number of frozen/split columns). */
+  xSplit?: number
+  /** Vertical split (number of frozen/split rows). */
+  ySplit?: number
+  /** Top-left visible cell in the bottom-right pane. */
+  topLeftCell?: string
+  /** Active pane: "bottomLeft", "bottomRight", "topLeft", "topRight". */
+  activePane?: string
 }
 
 /**
