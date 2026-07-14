@@ -40,20 +40,36 @@ Green tests miss them (Empty XML forms only).
 Order F1->F2->F3; cargo test --lib; +3 tests (295->298).
 
 ### F1 autoFilter Start not parsed (HIGH) src/reader/xlsx.rs:308
+
 - [x] 6.1.1 RED: test_parse_autofilter_start_with_children Some(A1:C10)
 - [x] 6.1.2 GREEN: match Empty|Start autoFilter; Some(ref)
 - [x] 6.1.3 VERIFY: cargo test --lib test_parse_autofilter
 
 ### F2 hyperlink read drops display text (HIGH) src/reader/xlsx.rs:88
+
 - [x] 6.2.1 RED: round-trip A1; assert hyperlink_text == Some(Example)
 - [x] 6.2.2 GREEN: Step 3.9 preserve text 2nd arg CellValue::hyperlink
 - [x] 6.2.3 VERIFY: cargo test --lib test_hyperlink
 
 ### F3 password stripped on re-save (RISK) src/writer/xlsx.rs:606
+
 - [x] 6.3.1 RED: set_protection_inner(password_hash/salt_value)
 - [x] 6.3.2 GREEN: emit_sheet_protection emit passwordHash/saltValue
 - [x] 6.3.3 VERIFY: cargo test --lib test_sheet_protection
 
 ### Out of scope
+
 - password_hash/salt_value not exposed to JS API (round-trip)
 - parse_boolean_flag edge; reader 4x zip reopen (perf)
+
+## 7. Fix unescape bug (QA follow-up)
+
+TDD QA (6.3) XML-special-character XML-escaped quick-xml +1 (298->299); passwordHash/saltValue round-trip (HIGH) src/reader/xlsx.rs:465
+RED: quote/amp/lt/gt; GREEN: use quick_xml::escape::unescape; decode passwordHash/saltValue on read
+
+- [x] 7.1.3 VERIFY: cargo test --lib test_password_hash_salt (plain + escaping)
+
+### Out of scope
+
+- other sheetProtection attrs booleans (no entities); unchanged
+- custom-entity expansion: quick-xml non-validating, only 5 predefined; safe
