@@ -2086,6 +2086,45 @@ mod tests {
         );
     }
 
+    /// F3 stronger: XML-special-character values survive round-trip escaping
+    #[test]
+    fn test_password_hash_salt_xml_escaping() {
+        use crate::model::sheet_protection::SheetProtection;
+        use crate::reader::xlsx::workbook_inner_from_bytes;
+
+        let mut ws = Worksheet::new("PwEsc".into());
+        ws.set_id(1);
+
+        let raw_hash = r##"abc"123&456<789>0"##;
+        let raw_salt = r##"x&y<z>"1"##;
+        let sp = SheetProtection {
+            password_hash: Some(raw_hash.into()),
+            salt_value: Some(raw_salt.into()),
+            ..Default::default()
+        };
+        ws.set_protection(Some(sp));
+
+        let mut inner = WorkbookInner::new();
+        inner.worksheets.push(ws);
+
+        let bytes = workbook_to_bytes(&inner).unwrap();
+        let re_read = workbook_inner_from_bytes(&bytes).unwrap();
+
+        let read_sp = re_read.worksheets()[0].protection();
+        assert!(read_sp.is_some(), "protection should survive round-trip");
+        let read_sp = read_sp.unwrap();
+        assert_eq!(
+            read_sp.password_hash.as_deref(),
+            Some(raw_hash),
+            "password_hash with XML special chars should round-trip"
+        );
+        assert_eq!(
+            read_sp.salt_value.as_deref(),
+            Some(raw_salt),
+            "salt_value with XML special chars should round-trip"
+        );
+    }
+
     // ---- v0.11.0 round-trip: autoFilter, views, protection, hyperlinks ----
 
     #[test]

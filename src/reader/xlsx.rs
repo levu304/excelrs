@@ -449,6 +449,7 @@ fn parse_sheet_protection(
 }
 
 fn parse_sheet_protection_from_xml(xml: &str) -> Option<crate::model::sheet_protection::SheetProtection> {
+    use quick_xml::escape::unescape;
     use quick_xml::events::Event;
     use quick_xml::Reader;
 
@@ -476,8 +477,14 @@ fn parse_sheet_protection_from_xml(xml: &str) -> Option<crate::model::sheet_prot
                         b"selectLockedCells" => sp.select_locked_cells = parse_boolean_flag(&attr.value),
                         b"selectUnlockedCells" => sp.select_unlocked_cells = parse_boolean_flag(&attr.value),
                         b"sort" => sp.sort = parse_boolean_flag(&attr.value),
-                        b"passwordHash" => sp.password_hash = Some(String::from_utf8_lossy(&attr.value).into_owned()),
-                        b"saltValue" => sp.salt_value = Some(String::from_utf8_lossy(&attr.value).into_owned()),
+                        b"passwordHash" => {
+                                let raw = String::from_utf8_lossy(&attr.value).to_string();
+                                sp.password_hash = Some(unescape(&raw).map(|c| c.into_owned()).unwrap_or(raw));
+                            }
+                            b"saltValue" => {
+                                let raw = String::from_utf8_lossy(&attr.value).to_string();
+                                sp.salt_value = Some(unescape(&raw).map(|c| c.into_owned()).unwrap_or(raw));
+                            }
                         _ => {}
                     }
                 }
