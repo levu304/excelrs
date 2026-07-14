@@ -1,6 +1,6 @@
 # excelrs → ExcelJS Porting Roadmap
 
-**Generated:** 2026-07-14 | **ExcelJS version pinned:** [4.4.0](https://www.npmjs.com/package/exceljs/v/4.4.0) | **excelrs version:** 0.11.0
+**Generated:** 2026-07-14 | **ExcelJS version pinned:** [4.4.0](https://www.npmjs.com/package/exceljs/v/4.4.0) | **excelrs version:** 0.11.0 → 0.12.0 (in progress)
 
 ---
 
@@ -31,13 +31,13 @@
 | Array formula | n-a | — | Rare; deferred |
 | Date/DateTime | partial | v0.1.0 | Read → ISO-8601 string; JS `new Date()` not preserved as Date type on write |
 | Hyperlink | shipped | v0.11.0 | Full read/write round-trip; r:id → URL resolution via sheet rels |
-| RichText | partial | v0.5.0 | Write emitted; reader doesn't parse inlineStr |
+| RichText | shipped | v0.12.0 | Full read/write round-trip; inline `<is>` strings parsed |
 | **Styles** | | | |
 | Font (name, size, color, bold, italic, etc.) | shipped | v0.2.0+/v0.3.0 | Full round-trip |
 | Fill (solid/pattern) | shipped | v0.2.0+/v0.3.0 | |
-| Fill (gradient) | partial | v0.5.0 | Write emitted; reader silently skips gradientFill (reader/styles.rs:16) |
+| Fill (gradient) | shipped | v0.12.0 | Full read/write; `<gradientFill>` parsed (linear + path) |
 | Border (left/right/top/bottom) | shipped | v0.2.0+/v0.3.0 | |
-| Border (diagonal) | partial | v0.5.0 | Write emitted (writer/styles.rs:387); reader silently skips diagonal (reader/styles.rs:17) |
+| Border (diagonal) | shipped | v0.12.0 | Full read/write; `<diagonal>` side + `diagonalUp`/`diagonalDown` parsed |
 | Alignment | shipped | v0.2.0+/v0.3.0 | Full round-trip; vertical middle→center mapping |
 | Number format | shipped | v0.2.0+/v0.3.0 | |
 | Row-level style | shipped | v0.5.0 | |
@@ -85,14 +85,14 @@ Prioritization: **compat value dominates effort** (D3). Items are ordered by com
 
 Quick-win data completeness: hyperlinks (read), auto filters, freeze panes, sheet protection — all four `planned` → `shipped`.
 
-### [v0.12.0] — Rich content round-trip (medium effort)
+### [v0.12.0] — Rich content round-trip ✅
 
-| Rank | Feature | Effort | Rationale |
-| ------ | --------- | -------- | ----------- |
-| 5 | **RichText read** | low | Write already ships (v0.5.0). Add inlineStr/SI parsing in reader. High compat impact for formatted cell content. |
-| 6 | **Gradient fill (read)** | low | Write already ships (v0.5.0). Currently silently skipped in reader (reader/styles.rs `gradientFill => skip`). Adding read closes a style gap. |
-| 7 | **Diagonal border (read)** | low | Write already ships (v0.5.0). Currently silently skipped in reader (reader/styles.rs `diagonal`). Same pattern. |
-| 8 | **JS Date preservation** | low/med | `cell.value = new Date()` → Date type across FFI. Currently string-coerced. Requires napi-rs Date type or dedicated handling. |
+| Rank | Feature | Effort | Status |
+| ------ | --------- | -------- | ------ |
+| 5 | **RichText read** | low | ✅ shipped |
+| 6 | **Gradient fill (read)** | low | ✅ shipped |
+| 7 | **Diagonal border (read)** | low | ✅ shipped |
+| 8 | **JS Date preservation** | low/med | deferred to v0.13.0 — separate FFI type-bridging effort |
 
 ### [v0.13.0+] — Medium-effort additions
 

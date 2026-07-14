@@ -6,6 +6,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] — 2026-07-14
+
+### Added
+
+- **RichText read** Parse inline `<is>` strings in worksheet cells (`<c><is><r>`) into `RichTextRun`s; run's `<rPr>` font (name/size/bold/italic/underline/color) mapped via existing `Font` model. Closes rich-text read gap (write shipped earlier).
+- **Gradient fill read** Parse `<gradientFill type="linear|path">` and its `<stop position color>` children into `Fill` (`kind="gradient"`, `gradient_type`, `gradient_stops`); theme/indexed/rgb stop colors resolved via `parse_color`.
+- **Diagonal border read** Parse `<diagonal>` side plus `diagonalUp`/`diagonalDown` booleans into `Border`.
+
+### Changed
+
+- Bump version 0.11.0 → 0.12.0 (Cargo + npm). No breaking public-API changes.
+
+### Fixed
+
+- Reader hardening PR #14 review: all zip-entry reads bounded 16 MiB (`entry.take(MAX_ENTRY_BYTES)`) prevent zip-bomb OOM; all parse loops carry an event-count cap (`MAX_EVENTS`) halt runaway parses. Applied systemically across xlsx.rs, styles.rs, workbook.rs.
+
+### Notes
+
+- JS `Date` preservation deferred v0.13.0 (separate FFI type-bridging effort).
+- Publishes `@levu304/excelrs` + platform packages (`-darwin-arm64`, `-linux-x64-gnu`, `-win32-x64-msvc`) via `v0.12.0` tag → release.yml.
+
 ## [0.10.0] — 2026-07-13
 
 ### Added

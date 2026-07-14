@@ -11,10 +11,10 @@
 //! 3. **`StyleTableRead::resolve_style`** — converts a cellXfs index to a
 //!    model `Style` by looking up the sub-table indices.
 //!
-//! # v0.3.0 limitations
+//! # Limitations (v0.3.0, partially addressed)
 //! - **Theme colors** (`<color theme="N"/>`)   → resolved via ThemeColorScheme.
-//! - **Gradient fills** (`<gradientFill>`)      → skipped (fill = default Normal).
-//! - **Diagonal borders** (diagonal/diagonalUp/diagonalDown) → skipped.
+//! - **Gradient fills** (`<gradientFill>`)      → resolved in v0.12.0.
+//! - **Diagonal borders** (diagonal/diagonalUp/diagonalDown) → resolved in v0.12.0.
 //! - **cellStyleXfs inheritance** (xfId)        → ignored; cellXf is used
 //!   directly.  The `applyX` flags *are* parsed and honored: when `applyFont="0"`
 //!   (or any `applyX="0"`), the corresponding sub-field resolves to `None`
@@ -28,11 +28,15 @@ use std::collections::HashMap;
 use std::io::Read;
 
 use quick_xml::events::{attributes::Attribute, Event};
+
+/// Maximum decompressed bytes per zip entry (16 MiB). Used to prevent zip-bomb OOM.
+const MAX_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_EVENTS: usize = 5_000_000;
 use quick_xml::Reader as XmlReader;
 
 use crate::error::ExcelrsError;
 use crate::model::color::ThemeColorScheme;
-use crate::model::style::{Alignment, Border, BorderStyle, Fill, Font, Style};
+use crate::model::style::{Alignment, Border, BorderStyle, Fill, Font, GradientStop, Style};
 use crate::types;
 
 /// Per-sheet cell-to-style-index map: (1-indexed row, col) → cellXfs index.
@@ -189,11 +193,11 @@ impl StyleTableRead {
 
 /// Read the full content of a zip entry into a `Vec<u8>`.
 fn read_entry<R: Read + std::io::Seek>(archive: &mut zip::ZipArchive<R>, path: &str) -> Result<Vec<u8>, ExcelrsError> {
-    let mut entry = archive
+    let entry = archive
         .by_name(path)
         .map_err(|_| ExcelrsError::Parse(format!("Missing zip entry: '{path}'")))?;
     let mut buf = Vec::new();
-    entry.read_to_end(&mut buf)?;
+    entry.take(MAX_ENTRY_BYTES).read_to_end(&mut buf)?;
     Ok(buf)
 }
 
@@ -292,6 +296,8 @@ pub fn parse_style_table(data: &[u8], scheme: &ThemeColorScheme) -> Result<Style
     let mut font: Option<Font> = None;
     let mut fill: Option<Fill> = None;
     let mut in_pattern_fill = false;
+    let mut in_gradient_fill = false;
+    let mut current_gradient_stop: Option<GradientStop> = None;
     let mut border: Option<Border> = None;
     let mut border_side: Option<(String, Option<BorderStyle>)> = None; // (side_name, style)
                                                                        // border building: after parsing all sides, reconstruct
@@ -299,11 +305,17 @@ pub fn parse_style_table(data: &[u8], scheme: &ThemeColorScheme) -> Result<Style
     let mut border_right: Option<BorderStyle> = None;
     let mut border_bottom: Option<BorderStyle> = None;
     let mut border_left: Option<BorderStyle> = None;
+    let mut border_diagonal: Option<BorderStyle> = None;
 
     // Track the index of the current xf in cell_xfs (for alignment children).
     // The ParsedCellXf is pushed immediately even before alignment is parsed.
     let mut xf_idx: Option<usize> = None;
+    let mut events: u64 = 0;
     loop {
+        events += 1;
+        if events > MAX_EVENTS as u64 {
+            break;
+        }
         match reader.read_event() {
             Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
                 let tag = e.local_name().as_ref().to_vec();
@@ -421,20 +433,67 @@ pub fn parse_style_table(data: &[u8], scheme: &ThemeColorScheme) -> Result<Style
                             }
                         }
                     }
-                    b"gradientFill" => {
-                        // Gradient fills: skip entirely (v0.3.0 limitation)
-                        // mark that we're in a fill but not accumulating
+                    b"gradientFill" if matches!(section, StyleSection::Fills) => {
+                        in_gradient_fill = true;
+                        let attrs: Vec<_> = e.attributes().filter_map(|a| a.ok()).collect();
+                        if let Some(ref mut f) = fill {
+                            f.kind = "gradient".to_owned();
+                            f.gradient_type = str_attr(&attrs, b"type").map(|s| s.to_owned());
+                            f.gradient_degree = str_attr(&attrs, b"degree").and_then(|v| v.parse::<f64>().ok());
+                            f.gradient_left = str_attr(&attrs, b"left").and_then(|v| v.parse::<f64>().ok());
+                            f.gradient_right = str_attr(&attrs, b"right").and_then(|v| v.parse::<f64>().ok());
+                            f.gradient_top = str_attr(&attrs, b"top").and_then(|v| v.parse::<f64>().ok());
+                            f.gradient_bottom = str_attr(&attrs, b"bottom").and_then(|v| v.parse::<f64>().ok());
+                        }
+                    }
+                    b"stop" if in_gradient_fill => {
+                        let attrs: Vec<_> = e.attributes().filter_map(|a| a.ok()).collect();
+                        let position = str_attr(&attrs, b"position")
+                            .and_then(|v| v.parse::<f64>().ok())
+                            .unwrap_or(0.0);
+                        if let Some(c) = str_attr(&attrs, b"color") {
+                            // Attribute form: <stop position="0" color="FFFF0000"/>
+                            if let Some(ref mut f) = fill {
+                                f.gradient_stops.get_or_insert_with(Vec::new).push(GradientStop {
+                                    color: c.to_owned(),
+                                    position,
+                                });
+                            }
+                            current_gradient_stop = None;
+                        } else {
+                            // Child-element form: <stop position="0"><color rgb="..."/></stop>
+                            current_gradient_stop = Some(GradientStop {
+                                color: String::new(),
+                                position,
+                            });
+                        }
+                    }
+                    b"color" if in_gradient_fill && current_gradient_stop.is_some() => {
+                        let attrs: Vec<_> = e.attributes().filter_map(|a| a.ok()).collect();
+                        if let Some(c) = parse_color(&attrs, scheme) {
+                            if let Some(ref mut stop) = current_gradient_stop {
+                                stop.color = c;
+                            }
+                        }
                     }
 
                     // -- border --
                     b"border" if matches!(section, StyleSection::Borders) => {
-                        border = Some(Border::default());
+                        let attrs: Vec<_> = e.attributes().filter_map(|a| a.ok()).collect();
+                        let diagonal_up = bool_attr(&attrs, b"diagonalUp");
+                        let diagonal_down = bool_attr(&attrs, b"diagonalDown");
+                        border = Some(Border {
+                            diagonal_up,
+                            diagonal_down,
+                            ..Default::default()
+                        });
                         border_top = None;
                         border_right = None;
                         border_bottom = None;
                         border_left = None;
+                        border_diagonal = None;
                     }
-                    b"left" | b"right" | b"top" | b"bottom" if border.is_some() => {
+                    b"left" | b"right" | b"top" | b"bottom" | b"diagonal" if border.is_some() => {
                         let side_name = std::str::from_utf8(&tag).unwrap_or("");
                         let attrs: Vec<_> = e.attributes().filter_map(|a| a.ok()).collect();
                         let style_val = str_attr(&attrs, b"style");
@@ -528,6 +587,18 @@ pub fn parse_style_table(data: &[u8], scheme: &ThemeColorScheme) -> Result<Style
                             fills.push(f);
                         }
                         in_pattern_fill = false;
+                        in_gradient_fill = false;
+                    }
+                    b"gradientFill" => {
+                        in_gradient_fill = false;
+                        current_gradient_stop = None;
+                    }
+                    b"stop" if in_gradient_fill => {
+                        if let Some(stop) = current_gradient_stop.take() {
+                            if let Some(ref mut f) = fill {
+                                f.gradient_stops.get_or_insert_with(Vec::new).push(stop);
+                            }
+                        }
                     }
 
                     b"border" => {
@@ -536,17 +607,19 @@ pub fn parse_style_table(data: &[u8], scheme: &ThemeColorScheme) -> Result<Style
                             b.right = border_right.take();
                             b.bottom = border_bottom.take();
                             b.left = border_left.take();
+                            b.diagonal = border_diagonal.take();
                             borders.push(b);
                         }
                         border_side = None;
                     }
-                    b"left" | b"right" | b"top" | b"bottom" => {
+                    b"left" | b"right" | b"top" | b"bottom" | b"diagonal" => {
                         if let Some((side_name, style)) = border_side.take() {
                             match side_name.as_str() {
                                 "top" => border_top = style,
                                 "right" => border_right = style,
                                 "bottom" => border_bottom = style,
                                 "left" => border_left = style,
+                                "diagonal" => border_diagonal = style,
                                 _ => {}
                             }
                         }
@@ -608,7 +681,12 @@ pub fn parse_sheet_cell_styles(data: &[u8]) -> Result<SheetStyleMap, ExcelrsErro
 
     let mut result: HashMap<(u32, u32), u32> = HashMap::new();
 
+    let mut events: u64 = 0;
     loop {
+        events += 1;
+        if events > MAX_EVENTS as u64 {
+            break;
+        }
         match reader.read_event() {
             Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) if e.local_name().as_ref() == b"c" => {
                 let attrs: Vec<_> = e.attributes().filter_map(|a| a.ok()).collect();
@@ -651,9 +729,9 @@ pub fn parse_styles_and_sheet_maps(
 
     // Resolve theme color scheme from xl/theme/theme1.xml (optional)
     let scheme = match archive.by_name("xl/theme/theme1.xml") {
-        Ok(mut entry) => {
+        Ok(entry) => {
             let mut data = String::new();
-            entry.read_to_string(&mut data)?;
+            entry.take(MAX_ENTRY_BYTES).read_to_string(&mut data)?;
             ThemeColorScheme::from_xml(&data).unwrap_or_default()
         }
         Err(_) => ThemeColorScheme::default(),
@@ -701,6 +779,112 @@ mod tests {
         assert!(table.fills.is_empty());
         assert!(table.borders.is_empty());
         assert!(table.cell_xfs.is_empty());
+    }
+
+    #[test]
+    fn test_parse_gradient_fill_linear() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <fills count="3">
+            <fill><patternFill patternType="none"/></fill>
+            <fill><patternFill patternType="gray125"/></fill>
+            <fill>
+              <gradientFill type="linear" degree="45">
+                <stop position="0" color="FFFF0000"/>
+                <stop position="1" color="FF0000FF"/>
+              </gradientFill>
+            </fill>
+          </fills>
+          <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+          <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+          <cellXfs count="2">
+            <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+            <xf numFmtId="0" fontId="0" fillId="2" borderId="0" xfId="0"/>
+          </cellXfs>
+        </styleSheet>"#;
+        let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
+        let fill = &table.fills[2];
+        assert_eq!(fill.kind, "gradient");
+        assert_eq!(fill.gradient_type.as_deref(), Some("linear"));
+        assert_eq!(fill.gradient_degree, Some(45.0));
+        assert!(fill.gradient_left.is_none());
+        assert!(fill.gradient_right.is_none());
+        let stops = fill.gradient_stops.as_ref().unwrap();
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[0].color, "FFFF0000");
+        assert_eq!(stops[0].position, 0.0);
+        assert_eq!(stops[1].color, "FF0000FF");
+        assert_eq!(stops[1].position, 1.0);
+    }
+
+    #[test]
+    fn test_parse_gradient_fill_path() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <fills count="3">
+            <fill><patternFill patternType="none"/></fill>
+            <fill><patternFill patternType="gray125"/></fill>
+            <fill>
+              <gradientFill type="path" left="0.0" right="1.0" top="0.5" bottom="1.0">
+                <stop position="0" color="FF00FF00"/>
+              </gradientFill>
+            </fill>
+          </fills>
+          <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+          <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+          <cellXfs count="2">
+            <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+            <xf numFmtId="0" fontId="0" fillId="2" borderId="0" xfId="0"/>
+          </cellXfs>
+        </styleSheet>"#;
+        let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
+        let fill = &table.fills[2];
+        assert_eq!(fill.kind, "gradient");
+        assert_eq!(fill.gradient_type.as_deref(), Some("path"));
+        assert_eq!(fill.gradient_left, Some(0.0));
+        assert_eq!(fill.gradient_right, Some(1.0));
+        assert_eq!(fill.gradient_top, Some(0.5));
+        assert_eq!(fill.gradient_bottom, Some(1.0));
+        let stops = fill.gradient_stops.as_ref().unwrap();
+        assert_eq!(stops.len(), 1);
+        assert_eq!(stops[0].color, "FF00FF00");
+        assert_eq!(stops[0].position, 0.0);
+    }
+
+    #[test]
+    fn test_parse_gradient_fill_theme_stop() {
+        // Regression for finding #2: theme/indexed gradient stops must resolve,
+        // not parse to an empty string.
+        let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <fills count="3">
+            <fill><patternFill patternType="none"/></fill>
+            <fill><patternFill patternType="gray125"/></fill>
+            <fill>
+              <gradientFill type="linear" degree="45">
+                <stop position="0"><color theme="4"/></stop>
+                <stop position="1" color="FFFF0000"/>
+              </gradientFill>
+            </fill>
+          </fills>
+          <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+          <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+          <cellXfs count="2">
+            <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+            <xf numFmtId="0" fontId="0" fillId="2" borderId="0" xfId="0"/>
+          </cellXfs>
+        </styleSheet>"#;
+        let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
+        let fill = &table.fills[2];
+        assert_eq!(fill.kind, "gradient");
+        let stops = fill.gradient_stops.as_ref().unwrap();
+        assert_eq!(stops.len(), 2);
+        // Child-element theme color resolved (was "" before fix)
+        assert_eq!(stops[0].color, "FF4F81BD");
+        assert_eq!(stops[0].position, 0.0);
+        // Attribute-form color still works
+        assert_eq!(stops[1].color, "FFFF0000");
+        assert_eq!(stops[1].position, 1.0);
     }
 
     #[test]
@@ -780,6 +964,38 @@ mod tests {
         assert!(table.borders[1].top.is_some());
         assert!(table.borders[1].right.is_none());
         assert!(table.borders[1].bottom.is_none());
+    }
+
+    #[test]
+    fn test_parse_border_diagonal() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <borders count="2">
+            <border><left/><right/><top/><bottom/><diagonal/></border>
+            <border diagonalUp="1" diagonalDown="1">
+              <left/>
+              <right/>
+              <top/>
+              <bottom/>
+              <diagonal style="thin"><color rgb="FF000000"/></diagonal>
+            </border>
+          </borders>
+        </styleSheet>"#;
+        let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
+        assert_eq!(table.borders.len(), 2);
+        // First border: no diagonal attrs, no diagonal style
+        assert!(table.borders[0].diagonal.is_none());
+        assert!(table.borders[0].diagonal_up.is_none());
+        assert!(table.borders[0].diagonal_down.is_none());
+        // Second border: diagonal side + diagonalUp/down
+        assert!(table.borders[1].diagonal.is_some());
+        assert_eq!(table.borders[1].diagonal.as_ref().unwrap().style, "thin");
+        assert_eq!(
+            table.borders[1].diagonal.as_ref().unwrap().color.as_deref(),
+            Some("FF000000")
+        );
+        assert_eq!(table.borders[1].diagonal_up, Some(true));
+        assert_eq!(table.borders[1].diagonal_down, Some(true));
     }
 
     #[test]
