@@ -4,6 +4,8 @@ pub mod column;
 pub mod data_validation;
 pub mod defined_name;
 pub mod row;
+pub mod sheet_protection;
+pub mod sheet_view;
 pub mod style;
 pub mod workbook;
 pub mod workbook_inner;

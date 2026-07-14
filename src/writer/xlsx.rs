@@ -484,6 +484,144 @@ fn write_shared_strings<W: Write>(w: &mut W, string_table: &[String]) -> Result<
 }
 
 // ---------------------------------------------------------------------------
+// Sheet views / protection / autoFilter emission helpers (v0.11.0)
+// ---------------------------------------------------------------------------
+
+fn emit_sheet_views<W: Write>(w: &mut W, ws: &Worksheet) -> Result<(), ExcelrsError> {
+    let views = ws.get_views_inner();
+    if views.is_empty() {
+        return Ok(());
+    }
+    write_str(w, "<sheetViews>")?;
+    for sv in &views {
+        let state_attr = sv.state.as_deref().unwrap_or("");
+        write_str(
+            w,
+            &format!(
+                "<sheetView{}>",
+                if !state_attr.is_empty() {
+                    format!(" state=\"{}\"", escape(state_attr))
+                } else {
+                    String::new()
+                }
+            ),
+        )?;
+        let has_pane =
+            sv.x_split.is_some() || sv.y_split.is_some() || sv.top_left_cell.is_some() || sv.active_pane.is_some();
+        if has_pane {
+            let mut pane_attrs = String::new();
+            if let Some(x) = sv.x_split {
+                pane_attrs.push_str(&format!(" xSplit=\"{}\"", x));
+            }
+            if let Some(y) = sv.y_split {
+                pane_attrs.push_str(&format!(" ySplit=\"{}\"", y));
+            }
+            if let Some(t) = &sv.top_left_cell {
+                pane_attrs.push_str(&format!(" topLeftCell=\"{}\"", escape(t)));
+            }
+            if let Some(a) = &sv.active_pane {
+                pane_attrs.push_str(&format!(" activePane=\"{}\"", escape(a)));
+            }
+            write_str(w, &format!("<pane{}/>", pane_attrs))?;
+        }
+        write_str(w, "</sheetView>")?;
+    }
+    write_str(w, "</sheetViews>")?;
+    Ok(())
+}
+
+fn emit_sheet_protection<W: Write>(w: &mut W, ws: &Worksheet) -> Result<(), ExcelrsError> {
+    let prot = ws.get_protection_inner();
+    let sp = match prot {
+        Some(ref p) => p,
+        None => return Ok(()),
+    };
+    let mut attrs = String::new();
+    if let Some(v) = sp.locked {
+        attrs.push_str(if v { " locked=\"1\"" } else { " locked=\"0\"" });
+    }
+    if let Some(v) = sp.auto_filter {
+        attrs.push_str(if v { " autoFilter=\"1\"" } else { " autoFilter=\"0\"" });
+    }
+    if let Some(v) = sp.delete_columns {
+        attrs.push_str(if v {
+            " deleteColumns=\"1\""
+        } else {
+            " deleteColumns=\"0\""
+        });
+    }
+    if let Some(v) = sp.delete_rows {
+        attrs.push_str(if v { " deleteRows=\"1\"" } else { " deleteRows=\"0\"" });
+    }
+    if let Some(v) = sp.format_cells {
+        attrs.push_str(if v { " formatCells=\"1\"" } else { " formatCells=\"0\"" });
+    }
+    if let Some(v) = sp.format_columns {
+        attrs.push_str(if v {
+            " formatColumns=\"1\""
+        } else {
+            " formatColumns=\"0\""
+        });
+    }
+    if let Some(v) = sp.format_rows {
+        attrs.push_str(if v { " formatRows=\"1\"" } else { " formatRows=\"0\"" });
+    }
+    if let Some(v) = sp.insert_columns {
+        attrs.push_str(if v {
+            " insertColumns=\"1\""
+        } else {
+            " insertColumns=\"0\""
+        });
+    }
+    if let Some(v) = sp.insert_hyperlinks {
+        attrs.push_str(if v {
+            " insertHyperlinks=\"1\""
+        } else {
+            " insertHyperlinks=\"0\""
+        });
+    }
+    if let Some(v) = sp.insert_rows {
+        attrs.push_str(if v { " insertRows=\"1\"" } else { " insertRows=\"0\"" });
+    }
+    if let Some(v) = sp.pivot_tables {
+        attrs.push_str(if v { " pivotTables=\"1\"" } else { " pivotTables=\"0\"" });
+    }
+    if let Some(v) = sp.select_locked_cells {
+        attrs.push_str(if v {
+            " selectLockedCells=\"1\""
+        } else {
+            " selectLockedCells=\"0\""
+        });
+    }
+    if let Some(v) = sp.select_unlocked_cells {
+        attrs.push_str(if v {
+            " selectUnlockedCells=\"1\""
+        } else {
+            " selectUnlockedCells=\"0\""
+        });
+    }
+    if let Some(v) = sp.sort {
+        attrs.push_str(if v { " sort=\"1\"" } else { " sort=\"0\"" });
+    }
+    if let Some(v) = &sp.password_hash {
+        attrs.push_str(&format!(" passwordHash=\"{}\"", escape(v)));
+    }
+    if let Some(v) = &sp.salt_value {
+        attrs.push_str(&format!(" saltValue=\"{}\"", escape(v)));
+    }
+    write_str(w, &format!("<sheetProtection{}/>", attrs))?;
+    Ok(())
+}
+
+fn emit_auto_filter<W: Write>(w: &mut W, ws: &Worksheet) -> Result<(), ExcelrsError> {
+    let range = ws.get_auto_filter_range();
+    if let Some(ref r) = range {
+        write_str(w, &format!("<autoFilter ref=\"{}\"/>", escape(r)))?;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // xl/worksheets/sheet{N}.xml
 // ---------------------------------------------------------------------------
 
@@ -508,11 +646,20 @@ fn write_sheet_xml<W: Write>(
         write_str(w, &format!("<dimension ref=\"{}\"/>", dim))?;
     }
 
+    // <sheetViews> — freeze/split panes (v0.11.0)
+    emit_sheet_views(w, ws)?;
+
     write_str(w, "<sheetData>")?;
 
     write_cells_with_styles(w, ws, string_indices, cell_style_indices, row_style_indices)?;
 
     write_str(w, "</sheetData>")?;
+
+    // <sheetProtection> — (v0.11.0)
+    emit_sheet_protection(w, ws)?;
+
+    // <autoFilter> — (v0.11.0)
+    emit_auto_filter(w, ws)?;
 
     // <mergeCells> — item 1 (v0.5.0)
     let merged_ranges = ws.get_merged_ranges();
@@ -1846,6 +1993,40 @@ mod tests {
         assert!(sheet2.contains(r##"ref="A1" r:id="rId1""##));
     }
 
+    /// F2: hyperlink display text survives round-trip
+    #[test]
+    fn test_hyperlink_display_text_round_trip() {
+        use crate::reader::xlsx::workbook_inner_from_bytes;
+
+        let mut ws = Worksheet::new("HyperlinkText".into());
+        ws.set_id(1);
+
+        // Insert a hyperlink with display text
+        ws.insert_cell_value(
+            1,
+            1,
+            CellValue::hyperlink("https://example.com/target", Some("Display Me".into())),
+        );
+
+        let mut inner = WorkbookInner::new();
+        inner.worksheets.push(ws);
+
+        let bytes = workbook_to_bytes(&inner).unwrap();
+        let re_read = workbook_inner_from_bytes(&bytes).unwrap();
+
+        let cell = re_read.worksheets()[0].get_cell_by_address("A1".into());
+        assert_eq!(
+            cell.value().hyperlink_text.as_deref(),
+            Some("Display Me"),
+            "hyperlink display text must survive round-trip"
+        );
+        assert_eq!(
+            cell.value().hyperlink.as_deref(),
+            Some("https://example.com/target"),
+            "hyperlink URL must survive round-trip"
+        );
+    }
+
     #[test]
     fn test_write_defined_name_unresolved_sheet_errors() {
         let ws = Worksheet::new("Sheet1".into());
@@ -1866,5 +2047,177 @@ mod tests {
         assert!(result.is_ok(), "existing sheet should succeed");
         let output = String::from_utf8(out).unwrap();
         assert!(output.contains(r##"localSheetId="0""##), "should emit localSheetId");
+    }
+
+    /// F3: password_hash/salt_value survive round-trip
+    #[test]
+    fn test_password_hash_salt_round_trip() {
+        use crate::model::sheet_protection::SheetProtection;
+        use crate::reader::xlsx::workbook_inner_from_bytes;
+
+        let mut ws = Worksheet::new("PwHash".into());
+        ws.set_id(1);
+
+        let sp = SheetProtection {
+            password_hash: Some("abc123".into()),
+            salt_value: Some("xyz789".into()),
+            ..Default::default()
+        };
+        ws.set_protection(Some(sp));
+
+        let mut inner = WorkbookInner::new();
+        inner.worksheets.push(ws);
+
+        let bytes = workbook_to_bytes(&inner).unwrap();
+        let re_read = workbook_inner_from_bytes(&bytes).unwrap();
+
+        let read_sp = re_read.worksheets()[0].protection();
+        assert!(read_sp.is_some(), "protection should survive round-trip");
+        let read_sp = read_sp.unwrap();
+        assert_eq!(
+            read_sp.password_hash.as_deref(),
+            Some("abc123"),
+            "password_hash should round-trip"
+        );
+        assert_eq!(
+            read_sp.salt_value.as_deref(),
+            Some("xyz789"),
+            "salt_value should round-trip"
+        );
+    }
+
+    /// F3 stronger: XML-special-character values survive round-trip escaping
+    #[test]
+    fn test_password_hash_salt_xml_escaping() {
+        use crate::model::sheet_protection::SheetProtection;
+        use crate::reader::xlsx::workbook_inner_from_bytes;
+
+        let mut ws = Worksheet::new("PwEsc".into());
+        ws.set_id(1);
+
+        let raw_hash = r##"abc"123&456<789>0"##;
+        let raw_salt = r##"x&y<z>"1"##;
+        let sp = SheetProtection {
+            password_hash: Some(raw_hash.into()),
+            salt_value: Some(raw_salt.into()),
+            ..Default::default()
+        };
+        ws.set_protection(Some(sp));
+
+        let mut inner = WorkbookInner::new();
+        inner.worksheets.push(ws);
+
+        let bytes = workbook_to_bytes(&inner).unwrap();
+        let re_read = workbook_inner_from_bytes(&bytes).unwrap();
+
+        let read_sp = re_read.worksheets()[0].protection();
+        assert!(read_sp.is_some(), "protection should survive round-trip");
+        let read_sp = read_sp.unwrap();
+        assert_eq!(
+            read_sp.password_hash.as_deref(),
+            Some(raw_hash),
+            "password_hash with XML special chars should round-trip"
+        );
+        assert_eq!(
+            read_sp.salt_value.as_deref(),
+            Some(raw_salt),
+            "salt_value with XML special chars should round-trip"
+        );
+    }
+
+    // ---- v0.11.0 round-trip: autoFilter, views, protection, hyperlinks ----
+
+    #[test]
+    fn test_round_trip_v0_11_0_features() {
+        use crate::model::cell::CellValue;
+        use crate::model::sheet_protection::SheetProtection;
+        use crate::model::sheet_view::SheetView;
+        use crate::reader::xlsx::workbook_inner_from_bytes;
+
+        let mut inner = WorkbookInner::new();
+        let mut ws = Worksheet::new("V0110".into());
+        ws.set_id(1);
+
+        // Set auto-filter
+        ws.set_auto_filter(Some("A1:C1".into()));
+        assert_eq!(ws.auto_filter().as_deref(), Some("A1:C1"));
+
+        // Set views (freeze pane)
+        let sv = SheetView {
+            state: Some("frozen".into()),
+            x_split: Some(2),
+            y_split: Some(1),
+            top_left_cell: Some("C2".into()),
+            active_pane: Some("bottomRight".into()),
+        };
+        ws.set_views(vec![sv]);
+        assert_eq!(ws.views().len(), 1);
+        assert_eq!(ws.views()[0].x_split, Some(2));
+
+        // Set protection
+        let sp = SheetProtection {
+            select_locked_cells: Some(true),
+            format_cells: Some(false),
+            sort: Some(true),
+            password_hash: Some("abc123".into()),
+            salt_value: Some("xyz789".into()),
+            ..Default::default()
+        };
+        ws.set_protection(Some(sp));
+        assert!(ws.protection().is_some());
+
+        // Add a string cell + hyperlink
+        ws.add_row(vec![serde_json::json!("click me")]);
+        let cv = CellValue::hyperlink("https://example.com", Some("click me".into()));
+        ws.insert_cell_value(1, 1, cv);
+
+        inner.worksheets.push(ws);
+
+        // Write -> read back
+        let bytes = workbook_to_bytes(&inner).unwrap();
+        let re_read = workbook_inner_from_bytes(&bytes).unwrap();
+
+        let ws2 = &re_read.worksheets()[0];
+        assert_eq!(ws2.name(), "V0110");
+
+        // Assert autoFilter survived
+        assert_eq!(
+            ws2.auto_filter().as_deref(),
+            Some("A1:C1"),
+            "autoFilter should round-trip"
+        );
+
+        // Assert views survived
+        assert_eq!(ws2.views().len(), 1, "views should round-trip");
+        assert_eq!(ws2.views()[0].state.as_deref(), Some("frozen"));
+        assert_eq!(ws2.views()[0].x_split, Some(2));
+        assert_eq!(ws2.views()[0].y_split, Some(1));
+
+        // Assert protection survived
+        let read_sp = ws2.protection();
+        assert!(read_sp.is_some(), "protection should round-trip");
+        let read_sp = read_sp.unwrap();
+        assert_eq!(read_sp.select_locked_cells, Some(true));
+        assert_eq!(read_sp.format_cells, Some(false));
+        assert_eq!(read_sp.sort, Some(true));
+        assert_eq!(
+            read_sp.password_hash.as_deref(),
+            Some("abc123"),
+            "password_hash should round-trip"
+        );
+        assert_eq!(
+            read_sp.salt_value.as_deref(),
+            Some("xyz789"),
+            "salt_value should round-trip"
+        );
+
+        // Assert hyperlink survived
+        let cell_a1 = ws2.get_cell_by_address("A1".into());
+        let val = cell_a1.value();
+        assert_eq!(
+            val.hyperlink.as_deref(),
+            Some("https://example.com"),
+            "hyperlink should round-trip"
+        );
     }
 }

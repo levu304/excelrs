@@ -17,6 +17,8 @@ use super::cell::{Cell, CellValue};
 use super::column::Column;
 use super::data_validation::DataValidation;
 use super::row::Row;
+use super::sheet_protection::SheetProtection;
+use super::sheet_view::SheetView;
 use crate::model::style::Style;
 use crate::types;
 
@@ -34,6 +36,9 @@ pub struct Worksheet {
     columns: Arc<Mutex<Vec<Column>>>,
     merged_ranges: Arc<Mutex<Vec<String>>>,
     data_validations: Arc<Mutex<Vec<DataValidation>>>,
+    auto_filter: Arc<Mutex<Option<String>>>,
+    views: Arc<Mutex<Vec<SheetView>>>,
+    protection: Arc<Mutex<Option<SheetProtection>>>,
 }
 
 #[napi]
@@ -47,6 +52,9 @@ impl Worksheet {
             columns: Arc::new(Mutex::new(Vec::new())),
             merged_ranges: Arc::new(Mutex::new(Vec::new())),
             data_validations: Arc::new(Mutex::new(Vec::new())),
+            auto_filter: Arc::new(Mutex::new(None)),
+            views: Arc::new(Mutex::new(Vec::new())),
+            protection: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -368,6 +376,60 @@ impl Worksheet {
             .cloned()
     }
 
+    // -- auto_filter --
+
+    #[napi(getter)]
+    /// Get the worksheet's auto-filter range (e.g. "A1:C1"). Returns `None` if unset.
+    pub fn auto_filter(&self) -> Option<String> {
+        self.auto_filter
+            .lock()
+            .expect("Worksheet auto_filter lock poisoned")
+            .clone()
+    }
+
+    #[napi(setter)]
+    /// Set the worksheet's auto-filter range. Pass `null` or `""` to clear.
+    pub fn set_auto_filter(&mut self, val: Option<String>) {
+        let v = val.filter(|s| !s.is_empty());
+        *self.auto_filter.lock().expect("Worksheet auto_filter lock poisoned") = v;
+    }
+
+    // -- views --
+
+    #[napi(getter)]
+    /// Get the worksheet's view descriptors (freeze/split panes).
+    pub fn views(&self) -> Vec<SheetView> {
+        self.views
+            .lock()
+            .expect("Worksheet views lock poisoned")
+            .clone()
+    }
+
+    #[napi(setter)]
+    /// Set the worksheet's view descriptors.
+    pub fn set_views(&mut self, val: Vec<SheetView>) {
+        *self.views.lock().expect("Worksheet views lock poisoned") = val;
+    }
+
+    // -- protection --
+
+    #[napi(getter)]
+    /// Get the worksheet's protection flags. Returns `None` if unprotected.
+    pub fn protection(&self) -> Option<SheetProtection> {
+        self.protection
+            .lock()
+            .expect("Worksheet protection lock poisoned")
+            .clone()
+    }
+
+    #[napi(setter)]
+    /// Set the worksheet's protection flags. Pass `null` to clear.
+    pub fn set_protection(&mut self, val: Option<SheetProtection>) {
+        *self.protection.lock().expect("Worksheet protection lock poisoned") = val;
+    }
+
+    // -- data validations --
+
     /// Remove data validation for a specific cell reference (sqref).
     #[napi]
     pub fn remove_data_validation(&self, sqref: String) -> bool {
@@ -440,6 +502,43 @@ impl Worksheet {
         self.data_validations
             .lock()
             .expect("Worksheet data_validations lock poisoned")
+            .clone()
+    }
+
+    // -- internal setters for reader --
+
+    /// Set the auto-filter range (used by reader).
+    pub fn set_auto_filter_range(&self, range: Option<String>) {
+        *self.auto_filter.lock().expect("Worksheet auto_filter lock poisoned") = range;
+    }
+
+    /// Get the auto-filter range for writing (used by writer).
+    pub fn get_auto_filter_range(&self) -> Option<String> {
+        self.auto_filter
+            .lock()
+            .expect("Worksheet auto_filter lock poisoned")
+            .clone()
+    }
+
+    pub fn set_views_inner(&self, views: Vec<SheetView>) {
+        *self.views.lock().expect("Worksheet views lock poisoned") = views;
+    }
+
+    pub fn get_views_inner(&self) -> Vec<SheetView> {
+        self.views
+            .lock()
+            .expect("Worksheet views lock poisoned")
+            .clone()
+    }
+
+    pub fn set_protection_inner(&self, protection: Option<SheetProtection>) {
+        *self.protection.lock().expect("Worksheet protection lock poisoned") = protection;
+    }
+
+    pub fn get_protection_inner(&self) -> Option<SheetProtection> {
+        self.protection
+            .lock()
+            .expect("Worksheet protection lock poisoned")
             .clone()
     }
 }
