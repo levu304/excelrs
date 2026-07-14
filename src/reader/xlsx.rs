@@ -19,7 +19,8 @@ use std::path::Path;
 use calamine::{open_workbook_auto_from_rs, Data, Reader, Sheets};
 
 use crate::error::ExcelrsError;
-use crate::model::cell::CellValue;
+use crate::model::cell::{CellValue, RichTextRun};
+use crate::model::style::Font;
 use crate::model::workbook::Workbook;
 use crate::model::workbook_inner::WorkbookInner;
 
@@ -90,6 +91,15 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
                 let cv = CellValue::hyperlink(url.clone(), display_text);
                 inner.worksheets[i].insert_cell_value(row, col, cv);
             }
+        }
+    }
+
+    // Step 3.10: parse rich-text inline strings and attach
+    let per_sheet_rich_text = parse_sheet_rich_text(data, sheet_count);
+    for (i, cells) in per_sheet_rich_text.into_iter().enumerate() {
+        for (row, col, runs) in &cells {
+            let cv = CellValue::rich_text(runs.clone());
+            inner.worksheets[i].insert_cell_value(*row, *col, cv);
         }
     }
 
@@ -478,13 +488,13 @@ fn parse_sheet_protection_from_xml(xml: &str) -> Option<crate::model::sheet_prot
                         b"selectUnlockedCells" => sp.select_unlocked_cells = parse_boolean_flag(&attr.value),
                         b"sort" => sp.sort = parse_boolean_flag(&attr.value),
                         b"passwordHash" => {
-                                let raw = String::from_utf8_lossy(&attr.value).to_string();
-                                sp.password_hash = Some(unescape(&raw).map(|c| c.into_owned()).unwrap_or(raw));
-                            }
-                            b"saltValue" => {
-                                let raw = String::from_utf8_lossy(&attr.value).to_string();
-                                sp.salt_value = Some(unescape(&raw).map(|c| c.into_owned()).unwrap_or(raw));
-                            }
+                            let raw = String::from_utf8_lossy(&attr.value).to_string();
+                            sp.password_hash = Some(unescape(&raw).map(|c| c.into_owned()).unwrap_or(raw));
+                        }
+                        b"saltValue" => {
+                            let raw = String::from_utf8_lossy(&attr.value).to_string();
+                            sp.salt_value = Some(unescape(&raw).map(|c| c.into_owned()).unwrap_or(raw));
+                        }
                         _ => {}
                     }
                 }
@@ -739,6 +749,167 @@ fn map_data(data: &Data) -> CellValue {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Rich-text inline string reader (v0.12.0)
+// ---------------------------------------------------------------------------
+
+/// Parse rich-text inline strings (`<c t="inlineStr"><is><r>...</r></is></c>`)
+/// from each sheet's XML. Returns per-sheet lists of (row, col, runs).
+// Not behind a Result: inline-str parsing is best-effort; failure on individual
+// cells degrades to plain string (the already-parsed calamine string value).
+fn parse_sheet_rich_text(data: &[u8], sheet_count: usize) -> Vec<Vec<(u32, u32, Vec<RichTextRun>)>> {
+    use std::io::Cursor;
+    let cursor = Cursor::new(data);
+    let mut archive = match zip::ZipArchive::new(cursor) {
+        Ok(a) => a,
+        Err(_) => return vec![Vec::new(); sheet_count],
+    };
+    let mut per_sheet = Vec::with_capacity(sheet_count);
+    for i in 0..sheet_count {
+        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+        let cells = match archive.by_name(&path) {
+            Ok(mut entry) => {
+                let mut xml = String::new();
+                if entry.read_to_string(&mut xml).is_ok() {
+                    parse_inline_str_rich_text(&xml)
+                } else {
+                    Vec::new()
+                }
+            }
+            Err(_) => Vec::new(),
+        };
+        per_sheet.push(cells);
+    }
+    per_sheet
+}
+
+/// Parse `<c t="inlineStr"><is><r>...</r></is></c>` elements from a sheet XML string.
+fn parse_inline_str_rich_text(xml: &str) -> Vec<(u32, u32, Vec<RichTextRun>)> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+
+    let mut result = Vec::new();
+    // State machine
+    let mut in_c = false;
+    let mut in_is = false;
+    let mut in_r = false;
+    let mut in_rpr = false;
+    let mut in_t = false;
+    let mut cell_ref = String::new();
+    let mut runs: Vec<RichTextRun> = Vec::new();
+    let mut current_text = String::new();
+    let mut current_font = Font::default();
+    let mut has_rpr = false;
+
+    loop {
+        buf.clear();
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => match e.name().as_ref() {
+                b"c" => {
+                    cell_ref.clear();
+                    let mut is_inline_str = false;
+                    for attr in e.attributes().flatten() {
+                        match attr.key.as_ref() {
+                            b"r" => {
+                                cell_ref = String::from_utf8_lossy(&attr.value).into_owned();
+                            }
+                            b"t" if attr.value.as_ref() == b"inlineStr" => {
+                                is_inline_str = true;
+                            }
+                            _ => {}
+                        }
+                    }
+                    if is_inline_str {
+                        in_c = true;
+                        runs.clear();
+                    }
+                }
+                b"is" if in_c => in_is = true,
+                b"r" if in_is => {
+                    in_r = true;
+                    current_font = Font::default();
+                    current_text.clear();
+                    has_rpr = false;
+                }
+                b"rPr" if in_r => in_rpr = true,
+                b"b" if in_rpr => {
+                    current_font.bold = Some(true);
+                    has_rpr = true;
+                }
+                b"i" if in_rpr => {
+                    current_font.italic = Some(true);
+                    has_rpr = true;
+                }
+                b"u" if in_rpr => {
+                    current_font.underline = Some(true);
+                    has_rpr = true;
+                }
+                b"sz" if in_rpr => {
+                    for attr in e.attributes().flatten() {
+                        if attr.key.as_ref() == b"val" {
+                            current_font.size = String::from_utf8_lossy(&attr.value).parse::<f64>().ok();
+                            has_rpr = true;
+                        }
+                    }
+                }
+                b"color" if in_rpr => {
+                    for attr in e.attributes().flatten() {
+                        if attr.key.as_ref() == b"rgb" {
+                            current_font.color = Some(String::from_utf8_lossy(&attr.value).into_owned());
+                            has_rpr = true;
+                        }
+                    }
+                }
+                b"name" if in_rpr => {
+                    for attr in e.attributes().flatten() {
+                        if attr.key.as_ref() == b"val" {
+                            current_font.name = Some(String::from_utf8_lossy(&attr.value).into_owned());
+                            has_rpr = true;
+                        }
+                    }
+                }
+                b"t" if in_r => in_t = true,
+                _ => {}
+            },
+            Ok(Event::End(ref e)) => match e.name().as_ref() {
+                b"t" if in_t => in_t = false,
+                b"r" if in_r => {
+                    if !current_text.is_empty() {
+                        let font = if has_rpr { Some(current_font.clone()) } else { None };
+                        runs.push(RichTextRun {
+                            text: std::mem::take(&mut current_text),
+                            font,
+                        });
+                    }
+                    in_r = false;
+                }
+                b"rPr" if in_rpr => in_rpr = false,
+                b"is" if in_is => in_is = false,
+                b"c" if in_c => {
+                    if !runs.is_empty() {
+                        if let Some((row, col)) = ref_to_rowcol(&cell_ref) {
+                            result.push((row, col, runs.clone()));
+                        }
+                    }
+                    in_c = false;
+                }
+                _ => {}
+            },
+            Ok(Event::Text(ref e)) if in_t => {
+                let text = e.unescape().unwrap_or_default().to_string();
+                current_text.push_str(&text);
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break, // best-effort: degrade to plain string
+            _ => {}
+        }
+    }
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -1185,5 +1356,182 @@ mod tests {
     #[test]
     fn test_ref_to_rowcol_empty() {
         assert_eq!(ref_to_rowcol(""), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Rich-text inline string tests (v0.12.0)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_inline_str_rich_text() {
+        let xml = r##"<worksheet>
+        <sheetData>
+          <row r="1">
+            <c r="A1" t="inlineStr"><is><r><t>Hello</t></r></is></c>
+            <c r="B1" t="inlineStr"><is><r><rPr><b/><sz val="14"/><color rgb="FFFF0000"/></rPr><t>Red Bold</t></r></is></c>
+            <c r="C1"><v>123</v></c>
+            <c r="D1" t="inlineStr"><is><r><rPr><i/></rPr><t>Italic</t></r><r><t> Normal</t></r></is></c>
+          </row>
+        </sheetData>
+        </worksheet>"##;
+        let cells = parse_inline_str_rich_text(xml);
+        assert_eq!(cells.len(), 3, "expected 3 rich-text cells");
+
+        // A1: plain rich text, no rPr
+        assert_eq!(cells[0].0, 1); // row
+        assert_eq!(cells[0].1, 1); // col A
+        assert_eq!(cells[0].2.len(), 1);
+        assert_eq!(cells[0].2[0].text, "Hello");
+        assert!(cells[0].2[0].font.is_none(), "no rPr → no font");
+
+        // B1: bold + size 14 + red
+        assert_eq!(cells[1].0, 1);
+        assert_eq!(cells[1].1, 2); // col B
+        assert_eq!(cells[1].2.len(), 1);
+        assert_eq!(cells[1].2[0].text, "Red Bold");
+        let f = cells[1].2[0].font.as_ref().unwrap();
+        assert_eq!(f.bold, Some(true));
+        assert_eq!(f.size, Some(14.0));
+        assert_eq!(f.color.as_deref(), Some("FFFF0000"));
+
+        // D1: two runs, first italic, second plain
+        assert_eq!(cells[2].0, 1);
+        assert_eq!(cells[2].1, 4); // col D
+        assert_eq!(cells[2].2.len(), 2);
+        assert_eq!(cells[2].2[0].text, "Italic");
+        assert!(cells[2].2[0].font.as_ref().unwrap().italic == Some(true));
+        assert_eq!(cells[2].2[1].text, " Normal");
+        assert!(cells[2].2[1].font.is_none());
+    }
+
+    #[test]
+    fn test_parse_inline_str_rich_text_plain_cell_not_affected() {
+        // A regular string cell (not inlineStr) must not produce rich text.
+        let xml = r##"<worksheet><sheetData><row r="1">
+          <c r="A1" t="s"><v>0</v></c>
+          <c r="B1"><v>123</v></c>
+        </row></sheetData></worksheet>"##;
+        let cells = parse_inline_str_rich_text(xml);
+        assert!(cells.is_empty(), "no inlineStr → no rich text rows");
+    }
+
+    #[test]
+    fn test_gradient_fill_roundtrip() {
+        use crate::model::style::{Fill, GradientStop, Style};
+        use crate::model::workbook_inner::WorkbookInner;
+        use crate::writer::xlsx::workbook_to_bytes;
+
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("G".into());
+        ws.insert_cell_value(1, 1, CellValue::string("grad"));
+        let mut cell = ws.get_cell_by_rc(1, 1);
+        let fill = Fill {
+            kind: "gradient".into(),
+            gradient_type: Some("linear".into()),
+            gradient_degree: Some(45.0),
+            gradient_stops: Some(vec![
+                GradientStop {
+                    color: "FFFF0000".into(),
+                    position: 0.0,
+                },
+                GradientStop {
+                    color: "FF0000FF".into(),
+                    position: 1.0,
+                },
+            ]),
+            ..Default::default()
+        };
+        cell.set_style_raw(Some(Style {
+            fill: Some(fill),
+            ..Default::default()
+        }));
+
+        let bytes = workbook_to_bytes(&inner).unwrap();
+        let read = crate::reader::xlsx::workbook_inner_from_bytes(&bytes).unwrap();
+        let cell = read.worksheets[0].get_cell_by_rc(1, 1);
+        let s = cell.style();
+        let f = s.unwrap().fill.unwrap();
+        assert_eq!(f.kind, "gradient");
+        assert_eq!(f.gradient_type.as_deref(), Some("linear"));
+        assert_eq!(f.gradient_degree, Some(45.0));
+        let stops = f.gradient_stops.unwrap();
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[0].color, "FFFF0000");
+        assert_eq!(stops[1].color, "FF0000FF");
+    }
+
+    #[test]
+    fn test_diagonal_border_roundtrip() {
+        use crate::model::style::{Border, BorderStyle, Style};
+        use crate::model::workbook_inner::WorkbookInner;
+        use crate::writer::xlsx::workbook_to_bytes;
+
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("D".into());
+        ws.insert_cell_value(1, 1, CellValue::string("diag"));
+        let mut cell = ws.get_cell_by_rc(1, 1);
+        cell.set_style_raw(Some(Style {
+            border: Some(Border {
+                diagonal: Some(BorderStyle {
+                    style: "thin".into(),
+                    color: Some("FF000000".into()),
+                }),
+                diagonal_up: Some(true),
+                diagonal_down: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }));
+
+        let bytes = workbook_to_bytes(&inner).unwrap();
+        let read = crate::reader::xlsx::workbook_inner_from_bytes(&bytes).unwrap();
+        let cell = read.worksheets[0].get_cell_by_rc(1, 1);
+        let s = cell.style();
+        let b = s.unwrap().border.unwrap();
+        assert!(b.diagonal.is_some());
+        assert_eq!(b.diagonal.as_ref().unwrap().style, "thin");
+        assert_eq!(b.diagonal.as_ref().unwrap().color.as_deref(), Some("FF000000"));
+        assert_eq!(b.diagonal_up, Some(true));
+        assert_eq!(b.diagonal_down, Some(true));
+    }
+
+    #[test]
+    fn test_rich_text_roundtrip() {
+        use crate::model::workbook_inner::WorkbookInner;
+        use crate::writer::xlsx::workbook_to_bytes;
+
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("S".into());
+        ws.insert_cell_value(
+            1,
+            1,
+            CellValue::rich_text(vec![
+                RichTextRun {
+                    text: "Hello ".into(),
+                    font: Some(Font {
+                        bold: Some(true),
+                        size: Some(14.0),
+                        ..Default::default()
+                    }),
+                },
+                RichTextRun {
+                    text: "World".into(),
+                    font: None,
+                },
+            ]),
+        );
+
+        let bytes = workbook_to_bytes(&inner).unwrap();
+        let read = crate::reader::xlsx::workbook_inner_from_bytes(&bytes).unwrap();
+        let cell = read.worksheets[0].get_cell_by_rc(1, 1);
+        let cv = cell.value();
+        assert_eq!(cv.value_type, "RichText");
+        let runs = cv.rich_text.as_ref().unwrap();
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].text, "Hello ");
+        assert_eq!(runs[0].font.as_ref().unwrap().bold, Some(true));
+        assert_eq!(runs[0].font.as_ref().unwrap().size, Some(14.0));
+        assert_eq!(runs[1].text, "World");
+        assert!(runs[1].font.is_none());
     }
 }
