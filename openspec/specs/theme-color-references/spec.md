@@ -3,9 +3,7 @@
 ## Purpose
 
 Resolves `<color theme="N"/>` references in OOXML styles to concrete ARGB hex strings by reading the color scheme from `xl/theme1.xml`. Introduced by change `v0.6.0-theme-color-references`, shipped v0.6.0.
-
 ## Requirements
-
 ### Requirement: Theme color references resolve to ARGB on read
 
 The style reader SHALL resolve `<color theme="N"/>` (and optional `tint`) references found in `xl/styles.xml` to concrete ARGB hex strings, using the color scheme in `xl/theme1.xml` `<a:clrScheme>` or the OOXML default scheme when `theme1.xml` is absent. Resolution applies to font color, fill foreground/background, and all four border-side colors. The resolved value SHALL be stored in the existing `color: Option<String>` ARGB field (no model or public-API change).
@@ -38,3 +36,23 @@ The style reader SHALL resolve `<color theme="N"/>` (and optional `tint`) refere
 
 - **WHEN** excelrs reads a file whose cell font uses `theme="4"`
 - **THEN** `cell.style.font.color` is the string `"FF4F81BD"` (not `null`, not an object)
+
+### Requirement: Theme color references resolve to ARGB on write
+
+The writer SHALL emit the resolved ARGB (`<color rgb="..."/>`) for a color that originated from a `<color theme="N"/>` reference, because downstream consumers such as ExcelJS cannot resolve `<color theme="N"/>` references back to a color. The resolved ARGB is computed at read time (theme index + optional tint), so the visual color is preserved on round-trip. The public `color` value SHALL remain the resolved ARGB string (no public API change for colors).
+
+#### Scenario: Themed font color written back as resolved ARGB
+
+- **WHEN** excelrs reads a file whose font color is `<color theme="4"/>` and writes it back
+- **THEN** the output `styles.xml` contains `<color rgb="FF4F81BD"/>` (the resolved ARGB), so consumers like ExcelJS can read the color
+
+#### Scenario: Themed color with tint resolves to ARGB
+
+- **WHEN** a color is read as `<color theme="4" tint="-0.5"/>`
+- **THEN** the written output is `<color rgb="..."/>` with the tint applied to the resolved ARGB
+
+#### Scenario: Public color value unchanged (ARGB string)
+
+- **WHEN** a themed color is read
+- **THEN** `cell.style.font.color` is still the resolved ARGB string (e.g. `"FF4F81BD"`), not an object
+
