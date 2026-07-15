@@ -284,12 +284,7 @@ fn emit_num_fmts<W: Write>(w: &mut W, num_fmts: &[(u32, String)]) -> Result<(), 
 /// preserving a theme reference when present (v0.13.0). Falls back to the
 /// resolved ARGB when the color came from an ARGB/RGB value or an indexed
 /// palette entry.
-fn emit_color_attrs(
-    el: &str,
-    color: &Option<String>,
-    theme: &Option<u8>,
-    tint: &Option<f64>,
-) -> String {
+fn emit_color_attrs(el: &str, color: &Option<String>, theme: &Option<u8>, tint: &Option<f64>) -> String {
     match (color, theme) {
         (Some(c), _) => format!(r#"<{el} rgb="{}"/>"#, escape(c)),
         (None, Some(t)) => match tint {
@@ -379,8 +374,14 @@ fn emit_fills<W: Write>(w: &mut W, fills: &[Fill]) -> Result<(), ExcelrsError> {
             let has_bg = f.background.is_some();
             if has_fg || has_bg {
                 write_str(w, &format!(r#"<patternFill patternType="{}">"#, f.kind))?;
-                write_str(w, &emit_color_attrs("fgColor", &f.foreground, &f.foreground_theme, &f.foreground_tint))?;
-                write_str(w, &emit_color_attrs("bgColor", &f.background, &f.background_theme, &f.background_tint))?;
+                write_str(
+                    w,
+                    &emit_color_attrs("fgColor", &f.foreground, &f.foreground_theme, &f.foreground_tint),
+                )?;
+                write_str(
+                    w,
+                    &emit_color_attrs("bgColor", &f.background, &f.background_theme, &f.background_tint),
+                )?;
                 write_str(w, "</patternFill>")?;
             } else {
                 write_str(w, &format!(r#"<patternFill patternType="{}"/>"#, f.kind))?;
@@ -1215,7 +1216,10 @@ mod tests {
             xml.contains(r##"<color rgb="FF4F81BD"/>"##),
             "resolved ARGB must be written for a themed color: {xml}"
         );
-        assert!(!xml.contains("theme="), "no theme ref when a resolved ARGB is present: {xml}");
+        assert!(
+            !xml.contains("theme="),
+            "no theme ref when a resolved ARGB is present: {xml}"
+        );
     }
 
     #[test]
@@ -1235,7 +1239,10 @@ mod tests {
             xml.contains(r##"<color rgb="FF4F81BD"/>"##),
             "resolved ARGB must be written (tint dropped): {xml}"
         );
-        assert!(!xml.contains("theme="), "no theme ref when a resolved ARGB is present: {xml}");
+        assert!(
+            !xml.contains("theme="),
+            "no theme ref when a resolved ARGB is present: {xml}"
+        );
     }
 
     /// W1: border side `style` attribute is XML-escaped on emit.

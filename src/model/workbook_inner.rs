@@ -9,8 +9,6 @@
 
 use chrono::{DateTime, Utc};
 
-use super::color::ThemeColorScheme;
-
 use super::defined_name::DefinedName;
 use super::worksheet::Worksheet;
 
@@ -22,11 +20,6 @@ pub struct WorkbookInner {
     pub created: DateTime<Utc>,
     pub modified: DateTime<Utc>,
     pub defined_names: Vec<DefinedName>,
-    /// Theme color scheme (v0.13.0). Captured from xl/theme/theme1.xml on
-    /// read; None means use ThemeColorScheme::default() (the writer does
-    /// this automatically).  Lets <color theme="N"/> round-trip through an
-    /// external reader that resolves theme indices.
-    pub theme: Option<ThemeColorScheme>,
 }
 
 impl WorkbookInner {
@@ -37,7 +30,6 @@ impl WorkbookInner {
             created: now,
             modified: now,
             defined_names: Vec::new(),
-            theme: None,
         }
     }
 

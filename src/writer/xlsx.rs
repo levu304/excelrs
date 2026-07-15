@@ -27,7 +27,6 @@ use quick_xml::escape::escape;
 
 use crate::error::ExcelrsError;
 use crate::model::cell::Cell;
-use crate::model::color::ThemeColorScheme;
 use crate::model::defined_name::DefinedName;
 use crate::model::style::Style;
 use crate::model::workbook_inner::WorkbookInner;
@@ -127,15 +126,6 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
         };
         let style_table = styles::build_style_table(&all_styles);
         styles::emit_styles_xml(&mut zip, &style_table)?;
-
-        // xl/theme/theme1.xml (v0.13.0): emit the theme color scheme so
-        // external readers (e.g. ExcelJS) can resolve <color theme="N"/>
-        // on round-trip. Falls back to the default Office scheme when none
-        // was read into the model.
-        let default_scheme = ThemeColorScheme::default();
-        let scheme = inner.theme.as_ref().unwrap_or(&default_scheme);
-        start_file(&mut zip, "xl/theme/theme1.xml")?;
-        write_str(&mut zip, &scheme.to_xml())?;
 
         // xl/worksheets/sheet{N}.xml
         let mut cell_offset = 0usize;
@@ -2253,36 +2243,6 @@ mod tests {
             val.hyperlink.as_deref(),
             Some("https://example.com"),
             "hyperlink should round-trip"
-        );
-    }
-    /// T1 (v0.13.0): writer emits `xl/theme/theme1.xml` so external
-    /// readers (ExcelJS) can resolve `<color theme=\"N\"/>` on round-trip.
-    /// Mirrors the reader->writer path: the reader populates `inner.theme`,
-    /// the writer serializes it (falling back to the default Office scheme).
-    #[test]
-    fn test_emit_theme1_part_present_and_resolvable() {
-        use std::io::{Cursor, Read};
-        use crate::model::color::ThemeColorScheme;
-
-        let mut inner = WorkbookInner::new();
-        let ws = inner.add_worksheet("Sheet1".into());
-        ws.add_row(vec![serde_json::json!("hello")]);
-        // Simulating the reader having captured an Office theme (v0.13.0).
-        inner.theme = Some(ThemeColorScheme::default());
-
-        let bytes = workbook_to_bytes(&inner).unwrap();
-        let mut archive = zip::read::ZipArchive::new(Cursor::new(&bytes)).unwrap();
-
-        // theme1.xml must exist and carry the 12-entry clrScheme
-        let mut theme_xml = String::new();
-        archive
-            .by_name("xl/theme/theme1.xml")
-            .expect("theme1.xml must be emitted")
-            .read_to_string(&mut theme_xml)
-            .unwrap();
-        assert!(
-            theme_xml.contains(r##"<a:accent1><a:srgbClr val=\"4F81BD\"/>"##),
-            "theme1.xml must expose accent1 = 4F81BD: {theme_xml}"
         );
     }
 }

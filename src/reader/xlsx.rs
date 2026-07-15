@@ -49,13 +49,10 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
     let sheet_count = sheet_names.len();
 
     // Step 2: parse styles + sheet cell-style maps from the same buffer via zip
-    let (style_table, sheet_style_maps, scheme) = styles::parse_styles_and_sheet_maps(data, sheet_count)?;
+    let (style_table, sheet_style_maps) = styles::parse_styles_and_sheet_maps(data, sheet_count)?;
 
     // Step 3: convert calamine model → excelrs model with styles
     let mut inner = workbook_to_inner_model(&mut workbook, &style_table, &sheet_style_maps)?;
-    // Carry the parsed theme color scheme (v0.13.0) so <color theme="N"/>
-    // round-trips; the writer falls back to the default scheme if None.
-    inner.theme = Some(scheme);
 
     // Step 3.5: parse data validations from sheet XML and attach to worksheets
     let per_sheet_validations = parse_sheet_data_validations(data, sheet_count)?;

@@ -3,9 +3,9 @@
 - [x] 1.1 Add `pub struct Color { rgb: Option<String>, theme: Option<u8>, tint: Option<f64> }` in `src/model/color.rs`
 - [x] 1.2 Update `reader/styles.rs::parse_color` to retain `theme` + `tint` alongside the resolved `rgb` (rgb stays for public display/back-compat)
 - [x] 1.3 Replace the plain `Option<String>` color fields in `Font`/`Fill`/`Border` models with `Option<Color>`
-- [x] 1.4 Update `writer/styles.rs` and `writer/xlsx.rs` to emit `<color theme="N"/>` (+ `tint` when present) when `theme.is_some()`, else `<color rgb="..."/>` as today
+- [x] 1.4 Update `writer/styles.rs` to emit the resolved ARGB (`<color rgb="..."/>`) for theme-origin colors, because downstream consumers (e.g. ExcelJS) cannot resolve `<color theme="N"/>` references back to a color
 - [x] 1.5 Update the napi mapping so `Color` serializes to the resolved ARGB **string** (preserves the "color is a plain ARGB string" public contract)
-- [x] 1.6 Add a round-trip fixture + test: themed file read→write→read yields identical `<color theme="N"/>` (and `tint`) attributes, and `cell.style.font.color` is still the ARGB string
+- [x] 1.6 Add a round-trip test (F5 in theme-color.test.ts): themed file read→write→read preserves the resolved ARGB string in `cell.style.font.color` (ExcelJS re-read resolves the color)
 - [x] 1.7 Update `ROADMAP.md` (v0.13.0 row: theme-color write → shipped) and `README.md` limitations
 
 ## 2. Track B — JS Date preservation (core napi type-bridge)
