@@ -94,7 +94,20 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
             for row in ws.rows() {
                 let written = row.written_cells();
                 for cell in written {
-                    cell_styles.push(effective_cell_style_with_fallback(cell, &col_style_map));
+                    let mut style = effective_cell_style_with_fallback(cell, &col_style_map);
+                    // v0.13.0: Date cells need a date number format to round-trip as
+                    // dates; inject a default one unless the style already has a format.
+                    let cv = cell.value_raw();
+                    if cv.value_type == "Date" {
+                        let needs_fmt = style.as_ref().is_none_or(|s| s.num_fmt.is_none());
+                        if needs_fmt {
+                            let serial = cv.date_serial.unwrap_or(0.0);
+                            let mut s = style.unwrap_or_default();
+                            s.num_fmt = Some(crate::model::cell::date_format_for_serial(serial));
+                            style = Some(s);
+                        }
+                    }
+                    cell_styles.push(style);
                     cell_count += 1;
                 }
             }
@@ -217,7 +230,7 @@ fn build_shared_strings(worksheets: &[Worksheet]) -> (Vec<String>, HashMap<Strin
     for ws in worksheets {
         for row in ws.rows() {
             for cell in row.written_cells() {
-                let cv = cell.value();
+                let cv = cell.value_raw();
                 match cv.value_type.as_str() {
                     "String" => {
                         if let Some(s) = cv.string {
@@ -264,7 +277,7 @@ fn collect_sheet_hyperlinks(ws: &Worksheet) -> Vec<SheetHyperlink> {
     let mut out = Vec::new();
     for row in ws.rows() {
         for cell in row.written_cells() {
-            let cv = cell.value();
+            let cv = cell.value_raw();
             if cv.value_type == "Hyperlink" {
                 if let Some(ref url) = cv.hyperlink {
                     let ref_addr = cell.address();
@@ -793,7 +806,7 @@ fn write_cell_xml<W: Write>(
     style_index: u32,
 ) -> Result<(), ExcelrsError> {
     let cv = cell
-        .value()
+        .value_raw()
         .validate()
         .map_err(|e| ExcelrsError::Write(format!("invalid cell value: {e}")))?;
     let address = cell.address();
@@ -895,6 +908,14 @@ fn write_cell_xml<W: Write>(
                 if let Some(idx) = string_indices.get(url) {
                     write_str(w, &format!("<v>{}</v>", idx))?;
                 }
+            }
+        }
+        "Date" => {
+            // v0.13.0: emit the Excel serial as the cell value. With a date number
+            // format (injected into the style table) Excel renders it as a date;
+            // no `t` attribute is written (dates are numeric cells).
+            if let Some(serial) = cv.date_serial {
+                write_str(w, &format!("<v>{}</v>", serial))?;
             }
         }
         _ => {}
@@ -1012,20 +1033,20 @@ mod tests {
 
         // Check cell values
         let a1 = ws.get_cell_by_address("A1".into());
-        assert_eq!(a1.value().value_type, "Number");
-        assert_eq!(a1.value().number, Some(42.0));
+        assert_eq!(a1.value_raw().value_type, "Number");
+        assert_eq!(a1.value_raw().number, Some(42.0));
 
         let b1 = ws.get_cell_by_address("B1".into());
-        assert_eq!(b1.value().value_type, "String");
-        assert_eq!(b1.value().string.as_deref(), Some("Hello"));
+        assert_eq!(b1.value_raw().value_type, "String");
+        assert_eq!(b1.value_raw().string.as_deref(), Some("Hello"));
 
         let c1 = ws.get_cell_by_address("C1".into());
-        assert_eq!(c1.value().value_type, "Boolean");
-        assert_eq!(c1.value().boolean, Some(true));
+        assert_eq!(c1.value_raw().value_type, "Boolean");
+        assert_eq!(c1.value_raw().boolean, Some(true));
 
         let a2 = ws.get_cell_by_address("A2".into());
-        assert_eq!(a2.value().value_type, "Number");
-        assert_eq!(a2.value().number, Some(std::f64::consts::PI));
+        assert_eq!(a2.value_raw().value_type, "Number");
+        assert_eq!(a2.value_raw().number, Some(std::f64::consts::PI));
     }
 
     #[test]
@@ -1047,7 +1068,7 @@ mod tests {
 
         let ws2 = &re_read.worksheets()[1];
         let a1 = ws2.get_cell_by_address("A1".into());
-        assert_eq!(a1.value().string.as_deref(), Some("data"));
+        assert_eq!(a1.value_raw().string.as_deref(), Some("data"));
     }
 
     #[test]
@@ -1094,15 +1115,15 @@ mod tests {
 
         let ws = &re_read.worksheets()[0];
         assert_eq!(
-            ws.get_cell_by_address("A1".into()).value().string.as_deref(),
+            ws.get_cell_by_address("A1".into()).value_raw().string.as_deref(),
             Some("apple")
         );
         assert_eq!(
-            ws.get_cell_by_address("B1".into()).value().string.as_deref(),
+            ws.get_cell_by_address("B1".into()).value_raw().string.as_deref(),
             Some("banana")
         );
         assert_eq!(
-            ws.get_cell_by_address("C1".into()).value().string.as_deref(),
+            ws.get_cell_by_address("C1".into()).value_raw().string.as_deref(),
             Some("apple")
         );
     }
@@ -1136,19 +1157,19 @@ mod tests {
 
         // Row 1
         let r1c1 = ws.get_cell_by_address("A1".into());
-        assert_eq!(r1c1.value().string.as_deref(), Some("Name"));
+        assert_eq!(r1c1.value_raw().string.as_deref(), Some("Name"));
         let r1c2 = ws.get_cell_by_address("B1".into());
-        assert_eq!(r1c2.value().string.as_deref(), Some("Age"));
+        assert_eq!(r1c2.value_raw().string.as_deref(), Some("Age"));
         let r1c3 = ws.get_cell_by_address("C1".into());
-        assert_eq!(r1c3.value().string.as_deref(), Some("Active"));
+        assert_eq!(r1c3.value_raw().string.as_deref(), Some("Active"));
 
         // Row 2
         let r2c1 = ws.get_cell_by_address("A2".into());
-        assert_eq!(r2c1.value().string.as_deref(), Some("Alice"));
+        assert_eq!(r2c1.value_raw().string.as_deref(), Some("Alice"));
         let r2c2 = ws.get_cell_by_address("B2".into());
-        assert_eq!(r2c2.value().number, Some(30.0));
+        assert_eq!(r2c2.value_raw().number, Some(30.0));
         let r2c3 = ws.get_cell_by_address("C2".into());
-        assert_eq!(r2c3.value().boolean, Some(true));
+        assert_eq!(r2c3.value_raw().boolean, Some(true));
     }
 
     #[test]
@@ -1524,7 +1545,11 @@ mod tests {
 
         // Mutate value via getCell (simulates JS cell.value = 42)
         let mut cell = ws.get_cell_by_address("B1".into());
-        cell.set_value(serde_json::json!("mutated"));
+        cell.set_value_raw(CellValue {
+            value_type: "String".into(),
+            string: Some("mutated".into()),
+            ..Default::default()
+        });
 
         // Also style on a second cell
         let mut cell = ws.get_cell_by_address("A2".into());
@@ -1546,7 +1571,7 @@ mod tests {
 
         // Verify B1: value was mutated
         let cell = ws.get_cell_by_address("B1".into());
-        assert_eq!(cell.value().string.as_deref(), Some("mutated"));
+        assert_eq!(cell.value_raw().string.as_deref(), Some("mutated"));
 
         // Verify A2: red fill
         let cell = ws.get_cell_by_address("A2".into());
@@ -2016,12 +2041,12 @@ mod tests {
 
         let cell = re_read.worksheets()[0].get_cell_by_address("A1".into());
         assert_eq!(
-            cell.value().hyperlink_text.as_deref(),
+            cell.value_raw().hyperlink_text.as_deref(),
             Some("Display Me"),
             "hyperlink display text must survive round-trip"
         );
         assert_eq!(
-            cell.value().hyperlink.as_deref(),
+            cell.value_raw().hyperlink.as_deref(),
             Some("https://example.com/target"),
             "hyperlink URL must survive round-trip"
         );
@@ -2213,7 +2238,7 @@ mod tests {
 
         // Assert hyperlink survived
         let cell_a1 = ws2.get_cell_by_address("A1".into());
-        let val = cell_a1.value();
+        let val = cell_a1.value_raw();
         assert_eq!(
             val.hyperlink.as_deref(),
             Some("https://example.com"),

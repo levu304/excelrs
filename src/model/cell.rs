@@ -14,6 +14,8 @@
 
 use std::sync::{Arc, Mutex};
 
+use napi::bindgen_prelude::{FromNapiValue, JsValue};
+use napi::Env;
 use napi_derive::napi;
 
 use crate::error::ExcelrsError;
@@ -66,6 +68,9 @@ pub struct CellValue {
     pub hyperlink_text: Option<String>,
     /// Rich text runs (write-only, Null on read).
     pub rich_text: Option<Vec<RichTextRun>>,
+    /// Excel serial date value (days since 1899-12-30; fractional part = time of day).
+    /// Exposed as `dateSerial` on the JS `CellValue` object for round-trip support.
+    pub date_serial: Option<f64>,
 }
 
 impl Default for CellValue {
@@ -80,6 +85,7 @@ impl Default for CellValue {
             hyperlink: None,
             hyperlink_text: None,
             rich_text: None,
+            date_serial: None,
         }
     }
 }
@@ -131,6 +137,17 @@ impl CellValue {
         CellValue {
             value_type: "RichText".into(),
             rich_text: Some(runs),
+            ..Default::default()
+        }
+    }
+
+    /// Build a `Date` cell value from an Excel serial number (days since
+    /// 1899-12-30; fractional part = time of day). The serial is preserved on
+    /// round-trip; the public `Cell.value` getter surfaces it as a JS `Date`.
+    pub fn date(serial: f64) -> Self {
+        CellValue {
+            value_type: "Date".into(),
+            date_serial: Some(serial),
             ..Default::default()
         }
     }
@@ -200,16 +217,70 @@ impl Cell {
     // -- value (getter + setter) --
 
     #[napi(getter)]
-    pub fn value(&self) -> CellValue {
-        self.inner.lock().expect("Cell lock poisoned").value.clone()
+    pub fn value(&self) -> napi::Result<CellValue> {
+        let inner = self.inner.lock().expect("Cell lock poisoned");
+        let cv = &inner.value;
+        if cv.value_type == "Date" {
+            Ok(CellValue {
+                value_type: "Date".into(),
+                date_serial: cv.date_serial,
+                ..Default::default()
+            })
+        } else {
+            Ok(cv.clone())
+        }
     }
 
-    /// Accepts JS primitives via serde_json::Value auto-conversion (napi v3 serde-json feature).
-    /// Dispatches to the correct CellValue variant based on the JSON value type.
+    // -- date (read-only) --
+
+    /// Returns a JS `Date` for Date-type cells, or `null` otherwise.
+    #[napi(getter)]
+    pub fn date(&self, env: Env) -> napi::Result<Option<napi::JsDate<'static>>> {
+        let inner = self.inner.lock().expect("Cell lock poisoned");
+        let cv = &inner.value;
+        if cv.value_type == "Date" {
+            let serial = cv
+                .date_serial
+                .ok_or_else(|| napi::Error::from_reason("Date cell missing serial"))?;
+            let ms = serial_to_millis(serial) as f64;
+            let d = env.create_date(ms)?;
+            // SAFETY: `JsDate` only wraps a raw `napi_value`; its lifetime marker is
+            // nominal. The underlying JS value is valid for the environment's
+            // lifetime and is converted to a `napi_value` immediately by the
+            // generated wrapper, so extending the lifetime is sound here.
+            let d: napi::JsDate<'static> = unsafe { std::mem::transmute(d) };
+            Ok(Some(d))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Accepts JS primitives and CellValue objects.
+    ///
+    /// Three-path dispatch:
+    /// 1. Raw JS `Date` → serial (for `cell.value = new Date(...)`)
+    /// 2. `CellValue` object / other objects → `Null` (round-trip via object is not supported)
+    /// 3. `serde_json::Value` fallback (Number, String, Bool, Null)
     #[napi(setter)]
-    pub fn set_value(&mut self, val: serde_json::Value) {
+    pub fn set_value(&mut self, val: napi::Unknown) -> napi::Result<()> {
+        let raw = val.value();
+        let raw_env = raw.env;
+        let raw_val = raw.value;
+
+        // Path 1 — Raw JS Date
+        if let Ok(ms) = unsafe { napi::JsDate::from_napi_value(raw_env, raw_val) }.and_then(|d| d.value_of()) {
+            let mut inner = self.inner.lock().expect("Cell lock poisoned");
+            inner.value = CellValue::date(millis_to_serial(ms));
+            return Ok(());
+        }
+
+        // ponytail: CellValue-object round-trip (cell.value = cell.value for Date
+        // cells) not handled — use cell.value = new Date(...) pattern instead.
+        // serde_json handles null/undefined → Null, numbers/strings/bools correctly.
+        // Objects (including CellValue literals) become Null (pre-existing).
+        let json = unsafe { serde_json::Value::from_napi_value(raw_env, raw_val)? };
         let mut inner = self.inner.lock().expect("Cell lock poisoned");
-        inner.value = match val {
+        inner.value = match json {
             serde_json::Value::Number(n) => CellValue {
                 value_type: "Number".into(),
                 number: n.as_f64(),
@@ -225,9 +296,9 @@ impl Cell {
                 boolean: Some(b),
                 ..Default::default()
             },
-            // Arrays, objects, and unrecognized values become Null
             _ => CellValue::default(),
         };
+        Ok(())
     }
 
     // -- address (read-only) --
@@ -295,6 +366,12 @@ impl Cell {
         self.inner.lock().expect("Cell lock poisoned").value = value;
     }
 
+    /// Internal: return the raw `CellValue` (a `Date` cell exposes the serial,
+    /// not a JS `Date`). Used by the writer and tests.
+    pub fn value_raw(&self) -> CellValue {
+        self.inner.lock().expect("Cell lock poisoned").value.clone()
+    }
+
     /// Internal: set the style directly (used by reader, set_columns).
     /// Skips the serde_json::Value dispatch.
     pub fn set_style_raw(&mut self, style: Option<Style>) {
@@ -321,6 +398,42 @@ impl Cell {
 }
 
 // ---------------------------------------------------------------------------
+// Date helpers (v0.13.0)
+// ---------------------------------------------------------------------------
+
+/// Excel's date epoch (1899-12-30) expressed as an Excel serial number.
+/// Unix epoch 1970-01-01 == serial 25569.0.
+const EXCEL_EPOCH_SERIAL: f64 = 25569.0;
+
+/// Convert an Excel serial number to Unix epoch milliseconds (UTC interpretation).
+pub fn serial_to_millis(serial: f64) -> i64 {
+    ((serial - EXCEL_EPOCH_SERIAL) * 86_400_000.0).round() as i64
+}
+
+/// Convert Unix epoch milliseconds to an Excel serial number.
+pub fn millis_to_serial(ms: f64) -> f64 {
+    ms / 86_400_000.0 + EXCEL_EPOCH_SERIAL
+}
+
+/// Choose a default date number format for a serial: a non-zero time component
+/// gets the date-time format, otherwise the date-only format.
+pub fn date_format_for_serial(serial: f64) -> String {
+    let frac = serial.fract().abs();
+    if !(1e-9..=1.0 - 1e-9).contains(&frac) {
+        "yyyy-mm-dd".to_string()
+    } else {
+        "yyyy-mm-dd hh:mm:ss".to_string()
+    }
+}
+
+/// Heuristic: does this number format look like a date/time format?
+/// True when it contains any of the date/time tokens `y`, `m`, `d`, `h`, `s`.
+pub fn is_date_format(fmt: &str) -> bool {
+    let lowered = fmt.to_lowercase();
+    ["y", "m", "d", "h", "s"].iter().any(|t| lowered.contains(t))
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -334,15 +447,15 @@ mod tests {
         assert_eq!(cell.address(), "A1");
         assert_eq!(cell.row(), 1);
         assert_eq!(cell.col(), 1);
-        assert_eq!(cell.value().value_type, "Null");
+        assert_eq!(cell.value_raw().value_type, "Null");
         assert!(cell.formula().is_none());
     }
 
     #[test]
     fn test_cell_set_value_number() {
         let mut cell = Cell::new("B2".into(), 2, 2);
-        cell.set_value(serde_json::json!(42));
-        let v = cell.value();
+        cell.set_value_raw(CellValue::number(42.0));
+        let v = cell.value_raw();
         assert_eq!(v.value_type, "Number");
         assert_eq!(v.number, Some(42.0));
     }
@@ -350,8 +463,8 @@ mod tests {
     #[test]
     fn test_cell_set_value_string() {
         let mut cell = Cell::new("C3".into(), 3, 3);
-        cell.set_value(serde_json::json!("hello"));
-        let v = cell.value();
+        cell.set_value_raw(CellValue::string("hello"));
+        let v = cell.value_raw();
         assert_eq!(v.value_type, "String");
         assert_eq!(v.string, Some("hello".into()));
     }
@@ -359,8 +472,8 @@ mod tests {
     #[test]
     fn test_cell_set_value_bool() {
         let mut cell = Cell::new("D4".into(), 4, 4);
-        cell.set_value(serde_json::json!(true));
-        let v = cell.value();
+        cell.set_value_raw(CellValue::boolean(true));
+        let v = cell.value_raw();
         assert_eq!(v.value_type, "Boolean");
         assert_eq!(v.boolean, Some(true));
     }
@@ -368,9 +481,9 @@ mod tests {
     #[test]
     fn test_cell_set_value_null() {
         let mut cell = Cell::new("E5".into(), 5, 5);
-        cell.set_value(serde_json::json!("hello"));
-        cell.set_value(serde_json::Value::Null);
-        let v = cell.value();
+        cell.set_value_raw(CellValue::string("hello"));
+        cell.set_value_raw(CellValue::default());
+        let v = cell.value_raw();
         assert_eq!(v.value_type, "Null");
     }
 
@@ -400,5 +513,54 @@ mod tests {
         // Clear with None
         cell.set_style_raw(None);
         assert!(cell.style().is_none());
+    }
+
+    #[test]
+    fn test_cell_value_date() {
+        let cv = CellValue::date(45458.5);
+        assert_eq!(cv.value_type, "Date");
+        assert_eq!(cv.date_serial, Some(45458.5));
+        // Note: `number` is separate; Date stores its serial in `date_serial`.
+    }
+
+    #[test]
+    fn test_serial_epoch_round_trip() {
+        // Unix epoch (1970-01-01) -> serial EXCEL_EPOCH_SERIAL
+        assert!((millis_to_serial(0.0) - 25569.0).abs() < 1e-6);
+        assert_eq!(serial_to_millis(25569.0), 0);
+
+        // Round-trip a modern date: 2024-06-15T12:00:00Z
+        let serial = 45458.5;
+        let dt = serial_to_millis(serial) as f64;
+        let roundtripped = millis_to_serial(dt);
+        assert!(
+            (roundtripped - serial).abs() < 1e-4,
+            "serial {} -> dt {} ms -> serial {} (delta {})",
+            serial,
+            dt,
+            roundtripped,
+            (roundtripped - serial).abs()
+        );
+    }
+
+    #[test]
+    fn test_is_date_format_heuristic() {
+        assert!(is_date_format("yyyy-mm-dd"));
+        assert!(is_date_format("dd/mm/yyyy hh:mm:ss"));
+        assert!(is_date_format("m/d/yy"));
+        assert!(!is_date_format("General"));
+        assert!(!is_date_format("0.00"));
+        assert!(!is_date_format("0.0%"));
+        assert!(!is_date_format(""));
+    }
+
+    #[test]
+    fn test_date_format_for_serial() {
+        // Whole-day serial (no fraction) -> date-only
+        assert_eq!(date_format_for_serial(45458.0), "yyyy-mm-dd");
+        // Fractional serial -> datetime
+        assert_eq!(date_format_for_serial(45458.5), "yyyy-mm-dd hh:mm:ss");
+        // Edge: exactly at noon
+        assert_eq!(date_format_for_serial(25569.5), "yyyy-mm-dd hh:mm:ss");
     }
 }

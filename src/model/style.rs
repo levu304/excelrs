@@ -34,6 +34,16 @@ pub struct Font {
     pub underline: Option<bool>,
     /// ARGB hex (8 chars) or RGB hex (6 chars). Default: None.
     pub color: Option<String>,
+    /// Internal: originating theme index (0–11) when `color` came from a
+    /// `<color theme="N"/>` reference. Not exposed to JS; preserves the theme
+    /// link on write. `None` for ARGB/RGB colors.
+    #[napi(skip)]
+    #[serde(skip)]
+    pub color_theme: Option<u8>,
+    /// Internal: tint applied to the theme color (`tint` attribute). Not exposed.
+    #[napi(skip)]
+    #[serde(skip)]
+    pub color_tint: Option<f64>,
 }
 
 impl Default for Font {
@@ -45,6 +55,8 @@ impl Default for Font {
             italic: None,
             underline: None,
             color: None,
+            color_theme: None,
+            color_tint: None,
         }
     }
 }
@@ -85,6 +97,22 @@ pub struct Fill {
     pub foreground: Option<String>,
     /// Background color (ARGB hex). Default: None.
     pub background: Option<String>,
+    /// Internal: theme index for `foreground` when it came from a theme ref.
+    #[napi(skip)]
+    #[serde(skip)]
+    pub foreground_theme: Option<u8>,
+    /// Internal: tint for `foreground`.
+    #[napi(skip)]
+    #[serde(skip)]
+    pub foreground_tint: Option<f64>,
+    /// Internal: theme index for `background` when it came from a theme ref.
+    #[napi(skip)]
+    #[serde(skip)]
+    pub background_theme: Option<u8>,
+    /// Internal: tint for `background`.
+    #[napi(skip)]
+    #[serde(skip)]
+    pub background_tint: Option<f64>,
     /// Pattern name (for `kind="pattern"`). Default: None.
     pub pattern: Option<String>,
     // -- gradient fields (v0.5.0) --
@@ -113,6 +141,10 @@ impl Default for Fill {
             kind: "none".into(),
             foreground: None,
             background: None,
+            foreground_theme: None,
+            foreground_tint: None,
+            background_theme: None,
+            background_tint: None,
             pattern: None,
             gradient_type: None,
             gradient_degree: None,
@@ -141,6 +173,14 @@ pub struct BorderStyle {
     pub style: String,
     /// Line color (ARGB hex). Default: black (`"FF000000"` in exceljs).
     pub color: Option<String>,
+    /// Internal: originating theme index (0–11) for theme colors. Not exposed.
+    #[napi(skip)]
+    #[serde(skip)]
+    pub color_theme: Option<u8>,
+    /// Internal: tint applied to the theme color. Not exposed.
+    #[napi(skip)]
+    #[serde(skip)]
+    pub color_tint: Option<f64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -765,6 +805,7 @@ mod tests {
         let bs = BorderStyle {
             style: "none".into(),
             color: None,
+            ..Default::default()
         };
         let border = Border {
             top: Some(bs),
@@ -786,6 +827,7 @@ mod tests {
         let bs = BorderStyle {
             style: "xtrathick".into(),
             color: None,
+            ..Default::default()
         };
         let border = Border {
             top: Some(bs),

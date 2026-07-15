@@ -64,3 +64,9 @@ test('serial get/set round-trip preserves value', () => {
   expect(v2.valueType).toBe('String')
   expect(v2.string).toBe('test')
 })
+
+test('set value with a CellValue object literal becomes Null', () => {
+  const cell = new Cell('A1', 0, 0)
+  cell.value = { valueType: 'Number', number: 5 } as any
+  expect(cell.value.valueType).toBe('Null')
+})

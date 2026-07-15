@@ -6,6 +6,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] — 2026-07-15
+
+### Added
+
+- **Theme-color write (resolved ARGB)** — writer emits `<color rgb="..."/>` with the fully-resolved 8-char ARGB for theme/indexed/rgb sources, so downstream consumers (ExcelJS 4.4.0) round-trip theme colors without needing `theme1.xml` (OpenSpec `theme-color-references`).
+- **JS `Date` bridge** — `Cell.date` getter returns a JS `Date` for Date-type cells (`null` otherwise); `Cell.value` setter accepts a raw `Date` and stores it as a date serial (OpenSpec `date-cell-value`).
+- **Async contract enforcement** — `read`/`write`/`readFile`/`writeFile` are async; tests enforce `await` (OpenSpec async-contract).
+
+### Fixed
+
+- `Cell::value()` no longer builds a discarded `JsDate` (dead `create_date` + `unsafe` transmute); returns `CellValue` directly. `date()` keeps the live `JsDate` path.
+- `set value` JSDoc documents the 3-path dispatch (Date→serial, primitives→variant, objects→`Null`).
+
+### Changed
+
+- Bump `0.12.0 → 0.13.0` (Cargo + npm). **Breaking**: reading a Date cell now returns a `CellValue` with `valueType:"Date"` + `dateSerial` (plus new `Cell.date` getter) instead of a raw ISO string. Documented as a breaking change.
+
 ## [0.12.0] — 2026-07-14
 
 ### Added
@@ -24,7 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Notes
 
-- JS `Date` preservation deferred v0.13.0 (separate FFI type-bridging effort).
+- JS `Date` bridge shipped in v0.13.0 (see [0.13.0] above).
 - Publishes `@levu304/excelrs` + platform packages (`-darwin-arm64`, `-linux-x64-gnu`, `-win32-x64-msvc`) via `v0.12.0` tag → release.yml.
 
 ## [0.10.0] — 2026-07-13

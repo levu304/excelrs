@@ -172,7 +172,7 @@ mod tests {
         assert_eq!(cell.row(), 5);
         assert_eq!(cell.col(), 3);
         assert_eq!(cell.address(), "C5");
-        assert_eq!(cell.value().value_type, "Null");
+        assert_eq!(cell.value_raw().value_type, "Null");
     }
 
     #[test]
@@ -189,7 +189,7 @@ mod tests {
         let mut row = Row::new(1);
         row.set_cell_value(1, CellValue::number(42.0));
         let cell = row.get_cell_by_col_num(1);
-        assert_eq!(cell.value().number, Some(42.0));
+        assert_eq!(cell.value_raw().number, Some(42.0));
     }
 
     #[test]

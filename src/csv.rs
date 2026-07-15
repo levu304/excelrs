@@ -226,7 +226,7 @@ pub fn serialize_csv(inner: &WorkbookInner, delimiter: u8, with_bom: bool) -> Re
         for cell in row.sorted_cells() {
             let idx = (cell.col() - 1) as usize;
             if idx < col_count {
-                col_texts[idx] = Some(cell_value_to_text(&cell.value()));
+                col_texts[idx] = Some(cell_value_to_text(&cell.value_raw()));
             }
         }
 
@@ -337,15 +337,15 @@ mod tests {
 
         // Row 1: Number(1) in A, String("hello") in B
         let cell_a1 = ws.get_cell_by_address("A1".into());
-        assert_eq!(cell_a1.value().number, Some(1.0));
+        assert_eq!(cell_a1.value_raw().number, Some(1.0));
         let cell_b1 = ws.get_cell_by_address("B1".into());
-        assert_eq!(cell_b1.value().string, Some("hello".into()));
+        assert_eq!(cell_b1.value_raw().string, Some("hello".into()));
 
         // Row 2: Number(2) in A, String("world") in B
         let cell_a2 = ws.get_cell_by_address("A2".into());
-        assert_eq!(cell_a2.value().number, Some(2.0));
+        assert_eq!(cell_a2.value_raw().number, Some(2.0));
         let cell_b2 = ws.get_cell_by_address("B2".into());
-        assert_eq!(cell_b2.value().string, Some("world".into()));
+        assert_eq!(cell_b2.value_raw().string, Some("world".into()));
     }
 
     #[test]
@@ -354,10 +354,10 @@ mod tests {
         let inner = parse_csv(data, b',').unwrap();
         let ws = &inner.worksheets[0];
         let cell_a1 = ws.get_cell_by_address("A1".into());
-        assert_eq!(cell_a1.value().string, Some("a,b".into()));
-        assert_eq!(cell_a1.value().value_type, "String");
+        assert_eq!(cell_a1.value_raw().string, Some("a,b".into()));
+        assert_eq!(cell_a1.value_raw().value_type, "String");
         let cell_b1 = ws.get_cell_by_address("B1".into());
-        assert_eq!(cell_b1.value().string, Some("line1\nline2".into()));
+        assert_eq!(cell_b1.value_raw().string, Some("line1\nline2".into()));
     }
 
     #[test]
@@ -366,9 +366,9 @@ mod tests {
         let inner = parse_csv(data, b',').unwrap();
         let ws = &inner.worksheets[0];
         let cell_a1 = ws.get_cell_by_address("A1".into());
-        assert_eq!(cell_a1.value().string, Some("say \"hello\"".into()));
+        assert_eq!(cell_a1.value_raw().string, Some("say \"hello\"".into()));
         let cell_b1 = ws.get_cell_by_address("B1".into());
-        assert_eq!(cell_b1.value().string, Some("next".into()));
+        assert_eq!(cell_b1.value_raw().string, Some("next".into()));
     }
 
     #[test]
@@ -377,9 +377,9 @@ mod tests {
         let inner = parse_csv(data, b';').unwrap();
         let ws = &inner.worksheets[0];
         let cell_a1 = ws.get_cell_by_address("A1".into());
-        assert_eq!(cell_a1.value().string, Some("x".into()));
+        assert_eq!(cell_a1.value_raw().string, Some("x".into()));
         let cell_b2 = ws.get_cell_by_address("B2".into());
-        assert_eq!(cell_b2.value().number, Some(2.0));
+        assert_eq!(cell_b2.value_raw().number, Some(2.0));
     }
 
     #[test]
@@ -390,9 +390,9 @@ mod tests {
         let ws = &inner.worksheets[0];
         assert_eq!(ws.row_count(), 2);
         let cell_a1 = ws.get_cell_by_address("A1".into());
-        assert_eq!(cell_a1.value().string, Some("val".into()));
+        assert_eq!(cell_a1.value_raw().string, Some("val".into()));
         let cell_a2 = ws.get_cell_by_address("A2".into());
-        assert_eq!(cell_a2.value().number, Some(42.0));
+        assert_eq!(cell_a2.value_raw().number, Some(42.0));
     }
 
     #[test]
@@ -417,10 +417,10 @@ mod tests {
         assert_eq!(ws.row_count(), 2);
         // Row1: A empty, B = "b"
         let cell_b1 = ws.get_cell_by_address("B1".into());
-        assert_eq!(cell_b1.value().string, Some("b".into()));
+        assert_eq!(cell_b1.value_raw().string, Some("b".into()));
         // Row2: A = Number(1)
         let cell_a2 = ws.get_cell_by_address("A2".into());
-        assert_eq!(cell_a2.value().number, Some(1.0));
+        assert_eq!(cell_a2.value_raw().number, Some(1.0));
     }
 
     // ---- Serializer tests ----
@@ -502,13 +502,13 @@ mod tests {
         let pws = &parsed.worksheets[0];
         assert_eq!(pws.row_count(), 2);
         let cell_a1 = pws.get_cell_by_address("A1".into());
-        assert_eq!(cell_a1.value().number, Some(42.0));
+        assert_eq!(cell_a1.value_raw().number, Some(42.0));
         let cell_b1 = pws.get_cell_by_address("B1".into());
-        assert_eq!(cell_b1.value().string, Some("hello".into()));
+        assert_eq!(cell_b1.value_raw().string, Some("hello".into()));
         let cell_a2 = pws.get_cell_by_address("A2".into());
-        assert![(cell_a2.value().number.unwrap() - 3.14).abs() < 1e-10];
+        assert![(cell_a2.value_raw().number.unwrap() - 3.14).abs() < 1e-10];
         let cell_b2 = pws.get_cell_by_address("B2".into());
-        assert_eq!(cell_b2.value().string, Some("world".into()));
+        assert_eq!(cell_b2.value_raw().string, Some("world".into()));
     }
 
     // ---- Helper tests ----
@@ -668,8 +668,8 @@ mod tests {
         assert_eq!(pws.row_count(), 5);
 
         let cell_a5 = pws.get_cell_by_address("A5".into());
-        assert_eq!(cell_a5.value().string, Some("r5".into()));
-        assert_eq!(cell_a5.value().value_type, "String");
+        assert_eq!(cell_a5.value_raw().string, Some("r5".into()));
+        assert_eq!(cell_a5.value_raw().value_type, "String");
     }
 
     #[test]
@@ -678,8 +678,8 @@ mod tests {
         let ws = &p.worksheets[0];
         assert_eq!(ws.row_count(), 1);
         assert_eq!(ws.column_count(), 3);
-        assert_eq!(ws.get_cell_by_address("A1".into()).value().string.as_deref(), Some("a"));
-        assert_eq!(ws.get_cell_by_address("B1".into()).value().string.as_deref(), Some("b"));
+        assert_eq!(ws.get_cell_by_address("A1".into()).value_raw().string.as_deref(), Some("a"));
+        assert_eq!(ws.get_cell_by_address("B1".into()).value_raw().string.as_deref(), Some("b"));
     }
 
     #[test]
@@ -709,7 +709,7 @@ mod tests {
         assert_eq!(
             p.worksheets[0]
                 .get_cell_by_address("A7".into())
-                .value()
+                .value_raw()
                 .string
                 .as_deref(),
             Some("r7")
@@ -723,7 +723,7 @@ mod tests {
         let ws = &p.worksheets[0];
         assert_eq!(ws.row_count(), 5);
         assert_eq!(
-            ws.get_cell_by_address("A5".into()).value().string.as_deref(),
+            ws.get_cell_by_address("A5".into()).value_raw().string.as_deref(),
             Some("r5")
         );
     }

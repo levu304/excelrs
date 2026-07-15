@@ -1,13 +1,13 @@
 [package]
 name = "excelrs-core"
-version = "0.12.0"
+version = "0.13.0"
 edition = "2021"
 
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-napi = { version = "3", features = ["async", "serde-json"] }
+napi = { version = "3", features = ["async", "serde-json", "napi5"] }
 napi-derive = "3"
 calamine = { version = "0.35", features = ["dates"] }
 serde = { version = "1", features = ["derive"] }

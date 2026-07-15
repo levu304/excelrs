@@ -39,6 +39,10 @@ impl WorkbookXlsx {
     ///
     /// Parses the buffer with calamine, then replaces the workbook state
     /// in-place.  All existing worksheets are discarded.
+    ///
+    /// @remarks Must be awaited.  The workbook state is only swapped when the
+    /// returned Promise resolves.  Accessing worksheets before awaiting the
+    /// Promise will see the old (stale) state.
     #[napi]
     pub async fn read(&self, buffer: Buffer) -> Result<()> {
         let data = buffer.to_vec();
@@ -49,6 +53,10 @@ impl WorkbookXlsx {
     }
 
     /// Read an .xlsx file from disk.  Async.
+    ///
+    /// @remarks Must be awaited.  The workbook state is only swapped when the
+    /// returned Promise resolves.  Accessing worksheets before awaiting the
+    /// Promise will see the old (stale) state.
     #[napi]
     pub async fn read_file(&self, path: String) -> Result<()> {
         let p = PathBuf::from(path);
@@ -62,6 +70,9 @@ impl WorkbookXlsx {
     ///
     /// Clones the workbook state briefly under the lock, then builds the
     /// .xlsx archive outside the lock (calamine / zip I/O is expensive).
+    ///
+    /// @remarks Must be awaited.  The returned Promise resolves to a Buffer
+    /// of the .xlsx data.
     #[napi]
     pub async fn write(&self) -> Result<Buffer> {
         let inner = self.inner.lock().expect("Workbook lock poisoned").clone();
@@ -71,6 +82,9 @@ impl WorkbookXlsx {
     }
 
     /// Write the workbook to an .xlsx file on disk.  Async.
+    ///
+    /// @remarks Must be awaited.  The file is only fully written when the
+    /// returned Promise resolves.
     #[napi]
     pub async fn write_file(&self, path: String) -> Result<()> {
         let inner = self.inner.lock().expect("Workbook lock poisoned").clone();
@@ -156,6 +170,43 @@ mod tests {
 
         // Clean up
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_workbook_xlsx_async_read_swaps_state_via_block_on() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let inner = Arc::new(Mutex::new(WorkbookInner::new()));
+        let wb = WorkbookXlsx::new(Arc::clone(&inner));
+
+        // Confirm initial state
+        assert_eq!(wb.inner.lock().unwrap().worksheet_count(), 0);
+
+        let bytes = make_test_xlsx_bytes();
+        let buf = Buffer::from(bytes.as_slice());
+
+        // block_on drives the async read to completion
+        rt.block_on(wb.read(buf)).unwrap();
+
+        // After block_on, state is swapped (same as JS await)
+        assert_eq!(inner.lock().unwrap().worksheet_count(), 1);
+        assert_eq!(inner.lock().unwrap().worksheets()[0].name(), "Sheet1");
+    }
+
+    #[test]
+    fn test_workbook_xlsx_async_write_produces_buffer_via_block_on() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let mut inner = WorkbookInner::new();
+        inner.add_worksheet("AsyncTest".into());
+        let inner = Arc::new(Mutex::new(inner));
+        let wb = WorkbookXlsx::new(Arc::clone(&inner));
+
+        let buffer = rt.block_on(wb.write()).unwrap();
+        assert!(!buffer.is_empty());
+
+        // Re-read to confirm the data is valid
+        let re_read = crate::reader::xlsx::workbook_inner_from_bytes(&buffer[..]).unwrap();
+        assert_eq!(re_read.worksheet_count(), 1);
+        assert!(re_read.worksheets().iter().any(|ws| ws.name() == "AsyncTest"));
     }
 
     // ---- helpers ----

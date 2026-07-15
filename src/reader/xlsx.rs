@@ -93,7 +93,7 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
             // Resolve cell address to set a Hyperlink CellValue
             if let Some((row, col)) = ref_to_rowcol(ref_) {
                 let existing = inner.worksheets[i].get_cell_by_rc(row, col);
-                let display_text = existing.value().string.filter(|s| !s.is_empty());
+                let display_text = existing.value_raw().string.filter(|s| !s.is_empty());
                 let cv = CellValue::hyperlink(url.clone(), display_text);
                 inner.worksheets[i].insert_cell_value(row, col, cv);
             }
@@ -767,12 +767,9 @@ fn map_data(data: &Data) -> CellValue {
         Data::String(s) => CellValue::string(s.clone()),
         Data::Bool(b) => CellValue::boolean(*b),
         Data::DateTime(dt) => {
-            // v0.1: Date is stored as an ISO-8601 formatted string.
-            let (y, m, d, hh, mm, ss, ms) = dt.to_ymd_hms_milli();
-            CellValue::string(format!(
-                "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}",
-                y, m, d, hh, mm, ss, ms
-            ))
+            // v0.13.0: preserve as a `Date` (Excel serial), not an ISO string, so the
+            // date survives read→write as a JS `Date`.
+            CellValue::date(dt.as_f64())
         }
         Data::DateTimeIso(s) => CellValue::string(s.clone()),
         Data::DurationIso(s) => CellValue::string(s.clone()),
@@ -1015,9 +1012,9 @@ mod tests {
         use calamine::{ExcelDateTime, ExcelDateTimeType};
         let dt = ExcelDateTime::new(45943.541, ExcelDateTimeType::DateTime, false);
         let result = map_data(&Data::DateTime(dt));
-        assert_eq!(result.value_type, "String");
-        let s = result.string.unwrap();
-        assert!(s.starts_with("2025-10-13"), "expected 2025-10-13 date, got {s}");
+        assert_eq!(result.value_type, "Date");
+        let serial = result.date_serial.expect("date serial");
+        assert!((serial - 45943.541).abs() < 1e-9, "expected ~45943.541, got {serial}");
     }
 
     #[test]
@@ -1558,6 +1555,7 @@ mod tests {
                 diagonal: Some(BorderStyle {
                     style: "thin".into(),
                     color: Some("FF000000".into()),
+                    ..Default::default()
                 }),
                 diagonal_up: Some(true),
                 diagonal_down: Some(true),
@@ -1608,7 +1606,7 @@ mod tests {
         let bytes = workbook_to_bytes(&inner).unwrap();
         let read = crate::reader::xlsx::workbook_inner_from_bytes(&bytes).unwrap();
         let cell = read.worksheets[0].get_cell_by_rc(1, 1);
-        let cv = cell.value();
+        let cv = cell.value_raw();
         assert_eq!(cv.value_type, "RichText");
         let runs = cv.rich_text.as_ref().unwrap();
         assert_eq!(runs.len(), 2);

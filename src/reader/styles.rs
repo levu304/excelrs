@@ -35,7 +35,7 @@ const MAX_EVENTS: usize = 5_000_000;
 use quick_xml::Reader as XmlReader;
 
 use crate::error::ExcelrsError;
-use crate::model::color::ThemeColorScheme;
+use crate::model::color::{Color, ThemeColorScheme};
 use crate::model::style::{Alignment, Border, BorderStyle, Fill, Font, GradientStop, Style};
 use crate::types;
 
@@ -236,31 +236,39 @@ fn str_attr<'a>(attrs: &'a [Attribute], name: &[u8]) -> Option<&'a str> {
     std::str::from_utf8(raw).ok()
 }
 
-/// Resolve a theme, indexed, or rgb color attribute to an 8-char ARGB hex string.
+/// Resolve a theme, indexed, or rgb color attribute to a `Color` (ARGB plus the
+/// originating theme reference when present).
 ///
 /// Priority: `theme` → `indexed` → `rgb`. Returns `None` when none are present.
-fn parse_color(attrs: &[Attribute], scheme: &ThemeColorScheme) -> Option<String> {
+fn parse_color(attrs: &[Attribute], scheme: &ThemeColorScheme) -> Option<Color> {
     // Prefer theme, then indexed, then rgb
     if let Some(theme_str) = str_attr(attrs, b"theme") {
         if let Ok(index) = theme_str.parse::<usize>() {
             let tint = f64_attr(attrs, b"tint");
-            let result = scheme.resolve_theme(index, tint);
-            if result.is_some() {
-                return result;
+            if let Some(rgb) = scheme.resolve_theme(index, tint) {
+                return Some(Color {
+                    rgb,
+                    theme: Some(index as u8),
+                    tint,
+                });
             }
         }
     }
     if let Some(idx_str) = str_attr(attrs, b"indexed") {
         if let Ok(index) = idx_str.parse::<usize>() {
-            if let Some(color) = scheme.resolve_indexed(index) {
-                return Some(color);
+            if let Some(rgb) = scheme.resolve_indexed(index) {
+                return Some(Color { rgb, theme: None, tint: None });
             }
         }
     }
     // rgb attr — fallback
     if let Some(rgb) = str_attr(attrs, b"rgb") {
         if !rgb.is_empty() && rgb.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Some(rgb.to_uppercase());
+            return Some(Color {
+                rgb: rgb.to_uppercase(),
+                theme: None,
+                tint: None,
+            });
         }
         return None;
     }
@@ -381,9 +389,11 @@ pub fn parse_style_table(data: &[u8], scheme: &ThemeColorScheme) -> Result<Style
                     }
                     b"color" if font.is_some() => {
                         let attrs: Vec<_> = e.attributes().filter_map(|a| a.ok()).collect();
-                        if let Some(color) = parse_color(&attrs, scheme) {
+                        if let Some(c) = parse_color(&attrs, scheme) {
                             if let Some(ref mut f) = font {
-                                f.color = Some(color);
+                                f.color = Some(c.rgb);
+                                f.color_theme = c.theme;
+                                f.color_tint = c.tint;
                             }
                         }
                     }
@@ -391,9 +401,11 @@ pub fn parse_style_table(data: &[u8], scheme: &ThemeColorScheme) -> Result<Style
                     // color inside border side
                     b"color" if border_side.is_some() => {
                         let attrs: Vec<_> = e.attributes().filter_map(|a| a.ok()).collect();
-                        if let Some(color) = parse_color(&attrs, scheme) {
+                        if let Some(c) = parse_color(&attrs, scheme) {
                             if let Some((_, Some(ref mut style))) = border_side {
-                                style.color = Some(color);
+                                style.color = Some(c.rgb);
+                                style.color_theme = c.theme;
+                                style.color_tint = c.tint;
                             }
                         }
                     }
@@ -401,17 +413,21 @@ pub fn parse_style_table(data: &[u8], scheme: &ThemeColorScheme) -> Result<Style
                     // color inside fill
                     b"fgColor" if fill.is_some() || in_pattern_fill => {
                         let attrs: Vec<_> = e.attributes().filter_map(|a| a.ok()).collect();
-                        if let Some(color) = parse_color(&attrs, scheme) {
+                        if let Some(c) = parse_color(&attrs, scheme) {
                             if let Some(ref mut f) = fill {
-                                f.foreground = Some(color);
+                                f.foreground = Some(c.rgb);
+                                f.foreground_theme = c.theme;
+                                f.foreground_tint = c.tint;
                             }
                         }
                     }
                     b"bgColor" if fill.is_some() || in_pattern_fill => {
                         let attrs: Vec<_> = e.attributes().filter_map(|a| a.ok()).collect();
-                        if let Some(color) = parse_color(&attrs, scheme) {
+                        if let Some(c) = parse_color(&attrs, scheme) {
                             if let Some(ref mut f) = fill {
-                                f.background = Some(color);
+                                f.background = Some(c.rgb);
+                                f.background_theme = c.theme;
+                                f.background_tint = c.tint;
                             }
                         }
                     }
@@ -472,7 +488,7 @@ pub fn parse_style_table(data: &[u8], scheme: &ThemeColorScheme) -> Result<Style
                         let attrs: Vec<_> = e.attributes().filter_map(|a| a.ok()).collect();
                         if let Some(c) = parse_color(&attrs, scheme) {
                             if let Some(ref mut stop) = current_gradient_stop {
-                                stop.color = c;
+                                stop.color = c.rgb;
                             }
                         }
                     }
@@ -500,6 +516,7 @@ pub fn parse_style_table(data: &[u8], scheme: &ThemeColorScheme) -> Result<Style
                         let bs = style_val.map(|s| BorderStyle {
                             style: s.to_owned(),
                             color: None,
+                            ..Default::default()
                         });
                         border_side = Some((side_name.to_owned(), bs));
                     }
@@ -849,6 +866,24 @@ mod tests {
         assert_eq!(stops.len(), 1);
         assert_eq!(stops[0].color, "FF00FF00");
         assert_eq!(stops[0].position, 0.0);
+    }
+
+    #[test]
+    fn test_parse_color_returns_theme_index() {
+        use quick_xml::events::Event;
+        use quick_xml::Reader;
+        let mut r = Reader::from_str(r#"<color theme="4" tint="-0.5"/>"#);
+        let e = match r.read_event() {
+            Ok(Event::Empty(e)) => e,
+            Ok(_) => panic!("expected empty element"),
+            Err(err) => panic!("xml error: {err}"),
+        };
+        let attrs: Vec<_> = e.attributes().collect::<Result<_, _>>().unwrap();
+        let scheme = ThemeColorScheme::default();
+        let c = parse_color(&attrs, &scheme).unwrap();
+        assert_eq!(c.theme, Some(4));
+        assert_eq!(c.tint, Some(-0.5));
+        assert!(!c.rgb.is_empty());
     }
 
     #[test]

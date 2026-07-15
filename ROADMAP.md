@@ -29,7 +29,7 @@
 | Formula (read/write) | shipped | v0.1.0 | Stored as string formula + cached value |
 | Shared formula | shipped | v0.1.0? | Expanded on write |
 | Array formula | n-a | — | Rare; deferred |
-| Date/DateTime | partial | v0.1.0 | Read → ISO-8601 string; JS `new Date()` not preserved as Date type on write |
+| Date/DateTime | shipped | v0.13.0 | Full round-trip; Date cell values preserved as JS Date via napi bridge (was ISO-8601 string) |
 | Hyperlink | shipped | v0.11.0 | Full read/write round-trip; r:id → URL resolution via sheet rels |
 | RichText | shipped | v0.12.0 | Full read/write round-trip; inline `<is>` strings parsed |
 | **Styles** | | | |
@@ -42,7 +42,7 @@
 | Number format | shipped | v0.2.0+/v0.3.0 | |
 | Row-level style | shipped | v0.5.0 | |
 | Theme color refs (read) | shipped | v0.6.0 | Resolved via `xl/theme/theme1.xml` |
-| Theme color refs (write) | planned | — | Only read-side; `<color theme="N">` not emitted |
+| Theme color refs (write) | shipped | v0.13.0 | Emits `<color theme="N"/>` (+`tint`); ARGB resolution retained for read/public API |
 | Indexed color refs | shipped | v0.6.0 | 56-entry system palette |
 | Tint support | shipped | v0.6.0 | OOXML tint algorithm applied on read |
 | **Workbook** | | | |
@@ -94,11 +94,18 @@ Quick-win data completeness: hyperlinks (read), auto filters, freeze panes, shee
 | 7 | **Diagonal border (read)** | low | ✅ shipped |
 | 8 | **JS Date preservation** | low/med | deferred to v0.13.0 — separate FFI type-bridging effort |
 
+### [v0.13.0] — Style write fidelity + Date preservation ✅
+
+| Rank | Feature | Effort | Status |
+| ------ | --------- | -------- | ------ |
+| 9 | **Theme color (write)** | med | ✅ shipped — emits `<color theme="N"/>` (+`tint`) |
+| 10 | **JS Date preservation** | med | ✅ shipped — Date cell values bridge as `napi::JsDate`; `Cell.value` returns `Date \| CellValue` |
+
 ### [v0.13.0+] — Medium-effort additions
 
 | Rank | Feature | Effort | Rationale |
 | ------ | --------- | -------- | ----------- |
-| 9 | **Theme color (write)** | med | Emit `<color theme="N">` on write. Currently only read-side. |
+| 9 | **Theme color (write)** | med | ✅ shipped (v0.13.0) — emits `<color theme="N"/>` (+`tint`) |
 | 10 | **Headers and footers** | med | `<headerFooter>` element; supports format codes. ExcelJS API surface is moderate. |
 | 11 | **Page setup / print** | med | `pageMargins`, `paperSize`, `orientation`, `printArea`, `printTitles`. Many attributes but each is simple. |
 | 12 | **Workbook views / calc properties** | med | Workbook views + `calcPr` element. Straightforward OOXML. |
