@@ -10,8 +10,11 @@ export declare class Cell {
   constructor(address: string, row: number, col: number)
   get value(): CellValue
   /**
-   * Accepts JS primitives via serde_json::Value auto-conversion (napi v3 serde-json feature).
-   * Dispatches to the correct CellValue variant based on the JSON value type.
+   * Three-path dispatch:
+   * 1. Raw JS `Date` → stored as a date serial (e.g. `cell.value = new Date(...)`).
+   * 2. JS primitives (number/string/boolean/null) → matching CellValue variant (serde_json).
+   * 3. `CellValue` objects / other objects → `Null` (round-trip via object is not supported;
+   *    use `cell.value = new Date(...)` for dates).
    */
   set value(val: CellValue | number | string | boolean | Date | null)
   /** Returns a JS `Date` for Date-type cells, or `null` otherwise. */

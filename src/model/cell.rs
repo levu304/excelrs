@@ -217,20 +217,10 @@ impl Cell {
     // -- value (getter + setter) --
 
     #[napi(getter)]
-    pub fn value(&self, env: Env) -> napi::Result<CellValue> {
+    pub fn value(&self) -> napi::Result<CellValue> {
         let inner = self.inner.lock().expect("Cell lock poisoned");
         let cv = &inner.value;
         if cv.value_type == "Date" {
-            let serial = cv
-                .date_serial
-                .ok_or_else(|| napi::Error::from_reason("Date cell missing serial"))?;
-            let ms = serial_to_millis(serial) as f64;
-            let d = env.create_date(ms)?;
-            // SAFETY: `JsDate` only wraps a raw `napi_value`; its lifetime marker is
-            // nominal. The underlying JS value is valid for the environment's
-            // lifetime and is converted to a `napi_value` immediately by the
-            // generated wrapper, so extending the lifetime is sound here.
-            let _d: napi::JsDate<'static> = unsafe { std::mem::transmute(d) };
             Ok(CellValue {
                 value_type: "Date".into(),
                 date_serial: cv.date_serial,
@@ -269,7 +259,7 @@ impl Cell {
     ///
     /// Three-path dispatch:
     /// 1. Raw JS `Date` → serial (for `cell.value = new Date(...)`)
-    /// 2. `CellValue` object (for round-trip: `cell.value = otherCell.value`)
+    /// 2. `CellValue` object / other objects → `Null` (round-trip via object is not supported)
     /// 3. `serde_json::Value` fallback (Number, String, Bool, Null)
     #[napi(setter)]
     pub fn set_value(&mut self, val: napi::Unknown) -> napi::Result<()> {
@@ -278,12 +268,10 @@ impl Cell {
         let raw_val = raw.value;
 
         // Path 1 — Raw JS Date
-        if let Ok(ms) = unsafe { napi::JsDate::from_napi_value(raw_env, raw_val) }
-            .and_then(|d| d.value_of())
-        {
-                let mut inner = self.inner.lock().expect("Cell lock poisoned");
-                inner.value = CellValue::date(millis_to_serial(ms));
-                return Ok(());
+        if let Ok(ms) = unsafe { napi::JsDate::from_napi_value(raw_env, raw_val) }.and_then(|d| d.value_of()) {
+            let mut inner = self.inner.lock().expect("Cell lock poisoned");
+            inner.value = CellValue::date(millis_to_serial(ms));
+            return Ok(());
         }
 
         // ponytail: CellValue-object round-trip (cell.value = cell.value for Date

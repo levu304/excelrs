@@ -84,6 +84,9 @@ test('readXlsxBuffer reads all sheets and cell types', async () => {
   const a2 = ws.getCell('A2')
   expect(a2.value.valueType).toBe('Date')
   expect(a2.value.dateSerial).toBeGreaterThan(0)
+  expect(a2.value).not.toBeInstanceOf(Date)
+  expect(typeof a2.value.dateSerial).toBe('number')
+  expect(a2.value.dateSerial!).toBeGreaterThan(0)
   expect(a2.date).toBeInstanceOf(Date)
 
   // Formula cell — verify formula string is preserved
