@@ -8,12 +8,14 @@
  */
 export declare class Cell {
   constructor(address: string, row: number, col: number)
-  get value(): CellValue | Date
+  get value(): CellValue
   /**
    * Accepts JS primitives via serde_json::Value auto-conversion (napi v3 serde-json feature).
    * Dispatches to the correct CellValue variant based on the JSON value type.
    */
   set value(val: CellValue | number | string | boolean | Date | null)
+  /** Returns a JS `Date` for Date-type cells, or `null` otherwise. */
+  get date(): Date | null
   get address(): string
   get row(): number
   get col(): number
@@ -444,6 +446,11 @@ export interface CellValue {
   hyperlinkText?: string
   /** Rich text runs (write-only, Null on read). */
   richText?: Array<RichTextRun>
+  /**
+   * Excel serial date value (days since 1899-12-30).
+   * Present when `valueType === "Date"`.
+   */
+  dateSerial?: number
 }
 
 /** Cell fill: kind, foreground, background, and pattern. */

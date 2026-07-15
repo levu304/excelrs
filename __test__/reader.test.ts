@@ -80,12 +80,11 @@ test('readXlsxBuffer reads all sheets and cell types', async () => {
   const f1 = ws.getCell('F1')
   expect(f1.value.valueType).toBe('Null')
 
-  // Date — stored as string in v0.1 (timezone-naive conversion; year may shift
-  // by 1 depending on local timezone due to Excel serial date handling)
+  // Date — now reads as Date type (v0.13.0)
   const a2 = ws.getCell('A2')
-  expect(a2.value.valueType).toBe('String')
-  expect(a2.value.string).toBeTruthy()
-  expect(a2.value.string!.length).toBeGreaterThan(0)
+  expect(a2.value.valueType).toBe('Date')
+  expect(a2.value.dateSerial).toBeGreaterThan(0)
+  expect(a2.date).toBeInstanceOf(Date)
 
   // Formula cell — verify formula string is preserved
   const c3 = ws.getCell('C3')

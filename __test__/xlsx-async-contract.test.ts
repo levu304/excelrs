@@ -67,8 +67,11 @@ test('async read/write round-trip preserves worksheetCount + getWorksheet + Date
   expect(wb2.worksheets.length).toBe(1)
 
   const cellVal = wb2.getWorksheet('Dates')!.getCell('A1').value
-  expect(cellVal).toBeInstanceOf(Date)
-  if (cellVal instanceof Date) {
-    expect(cellVal.toISOString()).toBe('2024-06-15T12:00:00.000Z')
-  }
+  expect(cellVal.valueType).toBe('Date')
+  expect(cellVal.dateSerial).toBeGreaterThan(0)
+
+  // Cell-level date getter returns the JS Date
+  const cell = wb2.getWorksheet('Dates')!.getCell('A1')
+  expect(cell.date).toBeInstanceOf(Date)
+  expect(cell.date!.toISOString()).toBe('2024-06-15T12:00:00.000Z')
 })
