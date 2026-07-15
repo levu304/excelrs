@@ -886,6 +886,7 @@ mod tests {
         assert!(!c.rgb.is_empty());
     }
 
+    #[test]
     fn test_parse_gradient_fill_theme_stop() {
         // Regression for finding #2: theme/indexed gradient stops must resolve,
         // not parse to an empty string.
