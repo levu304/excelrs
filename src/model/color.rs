@@ -122,6 +122,7 @@ const SYSTEM_INDEXED_COLORS: [&str; 56] = [
 /// | 9     | accent6    | 4BACC6    |
 /// | 10    | hlink      | 0000FF    |
 /// | 11    | folHlink   | 800080    |
+#[derive(Clone, Debug, PartialEq)]
 pub struct ThemeColorScheme {
     /// 12 theme color entries, each a 6-char RGB string (no alpha).
     entries: [String; 12],
@@ -173,6 +174,22 @@ impl ThemeColorScheme {
             Some(palette) => palette.get(index).map(|rgb| format!("FF{rgb}")),
             None => SYSTEM_INDEXED_COLORS.get(index).map(|rgb| format!("FF{rgb}")),
         }
+    }
+
+    /// Serialize the 12 theme color entries into a minimal valid
+    /// `<a:clrScheme>` OOXML fragment (v0.13.0).
+    ///
+    /// Mirrors the element names that `from_xml` parses: each of `dk1`,
+    /// `lt1`, `dk2`, `lt2`, `accent1`..`accent6`, `hlink`, `folHlink` wraps
+    /// an `<a:srgbClr val="RRGGBB"/>`.  ExcelJS (and `from_xml`) resolve
+    /// theme indices 0–11 from these 12 values; no `<a:theme>` wrapper is
+    /// required.
+    pub fn to_xml(&self) -> String {
+        let e = &self.entries;
+        format!(
+            r#"<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<a:clrScheme xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" name=\"Office\">\n<a:dk1><a:srgbClr val=\"{}\"/></a:dk1>\n<a:lt1><a:srgbClr val=\"{}\"/></a:lt1>\n<a:dk2><a:srgbClr val=\"{}\"/></a:dk2>\n<a:lt2><a:srgbClr val=\"{}\"/></a:lt2>\n<a:accent1><a:srgbClr val=\"{}\"/></a:accent1>\n<a:accent2><a:srgbClr val=\"{}\"/></a:accent2>\n<a:accent3><a:srgbClr val=\"{}\"/></a:accent3>\n<a:accent4><a:srgbClr val=\"{}\"/></a:accent4>\n<a:accent5><a:srgbClr val=\"{}\"/></a:accent5>\n<a:accent6><a:srgbClr val=\"{}\"/></a:accent6>\n<a:hlink><a:srgbClr val=\"{}\"/></a:hlink>\n<a:folHlink><a:srgbClr val=\"{}\"/></a:folHlink>\n</a:clrScheme>"#,
+            e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7], e[8], e[9], e[10], e[11]
+        )
     }
 
     /// Parse a `<a:clrScheme>` XML fragment and return a `ThemeColorScheme`.
@@ -530,6 +547,20 @@ mod tests {
         let scheme = ThemeColorScheme::default();
         assert!(scheme.resolve_indexed(56).is_none());
         assert!(scheme.resolve_indexed(99).is_none());
+    }
+
+    /// B1: to_xml round-trips through from_xml for the default scheme.
+    #[test]
+    fn test_to_xml_default_round_trip() {
+        let scheme = ThemeColorScheme::default();
+        let xml = scheme.to_xml();
+        assert!(xml.contains(r#"<a:clrScheme"#));
+        assert!(xml.contains(r##"name=\"Office\""##));
+        assert!(xml.contains(r##"<a:accent1><a:srgbClr val=\"4F81BD\"/>"##));
+        // Re-parse: accent1 (index 4) and dk1 (index 0) must survive round-trip
+        let parsed = ThemeColorScheme::from_xml(&xml).unwrap();
+        assert_eq!(parsed.resolve_theme(4, None), Some("FF4F81BD".into()));
+        assert_eq!(parsed.resolve_theme(0, None), Some("FF000000".into()));
     }
 
     /// A16: rgbColor val with alpha prefix strips correctly and validates hex.

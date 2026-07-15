@@ -291,11 +291,11 @@ fn emit_color_attrs(
     tint: &Option<f64>,
 ) -> String {
     match (color, theme) {
-        (_, Some(t)) => match tint {
+        (Some(c), _) => format!(r#"<{el} rgb="{}"/>"#, escape(c)),
+        (None, Some(t)) => match tint {
             Some(tn) => format!(r#"<{el} theme="{}" tint="{}"/>"#, t, tn),
             None => format!(r#"<{el} theme="{}"/>"#, t),
         },
-        (Some(c), None) => format!(r#"<{el} rgb="{}"/>"#, escape(c)),
         (None, None) => String::new(),
     }
 }
@@ -1199,7 +1199,9 @@ mod tests {
     }
 
     #[test]
-    fn test_emit_font_theme_color_preserves_theme() {
+    fn test_emit_font_themed_color_writes_resolved_argb() {
+        // A themed color that was resolved on read keeps its resolved ARGB
+        // on write so every reader (ExcelJS in particular) can use it.
         let font = Font {
             color: Some("FF4F81BD".into()),
             color_theme: Some(4),
@@ -1210,14 +1212,16 @@ mod tests {
         emit_fonts(&mut buf, &[font]).unwrap();
         let xml = String::from_utf8(buf).unwrap();
         assert!(
-            xml.contains(r##"<color theme="4"/>"##),
-            "theme ref must be preserved on write: {xml}"
+            xml.contains(r##"<color rgb="FF4F81BD"/>"##),
+            "resolved ARGB must be written for a themed color: {xml}"
         );
-        assert!(!xml.contains("rgb="), "no flattened rgb for theme color: {xml}");
+        assert!(!xml.contains("theme="), "no theme ref when a resolved ARGB is present: {xml}");
     }
 
     #[test]
-    fn test_emit_font_theme_with_tint_preserves_tint() {
+    fn test_emit_font_themed_color_with_tint_writes_resolved_argb() {
+        // When a resolved ARGB is present it is written; the theme tint is
+        // dropped because it only applies to a <color theme="N"/> reference.
         let font = Font {
             color: Some("FF4F81BD".into()),
             color_theme: Some(4),
@@ -1228,9 +1232,10 @@ mod tests {
         emit_fonts(&mut buf, &[font]).unwrap();
         let xml = String::from_utf8(buf).unwrap();
         assert!(
-            xml.contains(r##"<color theme="4" tint="-0.5"/>"##),
-            "theme+tint must be preserved on write: {xml}"
+            xml.contains(r##"<color rgb="FF4F81BD"/>"##),
+            "resolved ARGB must be written (tint dropped): {xml}"
         );
+        assert!(!xml.contains("theme="), "no theme ref when a resolved ARGB is present: {xml}");
     }
 
     /// W1: border side `style` attribute is XML-escaped on emit.

@@ -739,7 +739,7 @@ pub fn parse_sheet_cell_styles(data: &[u8]) -> Result<SheetStyleMap, ExcelrsErro
 pub fn parse_styles_and_sheet_maps(
     data: &[u8],
     sheet_count: usize,
-) -> Result<(StyleTableRead, Vec<SheetStyleMap>), ExcelrsError> {
+) -> Result<(StyleTableRead, Vec<SheetStyleMap>, ThemeColorScheme), ExcelrsError> {
     use std::io::Cursor;
     let cursor = Cursor::new(data);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
@@ -772,7 +772,7 @@ pub fn parse_styles_and_sheet_maps(
         sheet_style_maps.push(map);
     }
 
-    Ok((style_table, sheet_style_maps))
+    Ok((style_table, sheet_style_maps, scheme))
 }
 
 // ---------------------------------------------------------------------------
@@ -1640,7 +1640,7 @@ mod tests {
             zip.finish().unwrap();
         }
 
-        let (table, _) = parse_styles_and_sheet_maps(&buf, 0).unwrap();
+        let (table, _, _) = parse_styles_and_sheet_maps(&buf, 0).unwrap();
         assert_eq!(table.fonts.len(), 1);
         // Custom accent1="123456" → resolved with FF prefix
         assert_eq!(
@@ -1677,7 +1677,7 @@ mod tests {
             zip.finish().unwrap();
         }
 
-        let (table, _) = parse_styles_and_sheet_maps(&buf, 0).unwrap();
+        let (table, _, _) = parse_styles_and_sheet_maps(&buf, 0).unwrap();
         assert_eq!(table.fonts.len(), 1);
         // Default accent1 = "4F81BD" → "FF4F81BD"
         assert_eq!(
