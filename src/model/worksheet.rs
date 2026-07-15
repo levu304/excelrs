@@ -399,10 +399,7 @@ impl Worksheet {
     #[napi(getter)]
     /// Get the worksheet's view descriptors (freeze/split panes).
     pub fn views(&self) -> Vec<SheetView> {
-        self.views
-            .lock()
-            .expect("Worksheet views lock poisoned")
-            .clone()
+        self.views.lock().expect("Worksheet views lock poisoned").clone()
     }
 
     #[napi(setter)]
@@ -525,10 +522,7 @@ impl Worksheet {
     }
 
     pub fn get_views_inner(&self) -> Vec<SheetView> {
-        self.views
-            .lock()
-            .expect("Worksheet views lock poisoned")
-            .clone()
+        self.views.lock().expect("Worksheet views lock poisoned").clone()
     }
 
     pub fn set_protection_inner(&self, protection: Option<SheetProtection>) {
@@ -564,7 +558,7 @@ mod tests {
         assert_eq!(cell.address(), "A1");
         assert_eq!(cell.row(), 1);
         assert_eq!(cell.col(), 1);
-        assert_eq!(cell.value().value_type, "Null");
+        assert_eq!(cell.value_raw().value_type, "Null");
     }
 
     #[test]
@@ -589,13 +583,13 @@ mod tests {
 
         // Verify cell values via get_cell_by_address
         let c1 = ws.get_cell_by_address("A1".into());
-        assert_eq!(c1.value().string, Some("Alice".into()));
+        assert_eq!(c1.value_raw().string, Some("Alice".into()));
 
         let c2 = ws.get_cell_by_address("B1".into());
-        assert_eq!(c2.value().number, Some(30.0));
+        assert_eq!(c2.value_raw().number, Some(30.0));
 
         let c3 = ws.get_cell_by_address("C1".into());
-        assert_eq!(c3.value().boolean, Some(true));
+        assert_eq!(c3.value_raw().boolean, Some(true));
     }
 
     #[test]
@@ -606,7 +600,7 @@ mod tests {
         // addRow on the clone should be visible through the original
         cloned.add_row(vec![serde_json::json!(42)]);
         assert_eq!(ws.row_count(), 1);
-        assert_eq!(ws.get_cell_by_address("A1".into()).value().number, Some(42.0));
+        assert_eq!(ws.get_cell_by_address("A1".into()).value_raw().number, Some(42.0));
     }
 
     #[test]
@@ -618,7 +612,7 @@ mod tests {
 
         ws.remove_row(1);
         assert_eq!(ws.row_count(), 2); // row_count is max row, not count of rows
-        assert!(ws.get_cell_by_address("A1".into()).value().value_type == "Null");
+        assert!(ws.get_cell_by_address("A1".into()).value_raw().value_type == "Null");
         // removed
     }
 
@@ -698,12 +692,16 @@ mod tests {
         ws.add_row(vec![serde_json::json!(1)]);
 
         let mut cell = ws.get_cell_by_address("A1".into());
-        cell.set_value(serde_json::json!(42));
+        cell.set_value_raw(CellValue {
+            value_type: "Number".into(),
+            number: Some(42.0),
+            ..Default::default()
+        });
 
         // Clone simulates napi-rs FFI boundary crossing
         let cloned = ws.clone();
         let cell_from_clone = cloned.get_cell_by_address("A1".into());
-        let v = cell_from_clone.value();
+        let v = cell_from_clone.value_raw();
 
         assert_eq!(v.value_type, "Number");
         assert_eq!(v.number, Some(42.0));
@@ -740,7 +738,7 @@ mod tests {
         // Re-acquire the same cell from the worksheet
         let cell2 = ws.get_cell_by_rc(5, 1);
         assert_eq!(
-            cell2.value().number,
+            cell2.value_raw().number,
             Some(42.0),
             "value set on missing-row getCell must persist"
         );

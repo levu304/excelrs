@@ -32,6 +32,11 @@ const buf = await wb2.xlsx.write();
 require('fs').writeFileSync('output.xlsx', buf);
 ```
 
+> **Async contract:** `wb.xlsx.read(buffer)` / `wb.xlsx.readFile(path)` and
+> `wb.xlsx.write()` / `wb.xlsx.writeFile(path)` are async — the workbook
+> state is only swapped once the returned Promise resolves. Accessing
+> worksheets before awaiting the Promise will see stale state.
+
 ## Style System (v0.2.0)
 
 Write-only support for cell and column styling. Font, Fill, Border, and
@@ -87,6 +92,8 @@ styling for Font, Fill, Border, Alignment, and number formats (write only).
   at write time (deferred to v0.3.0)
 - CSV via `wb.csv` — single-sheet only on write (CSV cannot represent multiple worksheets); numbers are inferred on read, all other CSV values are strings; no formula evaluation (cached value is emitted when available)
 - No merged cells, no streaming, no formula evaluation, no XLS / XLSB
+- Theme color references are **preserved on write** (v0.13.0): `<color theme="N"/>` (+`tint`) is emitted instead of a flattened ARGB; the public `color` value remains the resolved ARGB string
+- Date cell values are **preserved as JS `Date`** (v0.13.0): `Cell.value` returns `Date | CellValue` from Date cells; the setter accepts a JS `Date`, storing it as the Excel serial number and injecting an appropriate date `numFmt` (if none is set) so the value survives read→write round-trip as a true Date
 
 ## Development
 

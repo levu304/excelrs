@@ -8,12 +8,12 @@
  */
 export declare class Cell {
   constructor(address: string, row: number, col: number)
-  get value(): CellValue
+  get value(): CellValue | Date
   /**
    * Accepts JS primitives via serde_json::Value auto-conversion (napi v3 serde-json feature).
    * Dispatches to the correct CellValue variant based on the JSON value type.
    */
-  set value(val: CellValue | number | string | boolean | null)
+  set value(val: CellValue | number | string | boolean | Date | null)
   get address(): string
   get row(): number
   get col(): number
@@ -172,18 +172,35 @@ export declare class WorkbookXlsx {
    *
    * Parses the buffer with calamine, then replaces the workbook state
    * in-place.  All existing worksheets are discarded.
+   *
+   * @remarks Must be awaited. State is only swapped once the returned
+   * Promise resolves. Accessing worksheets before the Promise resolves
+   * will see stale (old) state.
    */
   read(buffer: Buffer): Promise<void>
-  /** Read an .xlsx file from disk.  Async. */
+  /**
+   * Read an .xlsx file from disk.  Async.
+   *
+   * @remarks Must be awaited. State is only swapped once the returned
+   * Promise resolves.
+   */
   readFile(path: string): Promise<void>
   /**
    * Write the workbook to an .xlsx buffer.  Async.
    *
    * Clones the workbook state briefly under the lock, then builds the
    * .xlsx archive outside the lock (calamine / zip I/O is expensive).
+   *
+   * @remarks Must be awaited. The returned Promise resolves to a Buffer
+   * of the .xlsx data.
    */
   write(): Promise<Buffer>
-  /** Write the workbook to an .xlsx file on disk.  Async. */
+  /**
+   * Write the workbook to an .xlsx file on disk.  Async.
+   *
+   * @remarks Must be awaited. The file is only fully written when the
+   * returned Promise resolves.
+   */
   writeFile(path: string): Promise<void>
 }
 
@@ -412,7 +429,7 @@ export interface DefinedName {
 
 export interface CellValue {
   /**
-   * Discriminant: "Null" | "Number" | "String" | "Boolean" | "Formula" | "Error"
+   * Discriminant: "Null" | "Number" | "String" | "Boolean" | "Date" | "Formula" | "Error"
    * | "Hyperlink" | "RichText" | "Merge"
    */
   valueType: string

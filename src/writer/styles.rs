@@ -280,6 +280,26 @@ fn emit_num_fmts<W: Write>(w: &mut W, num_fmts: &[(u32, String)]) -> Result<(), 
     Ok(())
 }
 
+/// Build a color element (`<color>` / `<fgColor>` / `<bgColor>`) string,
+/// preserving a theme reference when present (v0.13.0). Falls back to the
+/// resolved ARGB when the color came from an ARGB/RGB value or an indexed
+/// palette entry.
+fn emit_color_attrs(
+    el: &str,
+    color: &Option<String>,
+    theme: &Option<u8>,
+    tint: &Option<f64>,
+) -> String {
+    match (color, theme) {
+        (_, Some(t)) => match tint {
+            Some(tn) => format!(r#"<{el} theme="{}" tint="{}"/>"#, t, tn),
+            None => format!(r#"<{el} theme="{}"/>"#, t),
+        },
+        (Some(c), None) => format!(r#"<{el} rgb="{}"/>"#, escape(c)),
+        (None, None) => String::new(),
+    }
+}
+
 fn emit_fonts<W: Write>(w: &mut W, fonts: &[Font]) -> Result<(), ExcelrsError> {
     write_str(w, &format!(r#"<fonts count="{}">"#, fonts.len()))?;
     for f in fonts {
@@ -299,9 +319,7 @@ fn emit_fonts<W: Write>(w: &mut W, fonts: &[Font]) -> Result<(), ExcelrsError> {
         if let Some(true) = f.underline {
             write_str(w, r#"<u/>"#)?;
         }
-        if let Some(ref color) = f.color {
-            write_str(w, &format!(r#"<color rgb="{}"/>"#, escape(color)))?;
-        }
+        write_str(w, &emit_color_attrs("color", &f.color, &f.color_theme, &f.color_tint))?;
         write_str(w, "</font>")?;
     }
     write_str(w, "</fonts>")?;
@@ -361,12 +379,8 @@ fn emit_fills<W: Write>(w: &mut W, fills: &[Fill]) -> Result<(), ExcelrsError> {
             let has_bg = f.background.is_some();
             if has_fg || has_bg {
                 write_str(w, &format!(r#"<patternFill patternType="{}">"#, f.kind))?;
-                if let Some(ref fg) = f.foreground {
-                    write_str(w, &format!(r#"<fgColor rgb="{}"/>"#, escape(fg)))?;
-                }
-                if let Some(ref bg) = f.background {
-                    write_str(w, &format!(r#"<bgColor rgb="{}"/>"#, escape(bg)))?;
-                }
+                write_str(w, &emit_color_attrs("fgColor", &f.foreground, &f.foreground_theme, &f.foreground_tint))?;
+                write_str(w, &emit_color_attrs("bgColor", &f.background, &f.background_theme, &f.background_tint))?;
                 write_str(w, "</patternFill>")?;
             } else {
                 write_str(w, &format!(r#"<patternFill patternType="{}"/>"#, f.kind))?;
@@ -417,10 +431,7 @@ fn emit_border_side<W: Write>(
         None => write_str(w, &format!("<{side}/>")),
         Some(b) => {
             let style_attr = escape(&b.style);
-            let color = match &b.color {
-                Some(c) => format!(r#"<color rgb="{}"/>"#, escape(c)),
-                None => String::new(),
-            };
+            let color = emit_color_attrs("color", &b.color, &b.color_theme, &b.color_tint);
             write_str(w, &format!("<{side} style=\"{style_attr}\">{color}</{side}>"))
         }
     }
@@ -690,6 +701,7 @@ mod tests {
                 top: Some(BorderStyle {
                     style: "thin".into(),
                     color: Some("FF000000".into()),
+                    ..Default::default()
                 }),
                 ..Default::default()
             }),
@@ -1149,6 +1161,7 @@ mod tests {
                 top: Some(BorderStyle {
                     style: "thin".into(),
                     color: Some("FF&<>\"'".into()),
+                    ..Default::default()
                 }),
                 ..Default::default()
             }),
@@ -1185,6 +1198,41 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_emit_font_theme_color_preserves_theme() {
+        let font = Font {
+            color: Some("FF4F81BD".into()),
+            color_theme: Some(4),
+            color_tint: None,
+            ..Default::default()
+        };
+        let mut buf = Vec::new();
+        emit_fonts(&mut buf, &[font]).unwrap();
+        let xml = String::from_utf8(buf).unwrap();
+        assert!(
+            xml.contains(r##"<color theme="4"/>"##),
+            "theme ref must be preserved on write: {xml}"
+        );
+        assert!(!xml.contains("rgb="), "no flattened rgb for theme color: {xml}");
+    }
+
+    #[test]
+    fn test_emit_font_theme_with_tint_preserves_tint() {
+        let font = Font {
+            color: Some("FF4F81BD".into()),
+            color_theme: Some(4),
+            color_tint: Some(-0.5),
+            ..Default::default()
+        };
+        let mut buf = Vec::new();
+        emit_fonts(&mut buf, &[font]).unwrap();
+        let xml = String::from_utf8(buf).unwrap();
+        assert!(
+            xml.contains(r##"<color theme="4" tint="-0.5"/>"##),
+            "theme+tint must be preserved on write: {xml}"
+        );
+    }
+
     /// W1: border side `style` attribute is XML-escaped on emit.
     #[test]
     fn test_emit_border_style_escaped() {
@@ -1193,6 +1241,7 @@ mod tests {
                 top: Some(BorderStyle {
                     style: "<&>\"'".into(),
                     color: None,
+                    ..Default::default()
                 }),
                 ..Default::default()
             }),

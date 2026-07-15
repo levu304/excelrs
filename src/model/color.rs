@@ -14,6 +14,28 @@ use quick_xml::events::Event;
 use quick_xml::Reader as XmlReader;
 
 // ---------------------------------------------------------------------------
+// Color (theme-preserving carrier, v0.13.0)
+// ---------------------------------------------------------------------------
+
+/// A color resolved from OOXML, carrying the concrete ARGB plus the originating
+/// theme reference (index + tint) when present, so the theme link can be
+/// preserved on write (v0.13.0).
+///
+/// The public style API only exposes the ARGB (`color` / `foreground` /
+/// `background` fields). `theme`/`tint` are internal — skipped from the napi
+/// object and from serde — and only populated by the reader when a color came
+/// from a `<color theme="N"/>` reference.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Color {
+    /// Concrete ARGB hex (8 chars), always present when the color is resolved.
+    pub rgb: String,
+    /// Originating theme index (0–11) from `<color theme="N"/>`, if any.
+    pub theme: Option<u8>,
+    /// Tint from the `tint` attribute, if any.
+    pub tint: Option<f64>,
+}
+
+// ---------------------------------------------------------------------------
 // ECMA-376 §18.8.27 — default indexed color palette (56 entries, indices 0–55)
 // ---------------------------------------------------------------------------
 
