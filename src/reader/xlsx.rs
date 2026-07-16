@@ -1122,13 +1122,16 @@ fn between<'a>(s: &'a str, open: &str, close: &str) -> Option<&'a str> {
 }
 
 fn parse_comments_from_xml(xml: &str) -> Vec<(String, CellComment)> {
+    use quick_xml::escape::unescape;
+
     let mut out: Vec<(String, CellComment)> = Vec::new();
     // Authors: <authors><author>Name</author>...</authors>
     let mut authors: Vec<String> = Vec::new();
     if let Some(body) = between(xml, "<authors>", "</authors>") {
         let mut rest = body;
         while let Some(a) = between(rest, "<author>", "</author>") {
-            authors.push(a.trim().to_string());
+            let author_name = unescape(a).unwrap_or_else(|_| a.into()).trim().to_string();
+            authors.push(author_name);
             if let Some(p) = rest.find("</author>") {
                 rest = &rest[p + 9..];
             } else {
@@ -1147,7 +1150,9 @@ fn parse_comments_from_xml(xml: &str) -> Vec<(String, CellComment)> {
         let r = rel_attr(tag, "ref");
         let aid = rel_attr(tag, "authorId").and_then(|v| v.parse::<u32>().ok());
         let after = &rest[close + 1..];
-        let text = between(after, "<t>", "</t>").unwrap_or("").to_string();
+        let text = unescape(between(after, "<t>", "</t>").unwrap_or(""))
+            .map(|c| c.into_owned())
+            .unwrap_or_default();
         if let Some(r) = r {
             let author = aid
                 .and_then(|a| authors.get(a as usize).cloned())
@@ -1191,7 +1196,10 @@ fn parse_sheet_images(data: &[u8], sheet_count: usize) -> Result<Vec<Vec<Workshe
                 Err(_) => String::new(),
             };
             if !xml.is_empty() {
-                let drel_path = format!("xl/drawings/_rels/drawing{}.xml.rels", sheet_num);
+                let drel_path = {
+                    let file = std::path::Path::new(&dpath).file_name().unwrap_or_default();
+                    format!("xl/drawings/_rels/{}.rels", file.to_string_lossy())
+                };
                 let drels = parse_sheet_rels_full(&mut archive, &drel_path);
                 let media_map: std::collections::HashMap<String, String> = drels
                     .iter()

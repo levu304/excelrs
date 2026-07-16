@@ -168,12 +168,12 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
             // (v1.0.0) comments / drawing flags for this sheet
             let has_comments = !sheet_comments[i].is_empty();
             let has_drawing = !sheet_images[i].is_empty();
+            // Relationship ids: comments = hl+1, vmlDrawing (legacyDrawing) =
+            // hl+2, drawing = hl+3 (or hl+1 when there are no comments).
+            let hl = hyperlinks.len() as u32;
+            let comment_rid: Option<u32> = if has_comments { Some(hl + 2) } else { None };
             let drawing_rid: Option<u32> = if has_drawing {
-                let mut rid = hyperlinks.len() as u32;
-                if has_comments {
-                    rid += 1;
-                }
-                Some(rid + 1)
+                Some(if has_comments { hl + 3 } else { hl + 1 })
             } else {
                 None
             };
@@ -187,6 +187,7 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
                 &hyperlinks,
                 &data_validations,
                 drawing_rid,
+                comment_rid,
             )?;
 
             // (v1.0.0) comments part
@@ -194,6 +195,12 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
                 let cpath = format!("xl/comments{}.xml", i + 1);
                 start_file(&mut zip, &cpath)?;
                 write_comments_xml(&mut zip, &sheet_comments[i])?;
+            }
+            // (v1.0.0) vmlDrawing part: anchors comments to cells via legacyDrawing
+            if has_comments {
+                let vpath = format!("xl/drawings/vmlDrawing{}.vml", i + 1);
+                start_file(&mut zip, &vpath)?;
+                write_vml_drawing_xml(&mut zip, &sheet_comments[i])?;
             }
 
             // (v1.0.0) drawing part + media files
@@ -412,6 +419,59 @@ fn write_comments_xml<W: Write>(w: &mut W, comments: &[(String, CellComment)]) -
     Ok(())
 }
 
+/// Write `xl/drawings/vmlDrawingN.vml`, anchoring each comment `<v:shape>` to its
+/// cell. Mirrors the comment vmlDrawing part Excel / ExcelJS emit (F2, v1.0.0).
+fn write_vml_drawing_xml<W: Write>(w: &mut W, comments: &[(String, CellComment)]) -> Result<(), ExcelrsError> {
+    write_str(w, "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>")?;
+    write_str(
+        w,
+        "<xml xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:x=\"urn:schemas-microsoft-com:office:excel\">",
+    )?;
+    for (i, (ref_addr, _c)) in comments.iter().enumerate() {
+        let (row0, col0) = cell_ref_to_zero(ref_addr);
+        let id = 1024 + i as u32;
+        write_str(
+            w,
+            &format!(
+                "<v:shape id=\"_x0000_s{id}\" type=\"#_x0000_t202\" style=\"position:absolute;visibility:hidden;width:120pt;height:60pt\" fillcolor=\"#ffffe1\" strokecolor=\"#000000\" o:insetmode=\"auto\">"
+            ),
+        )?;
+        write_str(w, "<v:fill color2=\"#ffffe1\"/>")?;
+        write_str(w, "<v:shadow on=\"t\" obscured=\"t\"/>")?;
+        write_str(w, "<v:path o:connecttype=\"none\"/>")?;
+        write_str(w, "<v:textbox style=\"mso-direction-alt:auto\"/>")?;
+        write_str(w, "<x:ClientData ObjectType=\"Note\">")?;
+        write_str(w, "<x:MoveWithCells/>")?;
+        write_str(w, "<x:SizeWithCells/>")?;
+        write_str(w, "<x:Anchor>1, 15, 0, 2, 3, 15, 2, 4</x:Anchor>")?;
+        write_str(w, "<x:AutoFill>False</x:AutoFill>")?;
+        write_str(w, &format!("<x:Row>{row0}</x:Row>"))?;
+        write_str(w, &format!("<x:Column>{col0}</x:Column>"))?;
+        write_str(w, "<x:Visible/>")?;
+        write_str(w, &format!("<x:CommentRow>{row0}</x:CommentRow>"))?;
+        write_str(w, &format!("<x:CommentColumn>{col0}</x:CommentColumn>"))?;
+        write_str(w, "</x:ClientData>")?;
+        write_str(w, "</v:shape>")?;
+    }
+    write_str(w, "</xml>")?;
+    Ok(())
+}
+
+fn cell_ref_to_zero(ref_: &str) -> (u32, u32) {
+    let ref_ = ref_.trim();
+    let mut col: u32 = 0;
+    let mut row_digits = String::new();
+    for ch in ref_.chars() {
+        if ch.is_ascii_alphabetic() {
+            col = col * 26 + (ch.to_ascii_uppercase() as u32 - b'A' as u32 + 1);
+        } else {
+            row_digits.push(ch);
+        }
+    }
+    let row: u32 = row_digits.parse().unwrap_or(1);
+    (row.saturating_sub(1), col.saturating_sub(1))
+}
+
 /// Write `xl/drawings/drawingN.xml` from a sheet's images.
 fn write_drawing_xml<W: Write>(w: &mut W, images: &[WorksheetImage]) -> Result<(), ExcelrsError> {
     write_str(w, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#)?;
@@ -546,6 +606,13 @@ fn write_content_types<W: Write>(
             )?;
         }
     }
+    // (v1.0.0) vmlDrawing content type for comment anchors (F2)
+    if sheet_comments.iter().any(|c| !c.is_empty()) {
+        write_str(
+            w,
+            r##"<Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/>"##,
+        )?;
+    }
     write_str(w, "</Types>")?;
     Ok(())
 }
@@ -610,18 +677,16 @@ fn write_workbook_xml<W: Write>(
     for ws in worksheets.iter() {
         if let Some(ps) = ws.get_page_setup_inner() {
             if let Some(pa) = &ps.print_area {
-                all_dns.push(DefinedName::sheet_scoped(
-                    "_xlnm.Print_Area",
-                    format!("{}!{}", ws.name(), pa),
-                    ws.name(),
-                ));
+                let dn = DefinedName::sheet_scoped("_xlnm.Print_Area", format!("{}!{}", ws.name(), pa), ws.name());
+                if !all_dns.iter().any(|x| x.name == dn.name && x.sheet == dn.sheet) {
+                    all_dns.push(dn);
+                }
             }
             if let Some(pt) = &ps.print_titles {
-                all_dns.push(DefinedName::sheet_scoped(
-                    "_xlnm.Print_Titles",
-                    format!("{}!{}", ws.name(), pt),
-                    ws.name(),
-                ));
+                let dn = DefinedName::sheet_scoped("_xlnm.Print_Titles", format!("{}!{}", ws.name(), pt), ws.name());
+                if !all_dns.iter().any(|x| x.name == dn.name && x.sheet == dn.sheet) {
+                    all_dns.push(dn);
+                }
             }
         }
     }
@@ -812,6 +877,13 @@ fn write_sheet_rels<W: Write>(
             w,
             &format!(
                 r#"<Relationship Id="rId{rel_id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../comments{sheet_num}.xml"/>"#,
+            ),
+        )?;
+        rel_id += 1;
+        write_str(
+            w,
+            &format!(
+                r#"<Relationship Id=\"rId{rel_id}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing\" Target=\"../drawings/vmlDrawing{sheet_num}.vml\"/>"#,
             ),
         )?;
         rel_id += 1;
@@ -1124,6 +1196,7 @@ fn write_sheet_xml<W: Write>(
     hyperlinks: &[SheetHyperlink],
     data_validations: &[crate::model::data_validation::DataValidation],
     drawing_rid: Option<u32>,
+    comment_rid: Option<u32>,
 ) -> Result<(), ExcelrsError> {
     write_str(w, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#)?;
     write_str(
@@ -1234,6 +1307,10 @@ fn write_sheet_xml<W: Write>(
     // <drawing> — (v1.0.0) link to the drawing part via relationship
     if let Some(rid) = drawing_rid {
         write_str(w, &format!(r#"<drawing r:id="rId{rid}"/>"#))?;
+    }
+
+    if let Some(rid) = comment_rid {
+        write_str(w, &format!(r#"<legacyDrawing r:id=\"rId{rid}\"/>"#))?;
     }
 
     write_str(w, "</worksheet>")?;
