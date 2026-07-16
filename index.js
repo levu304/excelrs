@@ -594,3 +594,11 @@ module.exports.Workbook = nativeBinding.Workbook
 module.exports.WorkbookCsv = nativeBinding.WorkbookCsv
 module.exports.WorkbookXlsx = nativeBinding.WorkbookXlsx
 module.exports.Worksheet = nativeBinding.Worksheet
+
+// JS glue: ExcelJS-compat getCell overloads (delegate to Rust getCellBy* APIs)
+nativeBinding.Worksheet.prototype.getCell = function (a, b) {
+  return b === undefined ? this.getCellByAddress(a) : this.getCellByRc(a, b)
+}
+nativeBinding.Row.prototype.getCell = function (col) {
+  return typeof col === 'number' ? this.getCellByColNum(col) : this.getCellByColLetter(col)
+}
