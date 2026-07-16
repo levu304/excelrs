@@ -48,7 +48,7 @@
 | **Workbook** | | | |
 | Defined names | shipped | v0.7.0 | Workbook-global + sheet-scoped |
 | Workbook properties | shipped | v0.1.0 | creator, modified, created, etc. |
-| Workbook views | planned | — | Not implemented |
+| Workbook views | shipped | v1.0.0 | Workbook views + calc properties (`calcPr`) read/write |
 | Calc properties | planned | — | `fullCalcOnLoad` not implemented |
 | Themes (write) | planned | — | Read-only via theme1.xml |
 | **Worksheet** | | | |
@@ -56,12 +56,12 @@
 | State (visible/hidden) | planned | — | Not implemented |
 | Tab color | planned | — | Not implemented |
 | Properties (defaultRowHeight, etc.) | planned | — | Not implemented |
-| Page setup / print | planned | — | Not implemented (pageMargins, orientation, paperSize, printArea, etc.) |
-| Headers and footers | planned | — | Not implemented |
+| Page setup / print | shipped | v1.0.0 | `pageMargins`, `paperSize`, `orientation`, `printArea`, `printTitles` read/write |
+| Headers and footers | shipped | v1.0.0 | `<headerFooter>` read/write with format codes |
 | Sheet protection | shipped | v0.11.0 | `<sheetProtection>` read/write; `ws.protection` |
 | **Other features** | | | |
-| Comments | planned | — | Whole new OOXML part (`xl/commentsN.xml`) |
-| Images / drawings | planned | — | Whole new OOXML part (`xl/drawings/`) |
+| Comments | shipped | v1.0.0 | `xl/commentsN.xml` part + relationship read/write |
+| Images / drawings | shipped | v1.0.0 | `xl/drawings/` part, media extraction, anchors read/write |
 | Tables | planned | — | Complex OOXML part (`xl/tables/`) |
 | Conditional formatting | planned | — | Complex OOXML + dxfs |
 | Charts | planned (distant) | — | Major subsystem; chart XML is very complex |

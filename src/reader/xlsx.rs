@@ -20,9 +20,14 @@ use calamine::{open_workbook_auto_from_rs, Data, Reader, Sheets};
 
 use crate::error::ExcelrsError;
 use crate::model::cell::{CellValue, RichTextRun};
+use crate::model::header_footer::HeaderFooter;
+use crate::model::page_setup::{PageMargins, PageSetup};
 use crate::model::style::Font;
 use crate::model::workbook::Workbook;
 use crate::model::workbook_inner::WorkbookInner;
+
+use crate::model::comment::CellComment;
+use crate::model::image::{ImageAnchor, WorksheetImage};
 
 use super::styles::{self, SheetStyleMap, StyleTableRead};
 use super::workbook;
@@ -109,9 +114,69 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
         }
     }
 
+    // Step 3.11: parse header/footer and page setup and attach (v1.0.0)
+    let per_sheet_hf = parse_sheet_header_footers(data, sheet_count)?;
+    for (i, hf) in per_sheet_hf.into_iter().enumerate() {
+        if let Some(hf) = hf {
+            inner.worksheets[i].set_header_footer_inner(Some(hf));
+        }
+    }
+    let per_sheet_ps = parse_sheet_page_setups(data, sheet_count)?;
+    for (i, ps) in per_sheet_ps.into_iter().enumerate() {
+        if let Some(ps) = ps {
+            inner.worksheets[i].set_page_setup_inner(Some(ps));
+        }
+    }
+
+    // Step 3.12: parse cell comments and attach (v1.0.0)
+    let per_sheet_comments = parse_sheet_comments(data, sheet_count)?;
+    for (i, comments) in per_sheet_comments.into_iter().enumerate() {
+        for (ref_addr, comment) in comments {
+            if let Some((row, col)) = ref_to_rowcol(&ref_addr) {
+                inner.worksheets[i].insert_cell_comment(row, col, comment);
+            }
+        }
+    }
+
+    // Step 3.13: parse images and attach (v1.0.0)
+    let per_sheet_images = parse_sheet_images(data, sheet_count)?;
+    for (i, imgs) in per_sheet_images.into_iter().enumerate() {
+        for img in imgs {
+            inner.worksheets[i].insert_image(img);
+        }
+    }
+
     // Step 4: parse defined names from xl/workbook.xml
     let defined_names = workbook::parse_defined_names(data, &sheet_names)?;
     inner.set_defined_names(defined_names);
+
+    // Step 4.5: resolve _xlnm.Print_Area / _xlnm.Print_Titles into page setup (v1.0.0)
+    for dn in inner.defined_names() {
+        let field = match dn.name.as_str() {
+            "_xlnm.Print_Area" => "area",
+            "_xlnm.Print_Titles" => "titles",
+            _ => continue,
+        };
+        let range = match dn.value.split_once('!') {
+            Some((_, r)) => r.to_string(),
+            None => dn.value.clone(),
+        };
+        let sheet_name = dn.sheet.clone().unwrap_or_default();
+        if let Some(idx) = inner.worksheets.iter().position(|ws| ws.name() == sheet_name) {
+            let mut ps = inner.worksheets[idx].get_page_setup_inner().unwrap_or_default();
+            match field {
+                "area" => ps.print_area = Some(range),
+                "titles" => ps.print_titles = Some(range),
+                _ => {}
+            }
+            inner.worksheets[idx].set_page_setup_inner(Some(ps));
+        }
+    }
+
+    // Step 4.6: parse workbook views & calc properties and attach (v1.0.0)
+    let (views, calc) = parse_workbook_views_calc(data)?;
+    inner.set_views(views);
+    inner.set_calc_properties(calc);
 
     Ok(inner)
 }
@@ -535,6 +600,322 @@ fn parse_sheet_protection_from_xml(xml: &str) -> Option<crate::model::sheet_prot
 }
 
 // ---------------------------------------------------------------------------
+// Header/footer reader (v1.0.0)
+// ---------------------------------------------------------------------------
+
+fn parse_sheet_header_footers(data: &[u8], sheet_count: usize) -> Result<Vec<Option<HeaderFooter>>, ExcelrsError> {
+    use std::io::Cursor;
+    let cursor = Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
+    let mut per_sheet = Vec::with_capacity(sheet_count);
+
+    for i in 0..sheet_count {
+        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+        let hf = match archive.by_name(&path) {
+            Ok(entry) => {
+                let mut xml = String::new();
+                entry.take(MAX_ENTRY_BYTES).read_to_string(&mut xml)?;
+                parse_header_footer_from_xml(&xml)
+            }
+            Err(_) => None,
+        };
+        per_sheet.push(hf);
+    }
+
+    Ok(per_sheet)
+}
+
+fn is_hf_child(name: &[u8]) -> bool {
+    matches!(
+        name,
+        b"oddHeader" | b"oddFooter" | b"evenHeader" | b"evenFooter" | b"firstHeader" | b"firstFooter"
+    )
+}
+
+fn set_hf_child(hf: &mut HeaderFooter, field: &str, value: String) {
+    match field {
+        "oddHeader" => hf.odd_header = Some(value),
+        "oddFooter" => hf.odd_footer = Some(value),
+        "evenHeader" => hf.even_header = Some(value),
+        "evenFooter" => hf.even_footer = Some(value),
+        "firstHeader" => hf.first_header = Some(value),
+        "firstFooter" => hf.first_footer = Some(value),
+        _ => {}
+    }
+}
+
+fn parse_header_footer_from_xml(xml: &str) -> Option<HeaderFooter> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut hf = HeaderFooter::default();
+    let mut in_hf = false;
+    let mut text: Option<String> = None;
+    let mut current: Option<String> = None;
+
+    let mut events: u64 = 0;
+    loop {
+        buf.clear();
+        events += 1;
+        if events > MAX_EVENTS as u64 {
+            break;
+        }
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) if e.name().as_ref() == b"headerFooter" => {
+                in_hf = true;
+                for attr in e.attributes().flatten() {
+                    match attr.key.as_ref() {
+                        b"alignWithMargins" => hf.align_with_margins = parse_boolean_flag(&attr.value),
+                        b"differentFirst" => hf.different_first = parse_boolean_flag(&attr.value),
+                        b"differentOddEven" => hf.different_odd_even = parse_boolean_flag(&attr.value),
+                        _ => {}
+                    }
+                }
+            }
+            Ok(Event::Start(ref e)) if in_hf && is_hf_child(e.name().as_ref()) => {
+                current = Some(String::from_utf8_lossy(e.name().as_ref()).into_owned());
+            }
+            Ok(Event::Text(ref e)) if in_hf && current.is_some() => {
+                let t = e.unescape().map(|c| c.into_owned()).unwrap_or_default();
+                text = Some(t);
+            }
+            Ok(Event::End(ref e)) if in_hf && is_hf_child(e.name().as_ref()) => {
+                if let (Some(field), Some(value)) = (current.take(), text.take()) {
+                    set_hf_child(&mut hf, &field, value);
+                }
+            }
+            Ok(Event::End(ref e)) if e.name().as_ref() == b"headerFooter" => {
+                in_hf = false;
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+
+    if hf.odd_header.is_none()
+        && hf.odd_footer.is_none()
+        && hf.even_header.is_none()
+        && hf.even_footer.is_none()
+        && hf.first_header.is_none()
+        && hf.first_footer.is_none()
+    {
+        None
+    } else {
+        Some(hf)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Page setup / print reader (v1.0.0)
+// ---------------------------------------------------------------------------
+
+fn parse_sheet_page_setups(data: &[u8], sheet_count: usize) -> Result<Vec<Option<PageSetup>>, ExcelrsError> {
+    use std::io::Cursor;
+    let cursor = Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
+    let mut per_sheet = Vec::with_capacity(sheet_count);
+
+    for i in 0..sheet_count {
+        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+        let ps = match archive.by_name(&path) {
+            Ok(entry) => {
+                let mut xml = String::new();
+                entry.take(MAX_ENTRY_BYTES).read_to_string(&mut xml)?;
+                parse_page_setup_from_xml(&xml)
+            }
+            Err(_) => None,
+        };
+        per_sheet.push(ps);
+    }
+
+    Ok(per_sheet)
+}
+
+fn num_attr<T: std::str::FromStr>(value: &[u8]) -> Option<T> {
+    std::str::from_utf8(value).ok().and_then(|s| s.parse().ok())
+}
+
+fn parse_page_setup_from_xml(xml: &str) -> Option<PageSetup> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut ps = PageSetup::default();
+    let mut found = false;
+
+    let mut events: u64 = 0;
+    loop {
+        buf.clear();
+        events += 1;
+        if events > MAX_EVENTS as u64 {
+            break;
+        }
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Empty(ref e)) | Ok(Event::Start(ref e)) if e.name().as_ref() == b"pageMargins" => {
+                found = true;
+                let mut m = PageMargins::default();
+                for attr in e.attributes().flatten() {
+                    match attr.key.as_ref() {
+                        b"left" => m.left = num_attr(&attr.value),
+                        b"right" => m.right = num_attr(&attr.value),
+                        b"top" => m.top = num_attr(&attr.value),
+                        b"bottom" => m.bottom = num_attr(&attr.value),
+                        b"header" => m.header = num_attr(&attr.value),
+                        b"footer" => m.footer = num_attr(&attr.value),
+                        _ => {}
+                    }
+                }
+                ps.margins = Some(m);
+            }
+            Ok(Event::Empty(ref e)) | Ok(Event::Start(ref e)) if e.name().as_ref() == b"pageSetup" => {
+                found = true;
+                for attr in e.attributes().flatten() {
+                    match attr.key.as_ref() {
+                        b"orientation" => ps.orientation = Some(String::from_utf8_lossy(&attr.value).into_owned()),
+                        b"paperSize" => ps.paper_size = num_attr(&attr.value),
+                        b"fitToPage" => ps.fit_to_page = parse_boolean_flag(&attr.value),
+                        b"fitToWidth" => ps.fit_to_width = num_attr(&attr.value),
+                        b"fitToHeight" => ps.fit_to_height = num_attr(&attr.value),
+                        b"horizontalDpi" => ps.horizontal_dpi = num_attr(&attr.value),
+                        b"verticalDpi" => ps.vertical_dpi = num_attr(&attr.value),
+                        b"blackAndWhite" => ps.black_and_white = parse_boolean_flag(&attr.value),
+                        b"drawingPrinted" => ps.drawing_printed = parse_boolean_flag(&attr.value),
+                        b"cellComments" => ps.cell_comments = Some(String::from_utf8_lossy(&attr.value).into_owned()),
+                        b"copies" => ps.copies = num_attr(&attr.value),
+                        _ => {}
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+
+    if found {
+        Some(ps)
+    } else {
+        None
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Workbook views & calc properties reader (v1.0.0)
+// ---------------------------------------------------------------------------
+
+fn parse_workbook_views_calc(
+    data: &[u8],
+) -> Result<
+    (
+        Vec<crate::model::workbook_view::WorkbookView>,
+        Option<crate::model::workbook_view::CalcProperties>,
+    ),
+    ExcelrsError,
+> {
+    use std::io::Cursor;
+    let cursor = Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
+    let mut xml = String::new();
+    match archive.by_name("xl/workbook.xml") {
+        Ok(entry) => {
+            entry.take(MAX_ENTRY_BYTES).read_to_string(&mut xml)?;
+        }
+        Err(_) => return Ok((Vec::new(), None)),
+    }
+    Ok((parse_book_views_from_xml(&xml), parse_calc_pr_from_xml(&xml)))
+}
+
+fn parse_book_views_from_xml(xml: &str) -> Vec<crate::model::workbook_view::WorkbookView> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut views = Vec::new();
+    let mut events: u64 = 0;
+    loop {
+        buf.clear();
+        events += 1;
+        if events > MAX_EVENTS as u64 {
+            break;
+        }
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Empty(ref e)) | Ok(Event::Start(ref e)) if e.name().as_ref() == b"workbookView" => {
+                let mut v = crate::model::workbook_view::WorkbookView::default();
+                for attr in e.attributes().flatten() {
+                    match attr.key.as_ref() {
+                        b"xWindow" => v.x_window = num_attr(&attr.value),
+                        b"yWindow" => v.y_window = num_attr(&attr.value),
+                        b"windowWidth" => v.window_width = num_attr(&attr.value),
+                        b"windowHeight" => v.window_height = num_attr(&attr.value),
+                        b"activeTab" => v.active_tab = num_attr(&attr.value),
+                        b"firstSheet" => v.first_sheet = num_attr(&attr.value),
+                        b"minimized" => v.minimized = parse_boolean_flag(&attr.value),
+                        b"showHorizontalScroll" => v.show_horizontal_scroll = parse_boolean_flag(&attr.value),
+                        b"showVerticalScroll" => v.show_vertical_scroll = parse_boolean_flag(&attr.value),
+                        b"tabRatio" => v.tab_ratio = num_attr(&attr.value),
+                        b"visibility" => v.visibility = Some(String::from_utf8_lossy(&attr.value).into_owned()),
+                        _ => {}
+                    }
+                }
+                views.push(v);
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+    views
+}
+
+fn parse_calc_pr_from_xml(xml: &str) -> Option<crate::model::workbook_view::CalcProperties> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut found = false;
+    let mut calc = crate::model::workbook_view::CalcProperties::default();
+    let mut events: u64 = 0;
+    loop {
+        buf.clear();
+        events += 1;
+        if events > MAX_EVENTS as u64 {
+            break;
+        }
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Empty(ref e)) | Ok(Event::Start(ref e)) if e.name().as_ref() == b"calcPr" => {
+                found = true;
+                for attr in e.attributes().flatten() {
+                    match attr.key.as_ref() {
+                        b"fullCalcOnLoad" => calc.full_calc_on_load = parse_boolean_flag(&attr.value),
+                        b"calcId" => calc.calc_id = num_attr(&attr.value),
+                        b"calcMode" => calc.calc_mode = Some(String::from_utf8_lossy(&attr.value).into_owned()),
+                        b"refFullCalc" => calc.ref_full_calc = parse_boolean_flag(&attr.value),
+                        b"iterate" => calc.iterate = parse_boolean_flag(&attr.value),
+                        b"iterateCount" => calc.iterate_count = num_attr(&attr.value),
+                        b"iterateDelta" => calc.iterate_delta = num_attr(&attr.value),
+                        _ => {}
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+    if found {
+        Some(calc)
+    } else {
+        None
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Hyperlinks reader (v0.11.0)
 // ---------------------------------------------------------------------------
 
@@ -655,6 +1036,327 @@ fn parse_hyperlinks_from_xml(xml: &str, rels: &std::collections::HashMap<String,
 }
 
 /// Parse a cell reference like "A1" or "AB123" into (row, col) (1-based).
+// ---------------------------------------------------------------------------
+// (v1.0.0) Comments + Images parsing
+// ---------------------------------------------------------------------------
+/// Parse a sheet's `.rels` returning `(Id, Type, Target)` tuples so callers can
+/// distinguish comments / drawing / hyperlink relationships by Type.
+fn parse_sheet_rels_full(archive: &mut zip::ZipArchive<Cursor<&[u8]>>, path: &str) -> Vec<(String, String, String)> {
+    let mut out = Vec::new();
+    let xml = match archive.by_name(path) {
+        Ok(entry) => {
+            let mut s = String::new();
+            let _ = entry.take(MAX_ENTRY_BYTES).read_to_string(&mut s);
+            s
+        }
+        Err(_) => return out,
+    };
+
+    let mut i = 0;
+    while let Some(pos) = xml[i..].find("<Relationship ") {
+        let start = i + pos;
+        let tag_end = xml[start..]
+            .find("/>")
+            .map(|p| start + p + 2)
+            .or_else(|| xml[start..].find('>').map(|p| start + p + 1));
+        let tag = match tag_end {
+            Some(e) => &xml[start..e],
+            None => &xml[start..],
+        };
+        let rid = rel_attr(tag, "Id");
+        let rtype = rel_attr(tag, "Type").unwrap_or_default();
+        let target = rel_attr(tag, "Target");
+        if let (Some(rid), Some(target)) = (rid, target) {
+            out.push((rid, rtype, target));
+        }
+        i = tag_end.unwrap_or(xml.len());
+    }
+    out
+}
+
+/// Extract a double-quoted attribute value from a single XML tag string.
+fn rel_attr(tag: &str, key: &str) -> Option<String> {
+    let prefix = format!("{}=", key);
+    let idx = tag.find(prefix.as_str())?;
+    let rest = &tag[idx + prefix.len()..];
+    let q1 = rest.find('"')?;
+    let q2 = rest[q1 + 1..].find('"')?;
+    Some(rest[q1 + 1..q1 + 1 + q2].to_string())
+}
+
+/// Parse `xl/commentsN.xml` for every sheet, returning `(cellRef, CellComment)`
+/// pairs per sheet.
+fn parse_sheet_comments(data: &[u8], sheet_count: usize) -> Result<Vec<Vec<(String, CellComment)>>, ExcelrsError> {
+    use std::io::Cursor;
+
+    let cursor = Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
+    let mut per_sheet = Vec::with_capacity(sheet_count);
+    for i in 0..sheet_count {
+        let sheet_num = i + 1;
+        let rels_path = format!("xl/worksheets/_rels/sheet{}.xml.rels", sheet_num);
+        let rels = parse_sheet_rels_full(&mut archive, &rels_path);
+        let comments_target = rels
+            .iter()
+            .find(|(_, t, _)| t.ends_with("/comments"))
+            .map(|(_, _, target)| target.clone());
+        let mut comments: Vec<(String, CellComment)> = Vec::new();
+        if let Some(target) = comments_target {
+            let cpath = format!("xl/{}", target.trim_start_matches("../"));
+            if let Ok(entry) = archive.by_name(&cpath) {
+                let mut xml = String::new();
+                entry.take(MAX_ENTRY_BYTES).read_to_string(&mut xml)?;
+                comments = parse_comments_from_xml(&xml);
+            }
+        }
+        per_sheet.push(comments);
+    }
+    Ok(per_sheet)
+}
+
+/// Extract the substring between the first `open` and the next `close` (exclusive).
+fn between<'a>(s: &'a str, open: &str, close: &str) -> Option<&'a str> {
+    let i = s.find(open)?;
+    let j = s[i + open.len()..].find(close)?;
+    Some(&s[i + open.len()..i + open.len() + j])
+}
+
+fn parse_comments_from_xml(xml: &str) -> Vec<(String, CellComment)> {
+    let mut out: Vec<(String, CellComment)> = Vec::new();
+    // Authors: <authors><author>Name</author>...</authors>
+    let mut authors: Vec<String> = Vec::new();
+    if let Some(body) = between(xml, "<authors>", "</authors>") {
+        let mut rest = body;
+        while let Some(a) = between(rest, "<author>", "</author>") {
+            authors.push(a.trim().to_string());
+            if let Some(p) = rest.find("</author>") {
+                rest = &rest[p + 9..];
+            } else {
+                break;
+            }
+        }
+    }
+    // Comments: <comment ref="A1" authorId="0"><text><t>text</t></text></comment>
+    let mut rest = xml;
+    while let Some(start) = rest.find("<comment ") {
+        let close = match rest[start..].find('>') {
+            Some(p) => start + p,
+            None => break,
+        };
+        let tag = &rest[start..=close];
+        let r = rel_attr(tag, "ref");
+        let aid = rel_attr(tag, "authorId").and_then(|v| v.parse::<u32>().ok());
+        let after = &rest[close + 1..];
+        let text = between(after, "<t>", "</t>").unwrap_or("").to_string();
+        if let Some(r) = r {
+            let author = aid
+                .and_then(|a| authors.get(a as usize).cloned())
+                .filter(|a| !a.is_empty());
+            out.push((r, CellComment { text, author }));
+        }
+        if let Some(p) = rest[close..].find("</comment>") {
+            rest = &rest[close + p + 9..];
+        } else {
+            break;
+        }
+    }
+    out
+}
+
+/// Parse `xl/drawings/drawingN.xml` + media for every sheet, returning
+/// `WorksheetImage` records per sheet.
+fn parse_sheet_images(data: &[u8], sheet_count: usize) -> Result<Vec<Vec<WorksheetImage>>, ExcelrsError> {
+    use std::io::Cursor;
+
+    let cursor = Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
+    let mut per_sheet = Vec::with_capacity(sheet_count);
+    for i in 0..sheet_count {
+        let sheet_num = i + 1;
+        let rels_path = format!("xl/worksheets/_rels/sheet{}.xml.rels", sheet_num);
+        let rels = parse_sheet_rels_full(&mut archive, &rels_path);
+        let drawing_target = rels
+            .iter()
+            .find(|(_, t, _)| t.ends_with("/drawing"))
+            .map(|(_, _, target)| target.clone());
+        let mut imgs: Vec<WorksheetImage> = Vec::new();
+        if let Some(dtarget) = drawing_target {
+            let dpath = format!("xl/{}", dtarget.trim_start_matches("../"));
+            let xml = match archive.by_name(&dpath) {
+                Ok(entry) => {
+                    let mut s = String::new();
+                    let _ = entry.take(MAX_ENTRY_BYTES).read_to_string(&mut s);
+                    s
+                }
+                Err(_) => String::new(),
+            };
+            if !xml.is_empty() {
+                let drel_path = format!("xl/drawings/_rels/drawing{}.xml.rels", sheet_num);
+                let drels = parse_sheet_rels_full(&mut archive, &drel_path);
+                let media_map: std::collections::HashMap<String, String> = drels
+                    .iter()
+                    .map(|(id, _, target)| (id.clone(), target.clone()))
+                    .collect();
+                for (rid, anchor) in parse_drawing_xml(&xml) {
+                    if let Some(target) = media_map.get(&rid) {
+                        let mpath = format!("xl/{}", target.trim_start_matches("../"));
+                        if let Ok(mut me) = archive.by_name(&mpath) {
+                            let mut buf = Vec::new();
+                            me.read_to_end(&mut buf)?;
+                            let ext = Path::new(&mpath)
+                                .extension()
+                                .and_then(|e| e.to_str())
+                                .unwrap_or("bin")
+                                .to_string();
+                            imgs.push(WorksheetImage {
+                                extension: ext,
+                                buffer: buf,
+                                positioning: "oneCell".to_string(),
+                                anchor,
+                                media_index: 0,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        per_sheet.push(imgs);
+    }
+    Ok(per_sheet)
+}
+
+fn parse_drawing_xml(xml: &str) -> Vec<(String, ImageAnchor)> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut out: Vec<(String, ImageAnchor)> = Vec::new();
+    let mut cur = ImageAnchor {
+        anchor_type: "oneCell".to_string(),
+        col: 0,
+        row: 0,
+        x: 0,
+        y: 0,
+        col2: 0,
+        row2: 0,
+        x2: 0,
+        y2: 0,
+    };
+    let mut in_from = false;
+    let mut in_to = false;
+    let mut embed_rid: Option<String> = None;
+    let mut events: u64 = 0;
+    loop {
+        buf.clear();
+        events += 1;
+        if events > MAX_EVENTS as u64 {
+            break;
+        }
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => match e.name().as_ref() {
+                b"xdr:oneCellAnchor" => {
+                    cur = ImageAnchor {
+                        anchor_type: "oneCell".to_string(),
+                        col: 0,
+                        row: 0,
+                        x: 0,
+                        y: 0,
+                        col2: 0,
+                        row2: 0,
+                        x2: 0,
+                        y2: 0,
+                    };
+                    embed_rid = None;
+                }
+                b"xdr:twoCellAnchor" => {
+                    cur = ImageAnchor {
+                        anchor_type: "twoCell".to_string(),
+                        col: 0,
+                        row: 0,
+                        x: 0,
+                        y: 0,
+                        col2: 0,
+                        row2: 0,
+                        x2: 0,
+                        y2: 0,
+                    };
+                    embed_rid = None;
+                }
+                b"xdr:from" => in_from = true,
+                b"xdr:to" => in_to = true,
+                b"xdr:col" => {
+                    let v = read_next_text_u32(&mut reader);
+                    if in_from {
+                        cur.col = v;
+                    } else if in_to {
+                        cur.col2 = v;
+                    }
+                }
+                b"xdr:row" => {
+                    let v = read_next_text_u32(&mut reader);
+                    if in_from {
+                        cur.row = v;
+                    } else if in_to {
+                        cur.row2 = v;
+                    }
+                }
+                b"xdr:colOff" => {
+                    let v = read_next_text_u32(&mut reader);
+                    if in_from {
+                        cur.x = v;
+                    } else if in_to {
+                        cur.x2 = v;
+                    }
+                }
+                b"xdr:rowOff" => {
+                    let v = read_next_text_u32(&mut reader);
+                    if in_from {
+                        cur.y = v;
+                    } else if in_to {
+                        cur.y2 = v;
+                    }
+                }
+                b"a:blip" => {
+                    for attr in e.attributes().flatten() {
+                        if attr.key.as_ref() == b"r:embed" {
+                            embed_rid = Some(String::from_utf8_lossy(&attr.value).into_owned());
+                        }
+                    }
+                }
+                _ => {}
+            },
+            Ok(Event::End(ref e)) => match e.name().as_ref() {
+                b"xdr:from" => in_from = false,
+                b"xdr:to" => in_to = false,
+                b"xdr:pic" => {
+                    if let Some(rid) = embed_rid.take() {
+                        out.push((rid, cur.clone()));
+                    }
+                }
+                _ => {}
+            },
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+    out
+}
+
+fn read_next_text_u32(reader: &mut quick_xml::Reader<&[u8]>) -> u32 {
+    use quick_xml::events::Event;
+    let mut b = Vec::new();
+    match reader.read_event_into(&mut b) {
+        Ok(Event::Text(t)) => t
+            .unescape()
+            .ok()
+            .and_then(|s| s.trim().parse::<u32>().ok())
+            .unwrap_or(0),
+        _ => 0,
+    }
+}
+
 fn ref_to_rowcol(ref_: &str) -> Option<(u32, u32)> {
     let ref_ = ref_.trim();
     if ref_.is_empty() {

@@ -10,6 +10,7 @@
 use chrono::{DateTime, Utc};
 
 use super::defined_name::DefinedName;
+use super::workbook_view::{CalcProperties, WorkbookView};
 use super::worksheet::Worksheet;
 
 /// Actual workbook state. Not exported via napi — always accessed through
@@ -20,6 +21,8 @@ pub struct WorkbookInner {
     pub created: DateTime<Utc>,
     pub modified: DateTime<Utc>,
     pub defined_names: Vec<DefinedName>,
+    pub views: Vec<WorkbookView>,
+    pub calc_properties: Option<CalcProperties>,
 }
 
 impl WorkbookInner {
@@ -30,6 +33,8 @@ impl WorkbookInner {
             created: now,
             modified: now,
             defined_names: Vec::new(),
+            views: Vec::new(),
+            calc_properties: None,
         }
     }
 
@@ -115,6 +120,26 @@ impl WorkbookInner {
         self.defined_names
             .iter()
             .find(|dn| dn.name == name && dn.sheet.as_deref() == sheet)
+    }
+
+    // -- Views & calc properties (v1.0.0) --
+
+    pub fn views(&self) -> Vec<WorkbookView> {
+        self.views.clone()
+    }
+
+    pub fn set_views(&mut self, views: Vec<WorkbookView>) {
+        self.views = views;
+        self.modified = Utc::now();
+    }
+
+    pub fn calc_properties(&self) -> Option<CalcProperties> {
+        self.calc_properties.clone()
+    }
+
+    pub fn set_calc_properties(&mut self, calc: Option<CalcProperties>) {
+        self.calc_properties = calc;
+        self.modified = Utc::now();
     }
 }
 

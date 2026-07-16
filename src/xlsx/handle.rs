@@ -209,6 +209,138 @@ mod tests {
         assert!(re_read.worksheets().iter().any(|ws| ws.name() == "AsyncTest"));
     }
 
+    #[test]
+    fn test_roundtrip_header_footer_and_page_setup() {
+        use crate::model::header_footer::HeaderFooter;
+        use crate::model::page_setup::{PageMargins, PageSetup};
+
+        let mut inner = WorkbookInner::new();
+        let mut ws = inner.add_worksheet("Sheet1".into());
+        ws.set_header_footer(Some(HeaderFooter {
+            odd_header: Some("&CSheet&RPage".into()),
+            odd_footer: Some("&P of &N".into()),
+            ..Default::default()
+        }));
+        ws.set_page_setup(Some(PageSetup {
+            orientation: Some("landscape".into()),
+            paper_size: Some(9),
+            margins: Some(PageMargins {
+                left: Some(0.5),
+                right: Some(0.5),
+                top: Some(1.0),
+                bottom: Some(1.0),
+                header: Some(0.5),
+                footer: Some(0.5),
+            }),
+            ..Default::default()
+        }));
+
+        let bytes = crate::writer::xlsx::workbook_to_bytes(&inner).unwrap();
+        let re = crate::reader::xlsx::workbook_inner_from_bytes(&bytes).unwrap();
+        let rws = &re.worksheets()[0];
+
+        let hf = rws.header_footer().expect("headerFooter should round-trip");
+        assert_eq!(hf.odd_header.as_deref(), Some("&CSheet&RPage"));
+        assert_eq!(hf.odd_footer.as_deref(), Some("&P of &N"));
+
+        let ps = rws.page_setup().expect("pageSetup should round-trip");
+        assert_eq!(ps.orientation.as_deref(), Some("landscape"));
+        assert_eq!(ps.paper_size, Some(9));
+        let m = ps.margins.expect("margins should round-trip");
+        assert_eq!(m.top, Some(1.0));
+        assert_eq!(m.left, Some(0.5));
+    }
+
+    #[test]
+    fn test_roundtrip_workbook_views_and_calc() {
+        use crate::model::workbook_view::{CalcProperties, WorkbookView};
+
+        let mut inner = WorkbookInner::new();
+        inner.add_worksheet("Sheet1".into());
+        inner.set_views(vec![WorkbookView {
+            active_tab: Some(1),
+            visibility: Some("visible".into()),
+            minimized: Some(true),
+            ..Default::default()
+        }]);
+        inner.set_calc_properties(Some(CalcProperties {
+            full_calc_on_load: Some(true),
+            calc_id: Some(124519),
+            ..Default::default()
+        }));
+
+        let bytes = crate::writer::xlsx::workbook_to_bytes(&inner).unwrap();
+        let re = crate::reader::xlsx::workbook_inner_from_bytes(&bytes).unwrap();
+        let views = re.views();
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].active_tab, Some(1));
+        assert_eq!(views[0].minimized, Some(true));
+        let calc = re.calc_properties().expect("calcProperties should round-trip");
+        assert_eq!(calc.full_calc_on_load, Some(true));
+        assert_eq!(calc.calc_id, Some(124519));
+    }
+
+    #[test]
+    fn test_roundtrip_comments() {
+        use crate::model::comment::CellComment;
+
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("Sheet1".into());
+        ws.insert_cell_comment(
+            1,
+            1,
+            CellComment {
+                text: "a note".into(),
+                author: Some("Alice".into()),
+            },
+        );
+
+        let bytes = crate::writer::xlsx::workbook_to_bytes(&inner).unwrap();
+        let re = crate::reader::xlsx::workbook_inner_from_bytes(&bytes).unwrap();
+        let rws = &re.worksheets()[0];
+
+        let c = rws.get_cell_by_rc(1, 1).comment().expect("comment should round-trip");
+        assert_eq!(c.text, "a note");
+        assert_eq!(c.author.as_deref(), Some("Alice"));
+    }
+
+    #[test]
+    fn test_roundtrip_images() {
+        use crate::model::image::{AddImageOptions, ImageAnchor};
+
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("Sheet1".into());
+        let anchor = ImageAnchor {
+            anchor_type: "oneCell".into(),
+            col: 1,
+            row: 2,
+            x: 0,
+            y: 0,
+            col2: 0,
+            row2: 0,
+            x2: 0,
+            y2: 0,
+        };
+        let _ = ws.add_image(AddImageOptions {
+            extension: "png".into(),
+            buffer: vec![1, 2, 3, 4, 5],
+            image_type: None,
+            positioning: Some("oneCell".into()),
+            anchor,
+        });
+
+        let bytes = crate::writer::xlsx::workbook_to_bytes(&inner).unwrap();
+        let re = crate::reader::xlsx::workbook_inner_from_bytes(&bytes).unwrap();
+        let rws = &re.worksheets()[0];
+
+        let imgs = rws.get_images();
+        assert_eq!(imgs.len(), 1);
+        assert_eq!(imgs[0].extension, "png");
+        assert_eq!(imgs[0].buffer, vec![1, 2, 3, 4, 5]);
+        assert_eq!(imgs[0].anchor.col, 1);
+        assert_eq!(imgs[0].anchor.row, 2);
+    }
+
     // ---- helpers ----
 
     fn make_test_xlsx_bytes() -> Vec<u8> {
