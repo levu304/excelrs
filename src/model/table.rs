@@ -58,6 +58,8 @@ pub struct AddTableOptions {
     pub style: Option<TableStyle>,
     /// Optional autoFilter range for the table part. Defaults to the table ref.
     pub auto_filter: Option<String>,
+    /// When `false`, no `<autoFilter>` element is emitted (default `true`).
+    pub auto_filter_enabled: Option<bool>,
 }
 
 /// A worksheet table — returned by `getTable` / `getTables`.

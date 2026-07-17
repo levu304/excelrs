@@ -19,7 +19,7 @@
 //! - No custom styles beyond Normal
 //! - Formula cells write the formula string but no cached value
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::{Seek, Write};
 use std::path::Path;
 
@@ -80,6 +80,30 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
             sheet_images.push(imgs);
             sheet_tables.push(ws.get_tables_inner());
         }
+
+        // (v1.1.0) Table names and displayNames must be unique across the whole
+        // workbook — OOXML requires per-workbook uniqueness (Excel enforces it).
+        // A table's own name and displayName may legitimately be equal (the default),
+        // so de-duplicate identifiers within each table before checking globally.
+        {
+            let mut seen_names: HashSet<String> = HashSet::new();
+            for tbl in sheet_tables.iter().flatten() {
+                let mut ids: Vec<String> = Vec::with_capacity(2);
+                ids.push(tbl.name.clone());
+                if tbl.display_name != tbl.name {
+                    ids.push(tbl.display_name.clone());
+                }
+                for id in ids {
+                    if !seen_names.insert(id.clone()) {
+                        return Err(ExcelrsError::Write(format!(
+                            "Duplicate table name or displayName '{}': table names and displayNames must be unique across the workbook",
+                            id
+                        )));
+                    }
+                }
+            }
+        }
+
         start_file(&mut zip, "[Content_Types].xml")?;
         write_content_types(
             &mut zip,

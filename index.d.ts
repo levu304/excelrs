@@ -766,6 +766,8 @@ export interface AddTableOptions {
   style?: TableStyle
   /** Optional autoFilter range for the table part. Defaults to the table ref. */
   autoFilter?: string
+  /** Whether to emit a table <autoFilter> element. Defaults to true. Set false to omit it. */
+  autoFilterEnabled?: boolean
 }
 
 /** A worksheet table — returned by `getTable` / `getTables`. */

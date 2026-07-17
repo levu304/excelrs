@@ -655,7 +655,12 @@ impl Worksheet {
             .clone()
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| name.clone());
-        let auto = opts.auto_filter.clone().or_else(|| Some(opts.ref_range.clone()));
+        let emit_filter = opts.auto_filter_enabled.unwrap_or(true);
+        let auto = if emit_filter {
+            opts.auto_filter.clone().or_else(|| Some(opts.ref_range.clone()))
+        } else {
+            None
+        };
 
         let table_rows: Vec<TableRow> = opts
             .rows

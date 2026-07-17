@@ -135,3 +135,164 @@ test('reads an ExcelJS-authored table (v1.1.0)', async () => {
   expect(t.rows.length).toBeGreaterThanOrEqual(1)
   expect(t.rows[0].values[0].number).toBe(1)
 })
+
+test('autoFilter disabled (v1.1.0)', async () => {
+  const wb = new Workbook()
+  const ws = wb.addWorksheet('Sheet1')
+  ws.addTable({
+    name: 'T1',
+    ref: 'A1:C3',
+    headerRow: true,
+    columns: [{ name: 'A' }, { name: 'B' }, { name: 'C' }],
+    rows: [
+      [1, 2, 3],
+      [4, 5, 6],
+    ],
+    autoFilterEnabled: false,
+  })
+  const wb2 = await rt(wb)
+  const t = wb2.getWorksheet('Sheet1')!.getTable('T1')!
+  // autofilterRef serializes as `undefined` (Option::None) on the object getter.
+  expect(t.autofilterRef ?? null).toBeNull()
+})
+
+test('cross-sheet duplicate table name fails write (v1.1.0)', async () => {
+  const wb = new Workbook()
+  const s1 = wb.addWorksheet('S1')
+  const s2 = wb.addWorksheet('S2')
+  s1.addTable({
+    name: 'T1',
+    ref: 'A1:C3',
+    headerRow: true,
+    columns: [{ name: 'A' }, { name: 'B' }, { name: 'C' }],
+    rows: [[1, 2, 3], [4, 5, 6]],
+  })
+  s2.addTable({
+    name: 'T1',
+    ref: 'A1:C3',
+    headerRow: true,
+    columns: [{ name: 'A' }, { name: 'B' }, { name: 'C' }],
+    rows: [[1, 2, 3], [4, 5, 6]],
+  })
+  await expect(wb.xlsx.write()).rejects.toThrow()
+})
+
+test('multiple tables round-trip (v1.1.0)', async () => {
+  const wb = new Workbook()
+  const ws = wb.addWorksheet('Sheet1')
+  ws.addTable({
+    name: 'T1',
+    ref: 'A1:C3',
+    headerRow: true,
+    columns: [{ name: 'A' }, { name: 'B' }, { name: 'C' }],
+    rows: [[1, 2, 3], [4, 5, 6]],
+  })
+  ws.addTable({
+    name: 'T2',
+    ref: 'E1:G3',
+    headerRow: true,
+    columns: [{ name: 'X' }, { name: 'Y' }, { name: 'Z' }],
+    rows: [[7, 8, 9], [10, 11, 12]],
+  })
+  const wb2 = await rt(wb)
+  const ws2 = wb2.getWorksheet('Sheet1')!
+  expect(ws2.getTables().length).toBe(2)
+  expect(ws2.getTable('T1')).not.toBeNull()
+  expect(ws2.getTable('T2')).not.toBeNull()
+  expect(ws2.getTable('T2')!.ref).toBe('E1:G3')
+})
+
+test('totals row round-trips (v1.1.0)', async () => {
+  const wb = new Workbook()
+  const ws = wb.addWorksheet('Sheet1')
+  ws.addTable({
+    name: 'T1',
+    ref: 'A1:C4',
+    headerRow: true,
+    totalsRow: true,
+    columns: [
+      { name: 'A', totalsRowLabel: 'Total' },
+      { name: 'B' },
+      { name: 'C' },
+    ],
+    rows: [[1, 2, 3], [4, 5, 6]],
+  })
+  expect(ws.getCell('A4').value.string).toBe('Total')
+  const wb2 = await rt(wb)
+  const t = wb2.getWorksheet('Sheet1')!.getTable('T1')!
+  expect(t).toBeDefined()
+  expect(t.totalsRow).toBe(true)
+  expect(t.columns[0].totalsRowLabel).toBe('Total')
+})
+
+test('removeTable removes the table part (v1.1.0)', async () => {
+  const wb = new Workbook()
+  const ws = wb.addWorksheet('Sheet1')
+  ws.addTable({
+    name: 'T1',
+    ref: 'A1:C3',
+    headerRow: true,
+    columns: [{ name: 'A' }, { name: 'B' }, { name: 'C' }],
+    rows: [[1, 2, 3], [4, 5, 6]],
+  })
+  const buf1 = await wb.xlsx.write()
+  expect(buf1.includes('xl/tables/table1.xml')).toBe(true)
+
+  expect(ws.removeTable('T1')).toBe(true)
+  expect(ws.getTables().length).toBe(0)
+
+  const buf2 = await wb.xlsx.write()
+  expect(buf2.includes('xl/tables/table1.xml')).toBe(false)
+})
+
+test('table error paths reject invalid input (v1.1.0)', () => {
+  const wb = new Workbook()
+  const ws = wb.addWorksheet('S')
+  // reversed ref (start must precede end)
+  expect(() =>
+    ws.addTable({
+      name: 'T1',
+      ref: 'C3:A1',
+      headerRow: true,
+      columns: [{ name: 'A' }, { name: 'B' }, { name: 'C' }],
+      rows: [[1, 2, 3], [4, 5, 6]],
+    }),
+  ).toThrow()
+  // column count mismatch (2 cols for a 3-wide ref)
+  expect(() =>
+    ws.addTable({
+      name: 'T2',
+      ref: 'A1:C3',
+      headerRow: true,
+      columns: [{ name: 'A' }, { name: 'B' }],
+      rows: [[1, 2], [4, 5]],
+    }),
+  ).toThrow()
+  // data row count mismatch
+  expect(() =>
+    ws.addTable({
+      name: 'T3',
+      ref: 'A1:C3',
+      headerRow: true,
+      columns: [{ name: 'A' }, { name: 'B' }, { name: 'C' }],
+      rows: [[1, 2, 3]],
+    }),
+  ).toThrow()
+})
+
+test('escaped column name round-trips (v1.1.0)', async () => {
+  const wb = new Workbook()
+  const ws = wb.addWorksheet('Sheet1')
+  ws.addTable({
+    name: 'T1',
+    displayName: 'D&E',
+    ref: 'A1:A2',
+    headerRow: true,
+    columns: [{ name: 'A&B' }],
+    rows: [[1]],
+  })
+  const wb2 = await rt(wb)
+  const t = wb2.getWorksheet('Sheet1')!.getTable('T1')!
+  expect(t.columns[0].name).toBe('A&B')
+  expect(t.displayName).toBe('D&E')
+})
