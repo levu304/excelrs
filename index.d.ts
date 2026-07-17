@@ -48,7 +48,7 @@ export declare class Cell {
    * - `null | undefined | {}` → resets to Normal (None).
    * - Throws `ExcelrsError::InvalidStyle` on validation failure.
    */
-  set style(val: any)
+  set style(val: Style | null)
 }
 
 /**
@@ -73,7 +73,7 @@ export declare class Column {
   get hidden(): boolean
   set hidden(val: boolean)
   get style(): Style | null
-  set style(val: any)
+  set style(val: Style | null)
   get colNum(): number
 }
 
@@ -93,7 +93,7 @@ export declare class Row {
   get hidden(): boolean
   set hidden(val: boolean)
   get style(): Style | null
-  set style(val: any)
+  set style(val: Style | null)
   /**
    * Get cell by 1-indexed column number. Creates an empty cell if none exists.
    * This is the Rust backing for `Row.getCell(col: number)`.
@@ -104,6 +104,10 @@ export declare class Row {
    * This is the Rust backing for `Row.getCell(col: string)`.
    */
   getCellByColLetter(colLetter: string): Cell
+  /** Get cell by 1-indexed column number (JS glue → getCellByColNum). */
+  getCell(col: number): Cell
+  /** Get cell by column letter (JS glue → getCellByColLetter). */
+  getCell(col: string): Cell
 }
 
 /**
@@ -128,7 +132,7 @@ export declare class Workbook {
    * Get a worksheet by name (string) or 1-indexed position (number).
    * Returns `None` if not found.
    */
-  getWorksheet(nameOrIndex: any): Worksheet | null
+  getWorksheet(nameOrIndex: string | number): Worksheet | null
   get worksheets(): Array<Worksheet>
   get worksheetCount(): number
   /** ISO-8601 timestamp of workbook creation. */
@@ -282,10 +286,14 @@ export declare class Worksheet {
    * Creates the row (and cell) if absent.
    */
   getCellByRc(row: number, col: number): Cell
+  /** Get cell by A1-style address string (JS glue → getCellByAddress). */
+  getCell(address: string): Cell
+  /** Get cell by 1-indexed row and column numbers (JS glue → getCellByRc). */
+  getCell(row: number, col: number): Cell
   /** Get row by 1-indexed row number. Creates the row if it doesn't exist. */
   getRow(rowNumber: number): Row
   /** Add a row of cell values. Returns the created Row. */
-  addRow(values: Array<any>): Row
+  addRow(values: Array<CellValue | number | string | boolean | null>): Row
   /**
    * Get a contiguous range of rows starting at `start` (1-indexed).
    * Returns up to `count` rows.
@@ -300,7 +308,7 @@ export declare class Worksheet {
    * Set the style of a cell at (row, col).  Bypasses clone-on-read:
    * the cell is mutated inside the locked row map.
    */
-  setCellStyle(row: number, col: number, style: any): void
+  setCellStyle(row: number, col: number, style: Style | null): void
   /**
    * Replace the worksheet's column definitions.
    *
@@ -318,7 +326,7 @@ export declare class Worksheet {
    * numbers starting from `max(existing col_nums) + 1` (or 1 if none
    * exist).  Duplicate `colNum` values across the same call are rejected.
    */
-  setColumns(cols: any): void
+  setColumns(cols: Array<ColumnInput>): void
   /**
    * Merge a range of cells (e.g. "A1:C3"). Accepts an A1-style range string.
    * Validates that the range parses to a rectangular area; stores it for
@@ -379,22 +387,6 @@ export interface AddImageOptions {
   imageType?: string
   positioning?: string
   anchor: ImageAnchor
-}
-
-/** Options for `Worksheet.addTable`. */
-export interface AddTableOptions {
-  name: string
-  displayName?: string
-  /** A1 range covering header + data (+ optional totals), e.g. "A1:C4". */
-  ref: string
-  headerRow?: boolean
-  totalsRow?: boolean
-  columns: Array<TableColumn>
-  /** Data rows as raw value arrays (ExcelJS-compatible: `[[v1, v2], ...]`). */
-  rows: Array<Array<any>>
-  style?: TableStyle
-  /** Optional autoFilter range for the table part. Defaults to the table ref. */
-  autoFilter?: string
 }
 
 /** Cell content alignment and text wrapping. */
@@ -745,6 +737,37 @@ export interface Style {
   numFmt?: string
 }
 
+/** A single workbook view descriptor (`CT_WorkbookView`). */
+export interface WorkbookView {
+  xWindow?: number
+  yWindow?: number
+  windowWidth?: number
+  windowHeight?: number
+  activeTab?: number
+  firstSheet?: number
+  minimized?: boolean
+  showHorizontalScroll?: boolean
+  showVerticalScroll?: boolean
+  tabRatio?: number
+  visibility?: string
+}
+
+/** Options for `Worksheet.addTable`. */
+export interface AddTableOptions {
+  name: string
+  displayName?: string
+  /** A1 range covering header + data (+ optional totals), e.g. "A1:C4". */
+  ref: string
+  headerRow?: boolean
+  totalsRow?: boolean
+  columns: Array<TableColumn>
+  /** Data rows as raw value arrays (ExcelJS-compatible: `[[v1, v2], ...]`). */
+  rows: Array<Array<number | string | boolean | null>>
+  style?: TableStyle
+  /** Optional autoFilter range for the table part. Defaults to the table ref. */
+  autoFilter?: string
+}
+
 /** A worksheet table — returned by `getTable` / `getTables`. */
 export interface Table {
   name: string
@@ -782,19 +805,4 @@ export interface TableStyle {
   showLastColumn?: boolean
   showRowStripes?: boolean
   showColumnStripes?: boolean
-}
-
-/** A single workbook view descriptor (`CT_WorkbookView`). */
-export interface WorkbookView {
-  xWindow?: number
-  yWindow?: number
-  windowWidth?: number
-  windowHeight?: number
-  activeTab?: number
-  firstSheet?: number
-  minimized?: boolean
-  showHorizontalScroll?: boolean
-  showVerticalScroll?: boolean
-  tabRatio?: number
-  visibility?: string
 }
