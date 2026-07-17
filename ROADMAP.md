@@ -2,6 +2,8 @@
 
 **Generated:** 2026-07-14 | **ExcelJS version pinned:** [4.4.0](https://www.npmjs.com/package/exceljs/v/4.4.0) | **excelrs version:** 1.0.0 (released 2026-07-16)
 
+> **Next:** v2.0.0 is the planned capstone (see *Post-v1 Roadmap* below). The v1.1.0 → v2.0.0 scope is **provisional**, gated on an ExcelJS 4.4.0 API audit (Step 0) before each feature's design.
+
 ---
 
 ## Parity Matrix
@@ -13,17 +15,17 @@
 | XLSX write | shipped | v0.1.0 | Zip + quick-xml |
 | CSV read | shipped | v0.9.0 | Manual RFC 4180 parser |
 | CSV write | shipped | v0.9.0 | Manual RFC 4180 serializer |
-| Streaming XLSX | n-a | — | Perf-oriented; deferred from v1 |
+| Streaming XLSX | targeted | v2.0.0 | Large-file streaming reader/writer (SAX-based) |
 | **Worksheet structure** | | | |
 | Rows / columns CRUD | partial | v0.1.0 | `getRow`/`addRow`/`getRows`/`columns()`; no `getColumn`/`splice`/`insertRow` |
 | Merge cells | shipped | v0.5.0 | mergeCells, unMergeCells |
 | Freeze / split panes | shipped | v0.11.0 | `<sheetViews><pane>` read/write implemented; `ws.views` |
 | Auto filters | shipped | v0.11.0 | `<autoFilter ref>` read/write; `ws.autoFilter` |
-| Insert / splice rows | planned | — | `insertRow`/`insertRows`/`spliceRows` not implemented |
-| Duplicate row | planned | — | `DuplicateRow` not implemented |
+| Insert / splice rows | targeted | v1.3.0 | `insertRow`/`insertRows`/`spliceRows` — targeted for v1.3.0 |
+| Duplicate row | targeted | v1.3.0 | `duplicateRow` — targeted for v1.3.0 |
 | Column widths / headers | shipped | v0.1.0 | |
-| Outline levels (rows/cols) | planned | — | Row/col grouping (`outlineLvl`) not implemented |
-| Page breaks | planned | — | `rowBreaks`/`colBreaks` not implemented |
+| Outline levels (rows/cols) | targeted | v1.3.0 | Row/col grouping (`outlineLvl`) — targeted for v1.3.0 |
+| Page breaks | targeted | v1.3.0 | `rowBreaks`/`colBreaks` — targeted for v1.3.0 |
 | **Cell values & types** | | | |
 | Number, String, Bool, Error | shipped | v0.1.0 | |
 | Formula (read/write) | shipped | v0.1.0 | Stored as string formula + cached value |
@@ -62,8 +64,8 @@
 | **Other features** | | | |
 | Comments | shipped | v1.0.0 | `xl/commentsN.xml` part + relationship read/write |
 | Images / drawings | shipped | v1.0.0 | `xl/drawings/` part, media extraction, anchors read/write |
-| Tables | planned | — | Complex OOXML part (`xl/tables/`) |
-| Conditional formatting | planned | — | Complex OOXML + dxfs |
+| Tables | targeted | v1.1.0 | Complex OOXML part (`xl/tables/`); targeted for v1.1.0 |
+| Conditional formatting | targeted | v1.2.0 | Complex OOXML + dxfs; targeted for v1.2.0 |
 | Charts | planned (distant) | — | Major subsystem; chart XML is very complex |
 | Pivot tables | planned (distant) | — | Major subsystem; extremely complex |
 | Formula evaluation | n-a | — | Separate interpreter; deferred v1+ |
@@ -73,6 +75,7 @@
 - **shipped** — fully usable, matches ExcelJS API expectations
 - **partial** — partially implemented; write works or read works but not both
 - **planned** — not yet implemented, targeted for a future release
+- **targeted** — planned and assigned to a specific upcoming release (see Prioritized Roadmap)
 - **n-a** — explicitly out of scope for the drop-in compat promise (v1)
 
 ---
@@ -112,16 +115,28 @@ Quick-win data completeness: hyperlinks (read), auto filters, freeze panes, shee
 | 13 | **Comments** | med | Needs new OOXML part (`xl/commentsN.xml` + relationship). Moderate model + reader/writer. ✅ shipped (v1.0.0) |
 | 14 | **Images / drawings** | med/high | Needs drawing part (`xl/drawings/`), relationships, media extraction. Significant plumbing but self-contained. ✅ shipped (v1.0.0) |
 
-### [Post-v1 / v2] — Heavy subsystems
+### [v1.1.0]–[v2.0.0] Post-v1 Roadmap
+
+The v1.0.0 drop-in compatibility milestone is complete. Post-v1 work ships as a **v1.x.x minor series** (additive, compat-value first — roadmap principle D3) and culminates in a **v2.0.0 capstone**.
+
+> **Provisional scope.** Every release below is gated on **Step 0: audit the real ExcelJS 4.4.0 API** (already a devDependency — `npm i exceljs@4.4.0`) for that area's surface and emitted OOXML, *before* locking its design. The mapping here is the recommended target; the audit may resize any release.
+
+| Target | Feature | Effort | Status | Notes |
+| --- | --- | --- | --- | --- |
+| **v1.1.0** | **Tables** | high | targeted | `ws.addTable` / `ws.getTable(s)` / `ws.removeTable`; `Table` / `TableColumn` / `TableRow` model; `xl/tables/tableN.xml` + relationship; `autoFilter` integration; header/totals rows; header styling |
+| **v1.2.0** | **Conditional formatting** | high | targeted | read/write `<conditionalFormatting>` + `dxfs`; rule types `cellIs`, `expression`/formula, `colorScale`, `dataBar`, `iconSet`, `top10`, `unique`/`duplicate`, `containsText`, `timePeriod`, blanks/errors/nonBlanks; priority ordering |
+| **v1.3.0** | **Worksheet-structure parity finish** | medium | targeted | `insertRow(s)` / `spliceRows` / `duplicateRow`; row/col `outlineLevel` (grouping); `rowBreaks` / `colBreaks` page breaks — closes the remaining "planned" v1.x parity-matrix rows |
+| **v2.0.0** | **Streaming XLSX + parity capstone** | high | targeted | streaming reader/writer architecture for large files (SAX-based); **declare the ExcelJS-4.4.0 parity program complete**; reserve for any breaking API cleanup required by the above |
+
+**Deferred to v3+ (distant, unchanged):**
 
 | Feature | Effort | Rationale |
-| --------- | -------- | ----------- |
-| Tables | high | Complex OOXML part with column definitions, auto-filter integration |
-| Conditional formatting | high | Complex OOXML with dxfs, multiple rule types, priority ordering |
+| --- | --- | --- |
 | Charts | very high | Entire chart engine; chart XML is extremely verbose and version-specific |
 | Pivot tables | very high | Complex OOXML with pivotCache, pivotTable, multiple axis types |
 | Formula evaluation | very high | Spreadsheet formula interpreter; CLO=n (not a trivial project) |
-| Streaming XLSX | high | Needs streaming reader/writer architecture; perf-optimization for large files |
+
+**Deferred minor-parity (not in v2.0.0; triage after the v2.0.0 capstone):** `Themes (write)`, `State (visible/hidden)`, `Tab color`, `Properties (defaultRowHeight, etc.)`. Smaller ExcelJS API gaps, explicitly out of v2.0.0 scope but tracked for post-v2.0.0 triage.
 
 ---
 

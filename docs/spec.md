@@ -5,6 +5,7 @@
 **License:** MIT OR Apache-2.0
 **Author:** Solo maintainer (open source)
 **Status:** Implemented (published to npm as `@levu304/excelrs`)
+**Next:** v2.0.0 is the planned capstone — see §9.4 (Post-v1 / v2 Roadmap). The v1.1.0 → v2.0.0 scope is **provisional**, gated on an ExcelJS 4.4.0 API audit before each feature's design.
 
 ---
 
@@ -1282,6 +1283,8 @@ worksheet only — CSV is single-sheet).
 - **Comments** — `Cell.note` / `Cell.comment` read/write (`xl/commentsN.xml` + relationship, authors list).
 - **Images / drawings** — `ws.addImage` read/write (`xl/drawings/`, `xl/media/`, anchors, relationship resolution).
 
+> Post-v1.0.0 work — Tables, Conditional formatting, Streaming XLSX, and the worksheet-structure finish (insert/splice/duplicate rows, outline levels, page breaks) — is sequenced in §9.4.
+
 ### 9.3 Future (v0.3+)
 
 - Streaming XLSX reader (row-by-row for large files).
@@ -1294,6 +1297,25 @@ worksheet only — CSV is single-sheet).
 - Multi-sheet copy/move.
 - Worksheet protection. (shipped v0.11.0)
 - XLSB binary format support.
+
+### 9.4 Post-v1 / v2 Roadmap (v1.0.0 → v2.0.0)
+
+The v1.0.0 drop-in compatibility milestone is complete (§9.2.4). Post-v1 work ships as a **v1.x.x minor series** (additive, compat-value first — roadmap principle D3) and culminates in a **v2.0.0 capstone**.
+
+> **Provisional scope.** Every release below is gated on **Step 0: audit the real ExcelJS 4.4.0 API** (already a devDependency — `npm i exceljs@4.4.0`) for that area's surface and emitted OOXML, _before_ locking its design. The mapping here is the recommended target; the audit may resize any release.
+
+| Target | Feature | Effort | Status | Notes |
+| --- | --- | --- | --- | --- |
+| **v1.1.0** | **Tables** | high | targeted | `ws.addTable` / `ws.getTable(s)` / `ws.removeTable`; `Table` / `TableColumn` / `TableRow` model; `xl/tables/tableN.xml` + relationship; `autoFilter` integration; header/totals rows; header styling |
+| **v1.2.0** | **Conditional formatting** | high | targeted | read/write `<conditionalFormatting>` + `dxfs`; rule types `cellIs`, `expression`/formula, `colorScale`, `dataBar`, `iconSet`, `top10`, `unique`/`duplicate`, `containsText`, `timePeriod`, blanks/errors/nonBlanks; priority ordering |
+| **v1.3.0** | **Worksheet-structure parity finish** | medium | targeted | `insertRow(s)` / `spliceRows` / `duplicateRow`; row/col `outlineLevel` (grouping); `rowBreaks` / `colBreaks` page breaks — closes the remaining "planned" v1.x parity-matrix rows |
+| **v2.0.0** | **Streaming XLSX + parity capstone** | high | targeted | streaming reader/writer architecture for large files (SAX-based); **declare the ExcelJS-4.4.0 parity program complete**; reserve v2.0.0 for any breaking API cleanup required by the above |
+
+**Deferred to v3+ (distant, unchanged):** Charts, Pivot tables, Formula evaluation — see §9.3 and the Non-Goals (§10) for rationale.
+
+**Deferred minor-parity (not in v2.0.0; triage after the v2.0.0 capstone):** `Themes (write)`, `State (visible/hidden)`, `Tab color`, `Properties (defaultRowHeight, etc.)`. Smaller ExcelJS API gaps, explicitly out of v2.0.0 scope but tracked for post-v2.0.0 triage.
+
+**semver:** features are additive → minors on the v1 line; v2.0.0 is reserved for the Streaming subsystem + any necessary breaking cleanup. No gratuitous major bump.
 
 ---
 
@@ -1374,4 +1396,4 @@ These are capabilities that excelrs will **not** implement, now or in the future
 
 ---
 
-_Spec version: 1.5.0. Last updated: 2026-07-17. v0.3.0 (Style read + alignment emission) — full end-to-end style round-trip; see §9.2 for v0.2.0+ style model, §9.2.1 for remaining deferred items. v1.4.0: §9.2.1 removed Style read and Alignment emission rows; §1 updated to v0.3.0 scope; §6.8 added vertical middle→center mapping note. v1.4.1: reconciled header metadata (Version/Status) and removed stale "deferred to v0.3.0" references now that style read + writer alignment emission have shipped (§1, §4.3, §6.8, §9.2). v1.5.0: §9.2.4 documents v1.0.0 drop-in ExcelJS compatibility (headers/footers, page setup, workbook views & calc, comments, images — all read/write round-trippable); §9.3 marks those items shipped; Appendix B adds API mappings._
+_Spec version: 1.6.0. Last updated: 2026-07-18. v0.3.0 (Style read + alignment emission) — full end-to-end style round-trip; see §9.2 for v0.2.0+ style model, §9.2.1 for remaining deferred items. v1.4.0: §9.2.1 removed Style read and Alignment emission rows; §1 updated to v0.3.0 scope; §6.8 added vertical middle→center mapping note. v1.4.1: reconciled header metadata (Version/Status) and removed stale "deferred to v0.3.0" references now that style read + writer alignment emission have shipped (§1, §4.3, §6.8, §9.2). v1.5.0: §9.2.4 documents v1.0.0 drop-in ExcelJS compatibility (headers/footers, page setup, workbook views & calc, comments, images — all read/write round-trippable); §9.3 marks those items shipped; Appendix B adds API mappings. v1.6.0: §9.4 adds the Post-v1 / v2 Roadmap (v1.1.0 Tables → v1.2.0 Conditional formatting → v1.3.0 worksheet-structure finish → v2.0.0 Streaming XLSX capstone); scope is provisional and gated on an ExcelJS 4.4.0 API audit (Step 0)._
