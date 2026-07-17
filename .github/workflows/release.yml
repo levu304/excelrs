@@ -93,11 +93,13 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       # setup-node sets NPM_CONFIG_USERCONFIG, which disables npm's
-      # NODE_AUTH_TOKEN fallback. Write the token into the .npmrc npm
-      # actually reads so `npm publish` authenticates.
+      # NODE_AUTH_TOKEN fallback. Write the token into a local .npmrc at
+      # the repo root so npm finds it when it walks up from the
+      # per-platform publish subdirs. `npm whoami` confirms auth in-log.
       - name: Authenticate to npm
         run: |
-          npm config set //registry.npmjs.org/:_authToken "$NODE_AUTH_TOKEN"
+          echo "//registry.npmjs.org/:_authToken=$NODE_AUTH_TOKEN" > .npmrc
+          npm whoami
 
       - name: Install pnpm
         run: corepack enable
