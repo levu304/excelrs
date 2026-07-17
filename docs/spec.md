@@ -1,7 +1,7 @@
 # excelrs — Specification
 
 **Package:** `@levu304/excelrs` (scoped npm — unscoped name `excelrs` blocked as too similar to `exceljs`)
-**Version:** 0.6.0
+**Version:** 1.0.0
 **License:** MIT OR Apache-2.0
 **Author:** Solo maintainer (open source)
 **Status:** Implemented (published to npm as `@levu304/excelrs`)
@@ -16,7 +16,7 @@
 
 **npm package:** `@levu304/excelrs`. Install: `npm install @levu304/excelrs`.
 
-**v0.6.0 scope:** theme color and indexed color resolution on read. Theme color references (`theme="N"`) and indexed colors (`indexed="N"`) in `xl/styles.xml` are resolved to concrete ARGB hex strings via `xl/theme/theme1.xml` and the standard 56-entry system palette. See §6.8, §9.2.1.
+**v1.0.0 scope:** drop-in ExcelJS compatibility milestone. The remaining medium-effort ExcelJS parity gaps are closed — headers & footers, page setup / print, workbook views & calc properties, cell comments / notes, and images / drawings are all read/write round-trippable and verified against ExcelJS 4.4.0. See §9.2.4 for the area list and the OpenSpec `exceljs-parity` spec for requirement scenarios.
 
 ---
 
