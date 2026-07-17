@@ -49,7 +49,7 @@
 | Defined names | shipped | v0.7.0 | Workbook-global + sheet-scoped |
 | Workbook properties | shipped | v0.1.0 | creator, modified, created, etc. |
 | Workbook views | shipped | v1.0.0 | Workbook views + calc properties (`calcPr`) read/write |
-| Calc properties | planned | — | `fullCalcOnLoad` not implemented |
+| Calc properties | shipped | v1.0.0 | `fullCalcOnLoad` read/write (`<calcPr>`) |
 | Themes (write) | planned | — | Read-only via theme1.xml |
 | **Worksheet** | | | |
 | Data validation | shipped | v0.8.0 | Full read/write, all types |
