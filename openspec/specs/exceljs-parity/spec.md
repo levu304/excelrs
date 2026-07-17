@@ -60,3 +60,8 @@ Each `excelrs` release SHALL implement the next roadmap item(s) and update this 
 - **WHEN** release v1.0.0 is cut
 - **THEN** the matrix marks `comments`, `images`, `page setup / print`, `headers/footers`, and `workbook views & properties` as `shipped`, advancing each from `planned`
 
+#### Scenario: v1.1.0 ships worksheet tables
+
+- **WHEN** release v1.1.0 is cut
+- **THEN** the matrix marks `tables` as `shipped`, advancing it from `planned`/`targeted`
+
