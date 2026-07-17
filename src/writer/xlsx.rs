@@ -718,7 +718,7 @@ fn write_content_types<W: Write>(
             write_str(
                 w,
                 &format!(
-                    r#"<Override PartName=\"/xl/tables/table{table_part}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml\"/>"#,
+                    r#"<Override PartName="/xl/tables/table{table_part}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"/>"#,
                 ),
             )?;
         }
@@ -994,7 +994,7 @@ fn write_sheet_rels<W: Write>(
         write_str(
             w,
             &format!(
-                r#"<Relationship Id=\"rId{rel_id}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing\" Target=\"../drawings/vmlDrawing{sheet_num}.vml\"/>"#,
+                r#"<Relationship Id="rId{rel_id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing" Target="../drawings/vmlDrawing{sheet_num}.vml"/>"#,
             ),
         )?;
         rel_id += 1;
@@ -1431,14 +1431,14 @@ fn write_sheet_xml<W: Write>(
     }
 
     if let Some(rid) = comment_rid {
-        write_str(w, &format!(r#"<legacyDrawing r:id=\"rId{rid}\"/>"#))?;
+        write_str(w, &format!(r#"<legacyDrawing r:id="rId{rid}"/>"#))?;
     }
 
     // (v1.1.0) table parts — link to table parts via relationship
     if !table_rids.is_empty() {
-        write_str(w, &format!(r#"<tableParts count=\"{}\">"#, table_rids.len()))?;
+        write_str(w, &format!(r#"<tableParts count="{}">"#, table_rids.len()))?;
         for rid in table_rids {
-            write_str(w, &format!(r#"<tablePart r:id=\"rId{rid}\"/>"#))?;
+            write_str(w, &format!(r#"<tablePart r:id="rId{rid}"/>"#))?;
         }
         write_str(w, "</tableParts>")?;
     }

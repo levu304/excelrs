@@ -568,6 +568,12 @@ impl Worksheet {
         let (sc, sr, ec, er) = self
             .parse_ref_range(&opts.ref_range)
             .ok_or_else(|| napi::Error::from_reason(format!("Invalid table ref: {}", opts.ref_range)))?;
+        if sc > ec || sr > er {
+            return Err(napi::Error::from_reason(format!(
+                "Invalid table ref '{}': start must precede end",
+                opts.ref_range
+            )));
+        }
         let width = (ec - sc + 1) as usize;
 
         // Resolve columns: explicit names, else derive from the first data row.
@@ -587,6 +593,16 @@ impl Worksheet {
             return Err(napi::Error::from_reason(format!(
                 "Table column count ({}) does not match ref width ({width})",
                 columns.len()
+            )));
+        }
+
+        // Data rows must exactly fill the ref (header/totals excluded) so the
+        // written cells and the <table> range agree.
+        let expected_rows = (er - sr + 1) - (header_row as u32) - (totals_row as u32);
+        if opts.rows.len() as u32 != expected_rows {
+            return Err(napi::Error::from_reason(format!(
+                "Table data row count ({}) does not match ref height (expected {expected_rows})",
+                opts.rows.len()
             )));
         }
 

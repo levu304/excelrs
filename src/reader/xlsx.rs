@@ -1092,7 +1092,10 @@ fn rel_attr(tag: &str, key: &str) -> Option<String> {
     let rest = &tag[idx + prefix.len()..];
     let q1 = rest.find('"')?;
     let q2 = rest[q1 + 1..].find('"')?;
-    Some(rest[q1 + 1..q1 + 1 + q2].to_string())
+    // ponytail: writer escapes attribute values; invert so round-trips stay faithful
+    let raw = &rest[q1 + 1..q1 + 1 + q2];
+    let unescaped = quick_xml::escape::unescape(raw).unwrap_or(std::borrow::Cow::Borrowed(raw));
+    Some(unescaped.into_owned())
 }
 
 /// Parse `xl/commentsN.xml` for every sheet, returning `(cellRef, CellComment)`

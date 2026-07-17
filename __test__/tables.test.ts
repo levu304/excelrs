@@ -94,7 +94,7 @@ test('duplicate table name is rejected (v1.1.0)', () => {
     ref: 'A1:C3',
     headerRow: true,
     columns: [{ name: 'A' }, { name: 'B' }, { name: 'C' }],
-    rows: [[1, 2, 3]],
+    rows: [[1, 2, 3], [4, 5, 6]],
   })
   expect(() =>
     ws.addTable({
@@ -102,7 +102,7 @@ test('duplicate table name is rejected (v1.1.0)', () => {
       ref: 'E1:G3',
       headerRow: true,
       columns: [{ name: 'X' }, { name: 'Y' }, { name: 'Z' }],
-      rows: [[7, 8, 9]],
+      rows: [[7, 8, 9], [10, 11, 12]],
     }),
   ).toThrow()
 })
