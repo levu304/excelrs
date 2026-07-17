@@ -1,6 +1,6 @@
 # excelrs → ExcelJS Porting Roadmap
 
-**Generated:** 2026-07-14 | **ExcelJS version pinned:** [4.4.0](https://www.npmjs.com/package/exceljs/v/4.4.0) | **excelrs version:** 0.11.0 → 0.12.0 (in progress)
+**Generated:** 2026-07-14 | **ExcelJS version pinned:** [4.4.0](https://www.npmjs.com/package/exceljs/v/4.4.0) | **excelrs version:** 1.0.0 (released 2026-07-16)
 
 ---
 
@@ -106,11 +106,11 @@ Quick-win data completeness: hyperlinks (read), auto filters, freeze panes, shee
 | Rank | Feature | Effort | Rationale |
 | ------ | --------- | -------- | ----------- |
 | 9 | **Theme color (write)** | med | ✅ shipped (v0.13.0) — emits `<color theme="N"/>` (+`tint`) |
-| 10 | **Headers and footers** | med | `<headerFooter>` element; supports format codes. ExcelJS API surface is moderate. |
-| 11 | **Page setup / print** | med | `pageMargins`, `paperSize`, `orientation`, `printArea`, `printTitles`. Many attributes but each is simple. |
-| 12 | **Workbook views / calc properties** | med | Workbook views + `calcPr` element. Straightforward OOXML. |
-| 13 | **Comments** | med | Needs new OOXML part (`xl/commentsN.xml` + relationship). Moderate model + reader/writer. |
-| 14 | **Images / drawings** | med/high | Needs drawing part (`xl/drawings/`), relationships, media extraction. Significant plumbing but self-contained. |
+| 10 | **Headers and footers** | med | `<headerFooter>` element; supports format codes. ExcelJS API surface is moderate. ✅ shipped (v1.0.0) |
+| 11 | **Page setup / print** | med | `pageMargins`, `paperSize`, `orientation`, `printArea`, `printTitles`. Many attributes but each is simple. ✅ shipped (v1.0.0) |
+| 12 | **Workbook views / calc properties** | med | Workbook views + `calcPr` element. Straightforward OOXML. ✅ shipped (v1.0.0) |
+| 13 | **Comments** | med | Needs new OOXML part (`xl/commentsN.xml` + relationship). Moderate model + reader/writer. ✅ shipped (v1.0.0) |
+| 14 | **Images / drawings** | med/high | Needs drawing part (`xl/drawings/`), relationships, media extraction. Significant plumbing but self-contained. ✅ shipped (v1.0.0) |
 
 ### [Post-v1 / v2] — Heavy subsystems
 
