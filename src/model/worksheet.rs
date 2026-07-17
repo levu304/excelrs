@@ -23,8 +23,31 @@ use super::page_setup::PageSetup;
 use super::row::Row;
 use super::sheet_protection::SheetProtection;
 use super::sheet_view::SheetView;
+use super::table::{AddTableOptions, Table, TableColumn, TableList, TableRow};
 use crate::model::style::Style;
 use crate::types;
+
+/// Convert a raw JSON value (from `AddTableOptions.rows`) into a `CellValue`.
+fn table_json_to_cell_value(v: &serde_json::Value) -> CellValue {
+    match v {
+        serde_json::Value::Number(n) => CellValue {
+            value_type: "Number".into(),
+            number: n.as_f64(),
+            ..Default::default()
+        },
+        serde_json::Value::String(s) => CellValue {
+            value_type: "String".into(),
+            string: Some(s.clone()),
+            ..Default::default()
+        },
+        serde_json::Value::Bool(b) => CellValue {
+            value_type: "Boolean".into(),
+            boolean: Some(*b),
+            ..Default::default()
+        },
+        _ => CellValue::default(),
+    }
+}
 
 /// A single worksheet (sheet) in a workbook.
 ///
@@ -46,6 +69,7 @@ pub struct Worksheet {
     header_footer: Arc<Mutex<Option<HeaderFooter>>>,
     page_setup: Arc<Mutex<Option<PageSetup>>>,
     images: Arc<Mutex<Vec<WorksheetImage>>>,
+    tables: TableList,
 }
 
 #[napi]
@@ -65,6 +89,7 @@ impl Worksheet {
             header_footer: Arc::new(Mutex::new(None)),
             page_setup: Arc::new(Mutex::new(None)),
             images: Arc::new(Mutex::new(Vec::new())),
+            tables: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -518,6 +543,173 @@ impl Worksheet {
             })
             .collect()
     }
+
+    // -- tables (v1.1.0) --
+
+    /// Add a structured table to the worksheet (ExcelJS `ws.addTable`).
+    ///
+    /// Writes the header row (from `columns` names), the data rows, and the
+    /// optional totals row into the referenced cells, then registers the table
+    /// model. Returns the created `Table`.
+    #[napi]
+    pub fn add_table(&self, opts: AddTableOptions) -> napi::Result<Table> {
+        let name = opts.name.trim().to_string();
+        if name.is_empty() {
+            return Err(napi::Error::from_reason("Table name must not be empty"));
+        }
+        let mut tables = self.tables.lock().expect("Worksheet tables lock poisoned");
+        if tables.iter().any(|t| t.name == name) {
+            return Err(napi::Error::from_reason(format!(
+                "Table '{name}' already exists on this worksheet"
+            )));
+        }
+        let header_row = opts.header_row.unwrap_or(true);
+        let totals_row = opts.totals_row.unwrap_or(false);
+        let (sc, sr, ec, er) = self
+            .parse_ref_range(&opts.ref_range)
+            .ok_or_else(|| napi::Error::from_reason(format!("Invalid table ref: {}", opts.ref_range)))?;
+        if sc > ec || sr > er {
+            return Err(napi::Error::from_reason(format!(
+                "Invalid table ref '{}': start must precede end",
+                opts.ref_range
+            )));
+        }
+        let width = (ec - sc + 1) as usize;
+
+        // Resolve columns: explicit names, else derive from the first data row.
+        let columns: Vec<TableColumn> = if !opts.columns.is_empty() {
+            opts.columns.clone()
+        } else {
+            let first = opts.rows.first().cloned().unwrap_or_default();
+            first
+                .into_iter()
+                .map(|v| TableColumn {
+                    name: crate::model::table::cell_text(&table_json_to_cell_value(&v)),
+                    ..Default::default()
+                })
+                .collect()
+        };
+        if columns.len() != width {
+            return Err(napi::Error::from_reason(format!(
+                "Table column count ({}) does not match ref width ({width})",
+                columns.len()
+            )));
+        }
+
+        // Data rows must exactly fill the ref (header/totals excluded) so the
+        // written cells and the <table> range agree.
+        let expected_rows = (er - sr + 1) - (header_row as u32) - (totals_row as u32);
+        if opts.rows.len() as u32 != expected_rows {
+            return Err(napi::Error::from_reason(format!(
+                "Table data row count ({}) does not match ref height (expected {expected_rows})",
+                opts.rows.len()
+            )));
+        }
+
+        // Header row: write column names into the top row of the ref.
+        if header_row {
+            for (i, col) in columns.iter().enumerate() {
+                let c = sc + i as u32;
+                self.insert_cell_value(
+                    sr,
+                    c,
+                    CellValue {
+                        value_type: "String".into(),
+                        string: Some(col.name.clone()),
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+
+        // Data rows.
+        let data_start = if header_row { sr + 1 } else { sr };
+        for (ri, row) in opts.rows.iter().enumerate() {
+            let r = data_start + ri as u32;
+            for (ci, v) in row.iter().enumerate() {
+                let c = sc + ci as u32;
+                self.insert_cell_value(r, c, table_json_to_cell_value(v));
+            }
+        }
+
+        // Totals row: write each column's totalsRowLabel into the last ref row.
+        if totals_row {
+            for (i, col) in columns.iter().enumerate() {
+                if let Some(label) = &col.totals_row_label {
+                    let c = sc + i as u32;
+                    self.insert_cell_value(
+                        er,
+                        c,
+                        CellValue {
+                            value_type: "String".into(),
+                            string: Some(label.clone()),
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
+        }
+
+        let display_name = opts
+            .display_name
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| name.clone());
+        let emit_filter = opts.auto_filter_enabled.unwrap_or(true);
+        let auto = if emit_filter {
+            opts.auto_filter.clone().or_else(|| Some(opts.ref_range.clone()))
+        } else {
+            None
+        };
+
+        let table_rows: Vec<TableRow> = opts
+            .rows
+            .iter()
+            .map(|row| TableRow {
+                values: row.iter().map(table_json_to_cell_value).collect(),
+            })
+            .collect();
+
+        let table = Table {
+            name: name.clone(),
+            display_name,
+            ref_range: opts.ref_range.clone(),
+            header_row,
+            totals_row,
+            columns: columns.clone(),
+            rows: table_rows,
+            style: opts.style.clone(),
+            autofilter_ref: auto,
+        };
+        tables.push(table.clone());
+        Ok(table)
+    }
+
+    /// Return the table with the given name, or `null` if not found.
+    #[napi]
+    pub fn get_table(&self, name: String) -> Option<Table> {
+        self.tables
+            .lock()
+            .expect("Worksheet tables lock poisoned")
+            .iter()
+            .find(|t| t.name == name)
+            .cloned()
+    }
+
+    /// Return all tables on the worksheet.
+    #[napi]
+    pub fn get_tables(&self) -> Vec<Table> {
+        self.tables.lock().expect("Worksheet tables lock poisoned").clone()
+    }
+
+    /// Remove the named table (and its part/relationship); cells stay intact.
+    #[napi]
+    pub fn remove_table(&self, name: String) -> bool {
+        let mut tables = self.tables.lock().expect("Worksheet tables lock poisoned");
+        let before = tables.len();
+        tables.retain(|t| t.name != name);
+        tables.len() < before
+    }
 }
 
 // Internal methods (not exposed via napi)
@@ -584,6 +776,26 @@ impl Worksheet {
     /// Internal: read images for the writer.
     pub fn get_images_inner(&self) -> Vec<WorksheetImage> {
         self.images.lock().expect("Worksheet images lock poisoned").clone()
+    }
+
+    // -- tables (v1.1.0) --
+
+    /// Internal: read tables for the writer.
+    pub fn get_tables_inner(&self) -> Vec<Table> {
+        self.tables.lock().expect("Worksheet tables lock poisoned").clone()
+    }
+
+    /// Attach a parsed table (used by the reader).
+    pub fn insert_table(&self, table: Table) {
+        self.tables.lock().expect("Worksheet tables lock poisoned").push(table);
+    }
+
+    /// Parse an A1 range (e.g. "A1:C4") into (start_col, start_row, end_col, end_row).
+    fn parse_ref_range(&self, ref_: &str) -> Option<(u32, u32, u32, u32)> {
+        let (a, b) = ref_.split_once(':')?;
+        let (sc, sr) = crate::types::parse_address(a).ok()?;
+        let (ec, er) = crate::types::parse_address(b).ok()?;
+        Some((sc, sr, ec, er))
     }
 
     /// Attach a comment to a cell at (row, col) (used by reader & API).

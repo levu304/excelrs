@@ -11,6 +11,7 @@ pub mod row;
 pub mod sheet_protection;
 pub mod sheet_view;
 pub mod style;
+pub mod table;
 pub mod workbook;
 pub mod workbook_inner;
 pub mod workbook_view;

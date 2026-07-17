@@ -1,6 +1,6 @@
 # excelrs → ExcelJS Porting Roadmap
 
-**Generated:** 2026-07-14 | **ExcelJS version pinned:** [4.4.0](https://www.npmjs.com/package/exceljs/v/4.4.0) | **excelrs version:** 1.0.0 (released 2026-07-16)
+**Generated:** 2026-07-14 | **ExcelJS version pinned:** [4.4.0](https://www.npmjs.com/package/exceljs/v/4.4.0) | **excelrs version:** 1.1.0 (released 2026-07-16)
 
 > **Next:** v2.0.0 is the planned capstone (see *Post-v1 Roadmap* below). The v1.1.0 → v2.0.0 scope is **provisional**, gated on an ExcelJS 4.4.0 API audit (Step 0) before each feature's design.
 
@@ -64,7 +64,7 @@
 | **Other features** | | | |
 | Comments | shipped | v1.0.0 | `xl/commentsN.xml` part + relationship read/write |
 | Images / drawings | shipped | v1.0.0 | `xl/drawings/` part, media extraction, anchors read/write |
-| Tables | targeted | v1.1.0 | Complex OOXML part (`xl/tables/`); targeted for v1.1.0 |
+| Tables | shipped | v1.1.0 | `xl/tables/` part + relationship read/write; `ws.addTable`/`getTable(s)`/`removeTable`; header/totals rows; `autoFilter` integration; header styling (metadata only) |
 | Conditional formatting | targeted | v1.2.0 | Complex OOXML + dxfs; targeted for v1.2.0 |
 | Charts | planned (distant) | — | Major subsystem; chart XML is very complex |
 | Pivot tables | planned (distant) | — | Major subsystem; extremely complex |
@@ -123,7 +123,7 @@ The v1.0.0 drop-in compatibility milestone is complete. Post-v1 work ships as a 
 
 | Target | Feature | Effort | Status | Notes |
 | --- | --- | --- | --- | --- |
-| **v1.1.0** | **Tables** | high | targeted | `ws.addTable` / `ws.getTable(s)` / `ws.removeTable`; `Table` / `TableColumn` / `TableRow` model; `xl/tables/tableN.xml` + relationship; `autoFilter` integration; header/totals rows; header styling |
+| **v1.1.0** | **Tables** | high | shipped | `ws.addTable` / `ws.getTable(s)` / `ws.removeTable`; `Table` / `TableColumn` / `TableRow` model; `xl/tables/tableN.xml` + relationship; `autoFilter` integration; header/totals rows; header styling |
 | **v1.2.0** | **Conditional formatting** | high | targeted | read/write `<conditionalFormatting>` + `dxfs`; rule types `cellIs`, `expression`/formula, `colorScale`, `dataBar`, `iconSet`, `top10`, `unique`/`duplicate`, `containsText`, `timePeriod`, blanks/errors/nonBlanks; priority ordering |
 | **v1.3.0** | **Worksheet-structure parity finish** | medium | targeted | `insertRow(s)` / `spliceRows` / `duplicateRow`; row/col `outlineLevel` (grouping); `rowBreaks` / `colBreaks` page breaks — closes the remaining "planned" v1.x parity-matrix rows |
 | **v2.0.0** | **Streaming XLSX + parity capstone** | high | targeted | streaming reader/writer architecture for large files (SAX-based); **declare the ExcelJS-4.4.0 parity program complete**; reserve for any breaking API cleanup required by the above |

@@ -365,6 +365,20 @@ export declare class Worksheet {
   addImage(opts: AddImageOptions): number
   /** Return all embedded images on the worksheet. */
   getImages(): Array<ImageInfo>
+  /**
+   * Add a structured table to the worksheet (ExcelJS `ws.addTable`).
+   *
+   * Writes the header row (from `columns` names), the data rows, and the
+   * optional totals row into the referenced cells, then registers the table
+   * model. Returns the created `Table`.
+   */
+  addTable(opts: AddTableOptions): Table
+  /** Return the table with the given name, or `null` if not found. */
+  getTable(name: string): Table | null
+  /** Return all tables on the worksheet. */
+  getTables(): Array<Table>
+  /** Remove the named table (and its part/relationship); cells stay intact. */
+  removeTable(name: string): boolean
 }
 
 export interface AddImageOptions {
@@ -736,4 +750,61 @@ export interface WorkbookView {
   showVerticalScroll?: boolean
   tabRatio?: number
   visibility?: string
+}
+
+/** Options for `Worksheet.addTable`. */
+export interface AddTableOptions {
+  name: string
+  displayName?: string
+  /** A1 range covering header + data (+ optional totals), e.g. "A1:C4". */
+  ref: string
+  headerRow?: boolean
+  totalsRow?: boolean
+  columns: Array<TableColumn>
+  /** Data rows as raw value arrays (ExcelJS-compatible: `[[v1, v2], ...]`). */
+  rows: Array<Array<number | string | boolean | null>>
+  style?: TableStyle
+  /** Optional autoFilter range for the table part. Defaults to the table ref. */
+  autoFilter?: string
+  /** Whether to emit a table <autoFilter> element. Defaults to true. Set false to omit it. */
+  autoFilterEnabled?: boolean
+}
+
+/** A worksheet table — returned by `getTable` / `getTables`. */
+export interface Table {
+  name: string
+  displayName: string
+  /** A1 range covering header + data (+ optional totals). */
+  ref: string
+  headerRow: boolean
+  totalsRow: boolean
+  columns: Array<TableColumn>
+  rows: Array<TableRow>
+  style?: TableStyle
+  autofilterRef?: string
+}
+
+/** A single table column definition. */
+export interface TableColumn {
+  /** Column header text (written into the header-row cell). */
+  name: string
+  /** Totals-row label (e.g. "Total"). Emitted as `totalsRowLabel`. */
+  totalsRowLabel?: string
+  /** Totals-row function (e.g. "sum", "average"). Emitted as `totalsRowFunction`. */
+  totalsRowFunction?: string
+}
+
+/** One row of table data values (data rows only; the header is derived from columns). */
+export interface TableRow {
+  values: Array<CellValue>
+}
+
+/** Table style descriptor (metadata only — never used to compute cell styles). */
+export interface TableStyle {
+  /** Named table style, e.g. "TableStyleMedium2" (ExcelJS `style.theme`). */
+  theme?: string
+  showFirstColumn?: boolean
+  showLastColumn?: boolean
+  showRowStripes?: boolean
+  showColumnStripes?: boolean
 }
