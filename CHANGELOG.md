@@ -6,6 +6,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] — 2026-07-16
+
+### Added
+
+- **Tables** (ExcelJS `ws.addTable` parity):
+  - `Worksheet.addTable({ name, ref, headerRow, totalsRow, columns, rows, style, autoFilter })` — writes the `xl/tables/tableN.xml` part, registers the sheet relationship, and populates header/data/totals cells.
+  - `Worksheet.getTable(name)` / `Worksheet.getTables()` — return parsed `Table` models.
+  - `Worksheet.removeTable(name)` — removes the model, XML part, and relationship (leaves underlying cells intact).
+  - `Table`, `TableColumn`, `TableRow`, `TableStyle`, and `AddTableOptions` types.
+  - Round-trip read/write of structured tables (header row, data rows, totals row, `autoFilter` range, and header style metadata).
+
+### Fixed
+
+- None.
+
+### Changed
+
+- None.
+
 ## [1.0.0] — 2026-07-16
 
 ### Added

@@ -28,6 +28,8 @@ use crate::model::workbook_inner::WorkbookInner;
 
 use crate::model::comment::CellComment;
 use crate::model::image::{ImageAnchor, WorksheetImage};
+use crate::model::table::{Table, TableColumn, TableRow, TableStyle};
+use crate::model::worksheet::Worksheet;
 
 use super::styles::{self, SheetStyleMap, StyleTableRead};
 use super::workbook;
@@ -143,6 +145,15 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
     for (i, imgs) in per_sheet_images.into_iter().enumerate() {
         for img in imgs {
             inner.worksheets[i].insert_image(img);
+        }
+    }
+
+    // Step 3.14: parse worksheet tables and attach (v1.1.0)
+    let per_sheet_tables = parse_sheet_tables(data, sheet_count)?;
+    for (i, tables) in per_sheet_tables.into_iter().enumerate() {
+        for mut t in tables {
+            t.rows = reconstruct_table_rows(&inner.worksheets[i], &t);
+            inner.worksheets[i].insert_table(t);
         }
     }
 
@@ -1166,6 +1177,107 @@ fn parse_comments_from_xml(xml: &str) -> Vec<(String, CellComment)> {
         }
     }
     out
+}
+
+/// Parse `xl/tables/tableN.xml` for every sheet, returning `Table` records per sheet (v1.1.0).
+fn parse_sheet_tables(data: &[u8], sheet_count: usize) -> Result<Vec<Vec<Table>>, ExcelrsError> {
+    use std::io::Cursor;
+    let cursor = Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
+    let mut per_sheet: Vec<Vec<Table>> = Vec::with_capacity(sheet_count);
+    for i in 0..sheet_count {
+        let sheet_num = i + 1;
+        let rels_path = format!("xl/worksheets/_rels/sheet{}.xml.rels", sheet_num);
+        let rels = parse_sheet_rels_full(&mut archive, &rels_path);
+        let table_targets: Vec<String> = rels
+            .iter()
+            .filter(|(_, t, _)| t.ends_with("/table"))
+            .map(|(_, _, target)| target.clone())
+            .collect();
+        let mut tables: Vec<Table> = Vec::new();
+        for target in table_targets {
+            let tpath = format!("xl/{}", target.trim_start_matches("../"));
+            if let Ok(entry) = archive.by_name(&tpath) {
+                let mut xml = String::new();
+                entry.take(MAX_ENTRY_BYTES).read_to_string(&mut xml)?;
+                if let Some(t) = parse_tables_from_xml(&xml) {
+                    tables.push(t);
+                }
+            }
+        }
+        per_sheet.push(tables);
+    }
+    Ok(per_sheet)
+}
+
+/// Parse a single `xl/tables/tableN.xml` into a `Table` model (v1.1.0).
+/// `rows` are reconstructed later from the worksheet cells (see `reconstruct_table_rows`).
+fn parse_tables_from_xml(xml: &str) -> Option<Table> {
+    let table_open = between(xml, "<table ", ">")?;
+    let name = rel_attr(table_open, "name").unwrap_or_default();
+    let display_name = rel_attr(table_open, "displayName").unwrap_or_else(|| name.clone());
+    let ref_range = rel_attr(table_open, "ref").unwrap_or_default();
+    let totals_row = rel_attr(table_open, "totalsRowShown").unwrap_or_else(|| "0".to_string()) == "1";
+    let header_row = rel_attr(table_open, "headerRowCount").unwrap_or_else(|| "1".to_string()) != "0";
+    let autofilter_ref = between(xml, "<autoFilter", "/>").and_then(|tag| rel_attr(tag, "ref"));
+    let mut columns: Vec<TableColumn> = Vec::new();
+    if let Some(body) = between(xml, "<tableColumns", "</tableColumns>") {
+        let mut rest = body;
+        while let Some(start) = rest.find("<tableColumn ") {
+            let close = match rest[start..].find('>') {
+                Some(p) => start + p,
+                None => break,
+            };
+            let tag = &rest[start..=close];
+            columns.push(TableColumn {
+                name: rel_attr(tag, "name").unwrap_or_default(),
+                totals_row_function: rel_attr(tag, "totalsRowFunction"),
+                totals_row_label: rel_attr(tag, "totalsRowLabel"),
+            });
+            rest = &rest[close + 1..];
+        }
+    }
+    let style = between(xml, "<tableStyleInfo ", "/>").map(|s| TableStyle {
+        theme: rel_attr(s, "name"),
+        show_first_column: Some(rel_attr(s, "showFirstColumn").unwrap_or_else(|| "0".to_string()) == "1"),
+        show_last_column: Some(rel_attr(s, "showLastColumn").unwrap_or_else(|| "0".to_string()) == "1"),
+        show_row_stripes: Some(rel_attr(s, "showRowStripes").unwrap_or_else(|| "0".to_string()) == "1"),
+        show_column_stripes: Some(rel_attr(s, "showColumnStripes").unwrap_or_else(|| "0".to_string()) == "1"),
+    });
+    Some(Table {
+        name,
+        display_name,
+        ref_range,
+        header_row,
+        totals_row,
+        columns,
+        rows: Vec::new(),
+        style,
+        autofilter_ref,
+    })
+}
+
+/// Reconstruct a table's data rows from the worksheet's own cells (v1.1.0).
+fn reconstruct_table_rows(ws: &Worksheet, table: &Table) -> Vec<TableRow> {
+    let (a, b) = match table.ref_range.split_once(':') {
+        Some(p) => p,
+        None => return Vec::new(),
+    };
+    let (sr, sc) = ref_to_rowcol(a).unwrap_or((1, 1));
+    let (er, ec) = ref_to_rowcol(b).unwrap_or((1, 1));
+    let data_start = if table.header_row { sr + 1 } else { sr };
+    let data_end = if table.totals_row { er - 1 } else { er };
+    let mut rows = Vec::new();
+    if data_end >= data_start {
+        for r in data_start..=data_end {
+            let mut values = Vec::new();
+            for c in sc..=ec {
+                values.push(ws.get_cell_by_rc(r, c).value_raw().clone());
+            }
+            rows.push(TableRow { values });
+        }
+    }
+    rows
 }
 
 /// Parse `xl/drawings/drawingN.xml` + media for every sheet, returning

@@ -31,6 +31,7 @@ use crate::model::comment::CellComment;
 use crate::model::defined_name::DefinedName;
 use crate::model::image::WorksheetImage;
 use crate::model::style::Style;
+use crate::model::table::Table;
 use crate::model::workbook_inner::WorkbookInner;
 use crate::model::worksheet::Worksheet;
 
@@ -66,6 +67,7 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
         let mut sheet_comments: Vec<Vec<(String, CellComment)>> = Vec::with_capacity(sheet_count);
         let mut sheet_images: Vec<Vec<WorksheetImage>> = Vec::with_capacity(sheet_count);
         let mut media_counter: u32 = 0;
+        let mut sheet_tables: Vec<Vec<Table>> = Vec::with_capacity(sheet_count);
         for ws in worksheets.iter() {
             let comments = ws.get_cell_comments();
             let mut imgs = ws.get_images_inner();
@@ -76,9 +78,17 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
             }
             sheet_comments.push(comments);
             sheet_images.push(imgs);
+            sheet_tables.push(ws.get_tables_inner());
         }
         start_file(&mut zip, "[Content_Types].xml")?;
-        write_content_types(&mut zip, sheet_count, &media_exts, &sheet_images, &sheet_comments)?;
+        write_content_types(
+            &mut zip,
+            sheet_count,
+            &media_exts,
+            &sheet_images,
+            &sheet_comments,
+            &sheet_tables,
+        )?;
 
         // _rels/.rels
         start_file(&mut zip, "_rels/.rels")?;
@@ -149,6 +159,7 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
         // xl/worksheets/sheet{N}.xml
         let mut cell_offset = 0usize;
         let mut row_offset = 0usize;
+        let mut table_part_counter: u32 = 0;
         let cell_styles_total = cell_styles.len();
         for (i, ws) in worksheets.iter().enumerate() {
             let sheet_path = format!("xl/worksheets/sheet{}.xml", i + 1);
@@ -178,6 +189,28 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
                 None
             };
 
+            // (v1.1.0) table flags + relationship ids for this sheet
+            let has_tables = !sheet_tables[i].is_empty();
+            let mut table_base = hl;
+            if has_comments {
+                table_base += 2;
+            }
+            if has_drawing {
+                table_base += 1;
+            }
+            let mut table_part = table_part_counter;
+            let mut table_rids: Vec<u32> = Vec::new();
+            let mut table_rels: Vec<(u32, u32)> = Vec::new();
+            if has_tables {
+                for (k, _t) in sheet_tables[i].iter().enumerate() {
+                    table_part += 1;
+                    let rid = table_base + (k as u32) + 1;
+                    table_rids.push(rid);
+                    table_rels.push((rid, table_part));
+                }
+            }
+            table_part_counter = table_part;
+
             write_sheet_xml(
                 &mut zip,
                 ws,
@@ -188,6 +221,7 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
                 &data_validations,
                 drawing_rid,
                 comment_rid,
+                &table_rids,
             )?;
 
             // (v1.0.0) comments part
@@ -220,11 +254,21 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
                 write_drawing_rels(&mut zip, &sheet_images[i])?;
             }
 
-            // Sheet relationships (hyperlinks + comments + drawing)
-            if !hyperlinks.is_empty() || has_comments || has_drawing {
+            // (v1.1.0) table parts
+            if has_tables {
+                for (k, t) in sheet_tables[i].iter().enumerate() {
+                    let part = table_rels[k].1;
+                    let tpath = format!("xl/tables/table{}.xml", part);
+                    start_file(&mut zip, &tpath)?;
+                    write_tables_xml(&mut zip, t, part)?;
+                }
+            }
+
+            // Sheet relationships (hyperlinks + comments + drawing + tables)
+            if !hyperlinks.is_empty() || has_comments || has_drawing || has_tables {
                 let rel_path = format!("xl/worksheets/_rels/sheet{}.xml.rels", i + 1);
                 start_file(&mut zip, &rel_path)?;
-                write_sheet_rels(&mut zip, &hyperlinks, i + 1, has_comments, has_drawing)?;
+                write_sheet_rels(&mut zip, &hyperlinks, i + 1, has_comments, has_drawing, &table_rels)?;
             }
         }
 
@@ -511,6 +555,58 @@ fn write_drawing_xml<W: Write>(w: &mut W, images: &[WorksheetImage]) -> Result<(
     Ok(())
 }
 
+/// Write `xl/tables/tableN.xml` for a single table (v1.1.0).
+fn write_tables_xml<W: Write>(w: &mut W, table: &Table, table_num: u32) -> Result<(), ExcelrsError> {
+    write_str(w, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#)?;
+    let open = format!(
+        r#"<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="{table_num}" name="{}" displayName="{}" ref="{}" totalsRowShown="{}" headerRowCount="{}">"#,
+        escape(&table.name),
+        escape(&table.display_name),
+        escape(&table.ref_range),
+        if table.totals_row { 1 } else { 0 },
+        if table.header_row { 1 } else { 0 },
+    );
+    write_str(w, &open)?;
+    if let Some(af) = &table.autofilter_ref {
+        write_str(w, &format!(r#"<autoFilter ref="{}"/>"#, escape(af)))?;
+    }
+    let ncols = table.columns.len();
+    write_str(w, &format!(r#"<tableColumns count="{ncols}">"#))?;
+    for (i, col) in table.columns.iter().enumerate() {
+        let id = i + 1;
+        let mut attrs = format!(r#"<tableColumn id="{id}" name="{}""#, escape(&col.name));
+        if let Some(f) = &col.totals_row_function {
+            attrs.push_str(&format!(r#" totalsRowFunction="{}""#, escape(f)));
+        }
+        if let Some(l) = &col.totals_row_label {
+            attrs.push_str(&format!(r#" totalsRowLabel="{}""#, escape(l)));
+        }
+        attrs.push_str("/>");
+        write_str(w, &attrs)?;
+    }
+    write_str(w, "</tableColumns>")?;
+    if let Some(style) = &table.style {
+        let theme = style.theme.clone().unwrap_or_else(|| "TableStyleMedium2".to_string());
+        write_str(
+            w,
+            &format!(
+                r#"<tableStyleInfo name="{}" showFirstColumn="{}" showLastColumn="{}" showRowStripes="{}" showColumnStripes="{}"/>"#,
+                escape(&theme),
+                if style.show_first_column.unwrap_or(false) { 1 } else { 0 },
+                if style.show_last_column.unwrap_or(false) { 1 } else { 0 },
+                if style.show_row_stripes.unwrap_or(false) { 1 } else { 0 },
+                if style.show_column_stripes.unwrap_or(false) {
+                    1
+                } else {
+                    0
+                },
+            ),
+        )?;
+    }
+    write_str(w, "</table>")?;
+    Ok(())
+}
+
 /// Write `xl/drawings/_rels/drawingN.xml.rels` mapping each image rId to media.
 fn write_drawing_rels<W: Write>(w: &mut W, images: &[WorksheetImage]) -> Result<(), ExcelrsError> {
     write_str(w, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#)?;
@@ -543,6 +639,7 @@ fn write_content_types<W: Write>(
     media_exts: &BTreeSet<String>,
     sheet_images: &[Vec<WorksheetImage>],
     sheet_comments: &[Vec<(String, CellComment)>],
+    _sheet_tables: &[Vec<Table>],
 ) -> Result<(), ExcelrsError> {
     write_str(w, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#)?;
     write_str(
@@ -612,6 +709,19 @@ fn write_content_types<W: Write>(
             w,
             r##"<Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/>"##,
         )?;
+    }
+    // (v1.1.0) table part content types (global numbering matches the writer loop)
+    let mut table_part = 0u32;
+    for sheet_tbls in _sheet_tables.iter() {
+        for _ in sheet_tbls.iter() {
+            table_part += 1;
+            write_str(
+                w,
+                &format!(
+                    r#"<Override PartName=\"/xl/tables/table{table_part}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml\"/>"#,
+                ),
+            )?;
+        }
     }
     write_str(w, "</Types>")?;
     Ok(())
@@ -847,13 +957,14 @@ fn write_workbook_rels<W: Write>(w: &mut W, sheet_count: usize) -> Result<(), Ex
 // xl/worksheets/_rels/sheet{N}.xml.rels
 // ---------------------------------------------------------------------------
 
-/// Write the relationships XML for a single worksheet (hyperlinks).
+/// Write the relationships XML for a single worksheet (hyperlinks + comments + drawing + tables).
 fn write_sheet_rels<W: Write>(
     w: &mut W,
     hyperlinks: &[SheetHyperlink],
     sheet_num: usize,
     has_comments: bool,
     has_drawing: bool,
+    table_rels: &[(u32, u32)],
 ) -> Result<(), ExcelrsError> {
     write_str(w, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#)?;
     write_str(
@@ -893,6 +1004,15 @@ fn write_sheet_rels<W: Write>(
             w,
             &format!(
                 r#"<Relationship Id="rId{rel_id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing{sheet_num}.xml"/>"#,
+            ),
+        )?;
+    }
+    // (v1.1.0) table relationships
+    for (rid, part) in table_rels {
+        write_str(
+            w,
+            &format!(
+                r#"<Relationship Id="rId{rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table{part}.xml"/>"#,
             ),
         )?;
     }
@@ -1197,6 +1317,7 @@ fn write_sheet_xml<W: Write>(
     data_validations: &[crate::model::data_validation::DataValidation],
     drawing_rid: Option<u32>,
     comment_rid: Option<u32>,
+    table_rids: &[u32],
 ) -> Result<(), ExcelrsError> {
     write_str(w, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#)?;
     write_str(
@@ -1311,6 +1432,15 @@ fn write_sheet_xml<W: Write>(
 
     if let Some(rid) = comment_rid {
         write_str(w, &format!(r#"<legacyDrawing r:id=\"rId{rid}\"/>"#))?;
+    }
+
+    // (v1.1.0) table parts — link to table parts via relationship
+    if !table_rids.is_empty() {
+        write_str(w, &format!(r#"<tableParts count=\"{}\">"#, table_rids.len()))?;
+        for rid in table_rids {
+            write_str(w, &format!(r#"<tablePart r:id=\"rId{rid}\"/>"#))?;
+        }
+        write_str(w, "</tableParts>")?;
     }
 
     write_str(w, "</worksheet>")?;
