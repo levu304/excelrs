@@ -92,6 +92,13 @@ jobs:
           node-version: 20
           registry-url: "https://registry.npmjs.org"
 
+      # setup-node sets NPM_CONFIG_USERCONFIG, which disables npm's
+      # NODE_AUTH_TOKEN fallback. Write the token into the .npmrc npm
+      # actually reads so `npm publish` authenticates.
+      - name: Authenticate to npm
+        run: |
+          npm config set //registry.npmjs.org/:_authToken "$NODE_AUTH_TOKEN"
+
       - name: Install pnpm
         run: corepack enable
 
