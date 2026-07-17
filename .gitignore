@@ -22,3 +22,5 @@ native.d.ts
 # Environment
 .env
 .env.local
+# CocoIndex Code (ccc)
+/.cocoindex_code/
