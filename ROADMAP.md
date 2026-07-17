@@ -1,6 +1,6 @@
 # excelrs → ExcelJS Porting Roadmap
 
-**Generated:** 2026-07-14 | **ExcelJS version pinned:** [4.4.0](https://www.npmjs.com/package/exceljs/v/4.4.0) | **excelrs version:** 0.11.0 → 0.12.0 (in progress)
+**Generated:** 2026-07-14 | **ExcelJS version pinned:** [4.4.0](https://www.npmjs.com/package/exceljs/v/4.4.0) | **excelrs version:** 1.0.0 (released 2026-07-16)
 
 ---
 
@@ -48,20 +48,20 @@
 | **Workbook** | | | |
 | Defined names | shipped | v0.7.0 | Workbook-global + sheet-scoped |
 | Workbook properties | shipped | v0.1.0 | creator, modified, created, etc. |
-| Workbook views | planned | — | Not implemented |
-| Calc properties | planned | — | `fullCalcOnLoad` not implemented |
+| Workbook views | shipped | v1.0.0 | Workbook views + calc properties (`calcPr`) read/write |
+| Calc properties | shipped | v1.0.0 | `fullCalcOnLoad` read/write (`<calcPr>`) |
 | Themes (write) | planned | — | Read-only via theme1.xml |
 | **Worksheet** | | | |
 | Data validation | shipped | v0.8.0 | Full read/write, all types |
 | State (visible/hidden) | planned | — | Not implemented |
 | Tab color | planned | — | Not implemented |
 | Properties (defaultRowHeight, etc.) | planned | — | Not implemented |
-| Page setup / print | planned | — | Not implemented (pageMargins, orientation, paperSize, printArea, etc.) |
-| Headers and footers | planned | — | Not implemented |
+| Page setup / print | shipped | v1.0.0 | `pageMargins`, `paperSize`, `orientation`, `printArea`, `printTitles` read/write |
+| Headers and footers | shipped | v1.0.0 | `<headerFooter>` read/write with format codes |
 | Sheet protection | shipped | v0.11.0 | `<sheetProtection>` read/write; `ws.protection` |
 | **Other features** | | | |
-| Comments | planned | — | Whole new OOXML part (`xl/commentsN.xml`) |
-| Images / drawings | planned | — | Whole new OOXML part (`xl/drawings/`) |
+| Comments | shipped | v1.0.0 | `xl/commentsN.xml` part + relationship read/write |
+| Images / drawings | shipped | v1.0.0 | `xl/drawings/` part, media extraction, anchors read/write |
 | Tables | planned | — | Complex OOXML part (`xl/tables/`) |
 | Conditional formatting | planned | — | Complex OOXML + dxfs |
 | Charts | planned (distant) | — | Major subsystem; chart XML is very complex |
@@ -106,11 +106,11 @@ Quick-win data completeness: hyperlinks (read), auto filters, freeze panes, shee
 | Rank | Feature | Effort | Rationale |
 | ------ | --------- | -------- | ----------- |
 | 9 | **Theme color (write)** | med | ✅ shipped (v0.13.0) — emits `<color theme="N"/>` (+`tint`) |
-| 10 | **Headers and footers** | med | `<headerFooter>` element; supports format codes. ExcelJS API surface is moderate. |
-| 11 | **Page setup / print** | med | `pageMargins`, `paperSize`, `orientation`, `printArea`, `printTitles`. Many attributes but each is simple. |
-| 12 | **Workbook views / calc properties** | med | Workbook views + `calcPr` element. Straightforward OOXML. |
-| 13 | **Comments** | med | Needs new OOXML part (`xl/commentsN.xml` + relationship). Moderate model + reader/writer. |
-| 14 | **Images / drawings** | med/high | Needs drawing part (`xl/drawings/`), relationships, media extraction. Significant plumbing but self-contained. |
+| 10 | **Headers and footers** | med | `<headerFooter>` element; supports format codes. ExcelJS API surface is moderate. ✅ shipped (v1.0.0) |
+| 11 | **Page setup / print** | med | `pageMargins`, `paperSize`, `orientation`, `printArea`, `printTitles`. Many attributes but each is simple. ✅ shipped (v1.0.0) |
+| 12 | **Workbook views / calc properties** | med | Workbook views + `calcPr` element. Straightforward OOXML. ✅ shipped (v1.0.0) |
+| 13 | **Comments** | med | Needs new OOXML part (`xl/commentsN.xml` + relationship). Moderate model + reader/writer. ✅ shipped (v1.0.0) |
+| 14 | **Images / drawings** | med/high | Needs drawing part (`xl/drawings/`), relationships, media extraction. Significant plumbing but self-contained. ✅ shipped (v1.0.0) |
 
 ### [Post-v1 / v2] — Heavy subsystems
 

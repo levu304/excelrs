@@ -37,6 +37,30 @@ require('fs').writeFileSync('output.xlsx', buf);
 > state is only swapped once the returned Promise resolves. Accessing
 > worksheets before awaiting the Promise will see stale state.
 
+## v1.0.0 — Drop-in ExcelJS compatibility milestone
+
+v1.0.0 release closes remaining medium-effort ExcelJS parity gaps. All five areas below are read/write round-trippable verified against ExcelJS 4.4.0:
+
+- **Headers & footers** — `ws.headerFooter` read/write (`<headerFooter>` `&C`/`&L`/`&R` format codes).
+- **Page setup / print** — `ws.pageSetup` read/write (`pageMargins`, `paperSize`, `orientation`, `printArea`, `printTitles` via defined names).
+- **Workbook views & calc properties** — `workbook.views` / `workbook.calcProperties` (`<bookViews>`, `<calcPr>`).
+- **Comments** — `Cell.note` / `Cell.comment` read/write (`xl/commentsN.xml` + relationship, authors list).
+- **Images / drawings** — `ws.addImage` read/write (`xl/drawings/`, `xl/media/`, anchors, relationship resolution).
+
+See `ROADMAP.md` for full parity matrix and `docs/spec.md` for complete API specification.
+
+### Feature parity snapshot
+
+| Area | Status |
+| --- | --- |
+| XLSX read / write | shipped (v0.1.0) |
+| CSV read / write | shipped (v0.9.0) |
+| Styles (font / fill / border / alignment / numFmt) | shipped (v0.2.0+) |
+| Merged cells, data validation, hyperlinks, freeze panes, sheet protection, auto filter | shipped (v0.5.0 / v0.8.0 / v0.11.0) |
+| Theme / indexed color refs, JS Date bridge | shipped (v0.6.0 / v0.13.0) |
+| Headers & footers, page setup, workbook views & calc, comments, images | shipped (v1.0.0) |
+| Formula evaluation, tables, charts, conditional formatting, pivots | planned (post-v1) |
+
 ## Style System (v0.2.0)
 
 Write-only support for cell and column styling. Font, Fill, Border, and
@@ -69,12 +93,12 @@ const buf = await wb.xlsx.write();
 
 Workbook → Worksheet → Row → Cell — mirrors exceljs exactly.
 
-- **Workbook:** `constructor()`, `addWorksheet()`, `getWorksheet()`, `.xlsx` I/O handle
+- **Workbook:** `constructor()`, `addWorksheet()`, `getWorksheet()`, `views`, `calcProperties`, `.xlsx` I/O handle
 - **Worksheet:** `getCell()`, `getRow()`, `addRow()`, `removeRow()`, `setColumns()`,
-  `setCellStyle()`, `rowCount`, `columnCount`, `columns`, `rows`
+  `setCellStyle()`, `headerFooter`, `pageSetup`, `addImage()`, `rowCount`, `columnCount`, `columns`, `rows`
 - **Row:** `getCell()`, `values`, `height`, `hidden`
 - **Cell:** `value` (Number | String | Boolean | Formula | Null), `address`, `formula`,
-  `style` (getter/setter, full-replace)
+  `style` (getter/setter, full-replace), `note` / `comment`
 - **Column:** `header`, `key`, `width`, `hidden`, `style` (getter/setter, column default)
 
 See [docs/spec.md](docs/spec.md) for the full API specification.
@@ -86,12 +110,11 @@ styling for Font, Fill, Border, Alignment, and number formats (write only).
 
 **Limitations (see [spec §9.2.1](docs/spec.md#921-v030-candidate) for full deferred list):**
 
-- No style **read** — round-trip of a styled `.xlsx` drops styles (deferred to v0.3.0)
+- Style **read** round-trip shipped in v0.3.0 (styled `.xlsx` preserves styles).
 - Cell-level interior mutability shipped in v0.4.0 — `ws.getCell('A1').style = {...}` and `ws.getCell('A1').value = x` now persist into the worksheet automatically (via `Arc<Mutex<CellInner>>`)
-- No `alignment` emission — accepted in the `Style` JS object but silently dropped
-  at write time (deferred to v0.3.0)
+- Alignment emission shipped in v0.3.0 (accepted in `Style` JS object, emitted on write).
 - CSV via `wb.csv` — single-sheet only on write (CSV cannot represent multiple worksheets); numbers are inferred on read, all other CSV values are strings; no formula evaluation (cached value is emitted when available)
-- No merged cells, no streaming, no formula evaluation, no XLS / XLSB
+- No streaming, no formula evaluation, no XLS / XLSB (merged cells, data validation, freeze panes, CSV, headers/footers, page setup, comments, images: shipped).
 - Theme color references are **preserved on write** (v0.13.0): `<color theme="N"/>` (+`tint`) is emitted instead of a flattened ARGB; the public `color` value remains the resolved ARGB string
 - Date cell values are **preserved as JS `Date`** (v0.13.0): `Cell.value` returns `Date | CellValue` from Date cells; the setter accepts a JS `Date`, storing it as the Excel serial number and injecting an appropriate date `numFmt` (if none is set) so the value survives read→write round-trip as a true Date
 

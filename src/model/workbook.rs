@@ -12,6 +12,7 @@ use napi_derive::napi;
 
 use super::defined_name::DefinedName;
 use super::workbook_inner::WorkbookInner;
+use super::workbook_view::{CalcProperties, WorkbookView};
 use super::worksheet::Worksheet;
 use crate::csv::WorkbookCsv;
 use crate::xlsx::WorkbookXlsx;
@@ -140,6 +141,31 @@ impl Workbook {
             .expect("Workbook lock poisoned")
             .get_defined_name(&name, sheet.as_deref())
             .cloned()
+    }
+
+    // -- Views & calc properties (v1.0.0) --
+
+    #[napi(getter)]
+    pub fn views(&self) -> Vec<WorkbookView> {
+        self.inner.lock().expect("Workbook lock poisoned").views()
+    }
+
+    #[napi(setter)]
+    pub fn set_views(&mut self, views: Vec<WorkbookView>) {
+        self.inner.lock().expect("Workbook lock poisoned").set_views(views)
+    }
+
+    #[napi(getter)]
+    pub fn calc_properties(&self) -> Option<CalcProperties> {
+        self.inner.lock().expect("Workbook lock poisoned").calc_properties()
+    }
+
+    #[napi(setter)]
+    pub fn set_calc_properties(&mut self, calc: Option<CalcProperties>) {
+        self.inner
+            .lock()
+            .expect("Workbook lock poisoned")
+            .set_calc_properties(calc)
     }
 }
 

@@ -9,8 +9,7 @@ use napi_derive::napi;
 /// that action when the sheet is protected. A `None` value means the flag
 /// was not in the file; absence of the element means the sheet is unprotected.
 #[napi(object)]
-#[derive(Clone, Debug)]
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub struct SheetProtection {
     pub locked: Option<bool>,
     pub auto_filter: Option<bool>,
@@ -31,7 +30,6 @@ pub struct SheetProtection {
     /// The password salt, if set. Not exposed to JS by excelrs.
     pub salt_value: Option<String>,
 }
-
 
 #[cfg(test)]
 mod tests {

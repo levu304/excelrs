@@ -19,7 +19,7 @@
 //! - No custom styles beyond Normal
 //! - Formula cells write the formula string but no cached value
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{Seek, Write};
 use std::path::Path;
 
@@ -27,7 +27,9 @@ use quick_xml::escape::escape;
 
 use crate::error::ExcelrsError;
 use crate::model::cell::Cell;
+use crate::model::comment::CellComment;
 use crate::model::defined_name::DefinedName;
+use crate::model::image::WorksheetImage;
 use crate::model::style::Style;
 use crate::model::workbook_inner::WorkbookInner;
 use crate::model::worksheet::Worksheet;
@@ -58,8 +60,25 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
         // --- Write all OOXML parts ---
 
         // [Content_Types].xml
+        // (v1.0.0) pre-pass: gather comments / images / media extensions so
+        // content types and per-sheet parts can be emitted consistently.
+        let mut media_exts: BTreeSet<String> = BTreeSet::new();
+        let mut sheet_comments: Vec<Vec<(String, CellComment)>> = Vec::with_capacity(sheet_count);
+        let mut sheet_images: Vec<Vec<WorksheetImage>> = Vec::with_capacity(sheet_count);
+        let mut media_counter: u32 = 0;
+        for ws in worksheets.iter() {
+            let comments = ws.get_cell_comments();
+            let mut imgs = ws.get_images_inner();
+            for img in imgs.iter_mut() {
+                media_counter += 1;
+                img.media_index = media_counter;
+                media_exts.insert(img.extension.to_lowercase());
+            }
+            sheet_comments.push(comments);
+            sheet_images.push(imgs);
+        }
         start_file(&mut zip, "[Content_Types].xml")?;
-        write_content_types(&mut zip, sheet_count)?;
+        write_content_types(&mut zip, sheet_count, &media_exts, &sheet_images, &sheet_comments)?;
 
         // _rels/.rels
         start_file(&mut zip, "_rels/.rels")?;
@@ -67,7 +86,7 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
 
         // xl/workbook.xml
         start_file(&mut zip, "xl/workbook.xml")?;
-        write_workbook_xml(&mut zip, &worksheets, &inner.defined_names)?;
+        write_workbook_xml(&mut zip, &worksheets, inner)?;
 
         // xl/_rels/workbook.xml.rels
         start_file(&mut zip, "xl/_rels/workbook.xml.rels")?;
@@ -146,6 +165,19 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
             let hyperlinks = collect_sheet_hyperlinks(ws);
             let data_validations = ws.get_data_validations();
 
+            // (v1.0.0) comments / drawing flags for this sheet
+            let has_comments = !sheet_comments[i].is_empty();
+            let has_drawing = !sheet_images[i].is_empty();
+            // Relationship ids: comments = hl+1, vmlDrawing (legacyDrawing) =
+            // hl+2, drawing = hl+3 (or hl+1 when there are no comments).
+            let hl = hyperlinks.len() as u32;
+            let comment_rid: Option<u32> = if has_comments { Some(hl + 2) } else { None };
+            let drawing_rid: Option<u32> = if has_drawing {
+                Some(if has_comments { hl + 3 } else { hl + 1 })
+            } else {
+                None
+            };
+
             write_sheet_xml(
                 &mut zip,
                 ws,
@@ -154,13 +186,45 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
                 ws_row_indices,
                 &hyperlinks,
                 &data_validations,
+                drawing_rid,
+                comment_rid,
             )?;
 
-            // Write sheet-level relationships (for hyperlinks)
-            if !hyperlinks.is_empty() {
+            // (v1.0.0) comments part
+            if has_comments {
+                let cpath = format!("xl/comments{}.xml", i + 1);
+                start_file(&mut zip, &cpath)?;
+                write_comments_xml(&mut zip, &sheet_comments[i])?;
+            }
+            // (v1.0.0) vmlDrawing part: anchors comments to cells via legacyDrawing
+            if has_comments {
+                let vpath = format!("xl/drawings/vmlDrawing{}.vml", i + 1);
+                start_file(&mut zip, &vpath)?;
+                write_vml_drawing_xml(&mut zip, &sheet_comments[i])?;
+            }
+
+            // (v1.0.0) drawing part + media files
+            if has_drawing {
+                for img in sheet_images[i].iter() {
+                    let ext = img.extension.to_lowercase();
+                    let mpath = format!("xl/media/image{}.{}", img.media_index, ext);
+                    start_file(&mut zip, &mpath)?;
+                    zip.write_all(&img.buffer)
+                        .map_err(|e| ExcelrsError::Write(format!("Failed to write media: {e}")))?;
+                }
+                let dpath = format!("xl/drawings/drawing{}.xml", i + 1);
+                start_file(&mut zip, &dpath)?;
+                write_drawing_xml(&mut zip, &sheet_images[i])?;
+                let drel = format!("xl/drawings/_rels/drawing{}.xml.rels", i + 1);
+                start_file(&mut zip, &drel)?;
+                write_drawing_rels(&mut zip, &sheet_images[i])?;
+            }
+
+            // Sheet relationships (hyperlinks + comments + drawing)
+            if !hyperlinks.is_empty() || has_comments || has_drawing {
                 let rel_path = format!("xl/worksheets/_rels/sheet{}.xml.rels", i + 1);
                 start_file(&mut zip, &rel_path)?;
-                write_sheet_rels(&mut zip, &hyperlinks)?;
+                write_sheet_rels(&mut zip, &hyperlinks, i + 1, has_comments, has_drawing)?;
             }
         }
 
@@ -295,10 +359,191 @@ fn collect_sheet_hyperlinks(ws: &Worksheet) -> Vec<SheetHyperlink> {
 }
 
 // ---------------------------------------------------------------------------
+// (v1.0.0) comments / drawings helpers
+// ---------------------------------------------------------------------------
+
+/// Map a media file extension to its IANA/MIME content type.
+fn media_content_type(ext: &str) -> &'static str {
+    match ext {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        "tif" | "tiff" => "image/tiff",
+        "svg" => "image/svg+xml",
+        "webp" => "image/webp",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Write `xl/commentsN.xml` from a list of `(cellRef, CellComment)` pairs.
+fn write_comments_xml<W: Write>(w: &mut W, comments: &[(String, CellComment)]) -> Result<(), ExcelrsError> {
+    write_str(w, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#)?;
+    write_str(
+        w,
+        r#"<comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"#,
+    )?;
+    let mut authors: Vec<String> = Vec::new();
+    for (_, c) in comments {
+        if let Some(a) = &c.author {
+            if !authors.contains(a) {
+                authors.push(a.clone());
+            }
+        }
+    }
+    if authors.is_empty() {
+        authors.push(String::new());
+    }
+    write_str(w, "<authors>")?;
+    for a in &authors {
+        write_str(w, &format!("<author>{}</author>", escape(a)))?;
+    }
+    write_str(w, "</authors>")?;
+    write_str(w, "<commentList>")?;
+    for (ref_addr, c) in comments {
+        let author_id = match &c.author {
+            Some(a) => authors.iter().position(|x| x == a).unwrap_or(0) as u32,
+            None => 0,
+        };
+        write_str(
+            w,
+            &format!(r#"<comment ref="{}" authorId="{}">"#, escape(ref_addr), author_id),
+        )?;
+        write_str(w, "<text>")?;
+        write_str(w, &format!("<t>{}</t>", escape(&c.text)))?;
+        write_str(w, "</text>")?;
+        write_str(w, "</comment>")?;
+    }
+    write_str(w, "</commentList>")?;
+    write_str(w, "</comments>")?;
+    Ok(())
+}
+
+/// Write `xl/drawings/vmlDrawingN.vml`, anchoring each comment `<v:shape>` to its
+/// cell. Mirrors the comment vmlDrawing part Excel / ExcelJS emit (F2, v1.0.0).
+fn write_vml_drawing_xml<W: Write>(w: &mut W, comments: &[(String, CellComment)]) -> Result<(), ExcelrsError> {
+    write_str(w, "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>")?;
+    write_str(
+        w,
+        "<xml xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:x=\"urn:schemas-microsoft-com:office:excel\">",
+    )?;
+    for (i, (ref_addr, _c)) in comments.iter().enumerate() {
+        let (row0, col0) = cell_ref_to_zero(ref_addr);
+        let id = 1024 + i as u32;
+        write_str(
+            w,
+            &format!(
+                "<v:shape id=\"_x0000_s{id}\" type=\"#_x0000_t202\" style=\"position:absolute;visibility:hidden;width:120pt;height:60pt\" fillcolor=\"#ffffe1\" strokecolor=\"#000000\" o:insetmode=\"auto\">"
+            ),
+        )?;
+        write_str(w, "<v:fill color2=\"#ffffe1\"/>")?;
+        write_str(w, "<v:shadow on=\"t\" obscured=\"t\"/>")?;
+        write_str(w, "<v:path o:connecttype=\"none\"/>")?;
+        write_str(w, "<v:textbox style=\"mso-direction-alt:auto\"/>")?;
+        write_str(w, "<x:ClientData ObjectType=\"Note\">")?;
+        write_str(w, "<x:MoveWithCells/>")?;
+        write_str(w, "<x:SizeWithCells/>")?;
+        write_str(w, "<x:Anchor>1, 15, 0, 2, 3, 15, 2, 4</x:Anchor>")?;
+        write_str(w, "<x:AutoFill>False</x:AutoFill>")?;
+        write_str(w, &format!("<x:Row>{row0}</x:Row>"))?;
+        write_str(w, &format!("<x:Column>{col0}</x:Column>"))?;
+        write_str(w, "<x:Visible/>")?;
+        write_str(w, &format!("<x:CommentRow>{row0}</x:CommentRow>"))?;
+        write_str(w, &format!("<x:CommentColumn>{col0}</x:CommentColumn>"))?;
+        write_str(w, "</x:ClientData>")?;
+        write_str(w, "</v:shape>")?;
+    }
+    write_str(w, "</xml>")?;
+    Ok(())
+}
+
+fn cell_ref_to_zero(ref_: &str) -> (u32, u32) {
+    let ref_ = ref_.trim();
+    let mut col: u32 = 0;
+    let mut row_digits = String::new();
+    for ch in ref_.chars() {
+        if ch.is_ascii_alphabetic() {
+            col = col * 26 + (ch.to_ascii_uppercase() as u32 - b'A' as u32 + 1);
+        } else {
+            row_digits.push(ch);
+        }
+    }
+    let row: u32 = row_digits.parse().unwrap_or(1);
+    (row.saturating_sub(1), col.saturating_sub(1))
+}
+
+/// Write `xl/drawings/drawingN.xml` from a sheet's images.
+fn write_drawing_xml<W: Write>(w: &mut W, images: &[WorksheetImage]) -> Result<(), ExcelrsError> {
+    write_str(w, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#)?;
+    write_str(
+        w,
+        r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
+    )?;
+    for (idx, img) in images.iter().enumerate() {
+        let rid = idx + 1;
+        let a = &img.anchor;
+        let from = format!(
+            "<xdr:from><xdr:col>{}</xdr:col><xdr:colOff>{}</xdr:colOff><xdr:row>{}</xdr:row><xdr:rowOff>{}</xdr:rowOff></xdr:from>",
+            a.col, a.x, a.row, a.y
+        );
+        let (open, close) = if a.anchor_type == "twoCell" {
+            ("<xdr:twoCellAnchor>", "</xdr:twoCellAnchor>")
+        } else {
+            ("<xdr:oneCellAnchor>", "</xdr:oneCellAnchor>")
+        };
+        let mut body = String::new();
+        body.push_str(open);
+        body.push_str(&from);
+        if a.anchor_type == "twoCell" {
+            body.push_str(&format!(
+                "<xdr:to><xdr:col>{}</xdr:col><xdr:colOff>{}</xdr:colOff><xdr:row>{}</xdr:row><xdr:rowOff>{}</xdr:rowOff></xdr:to>",
+                a.col2, a.x2, a.row2, a.y2
+            ));
+        }
+        body.push_str(&format!(
+            "<xdr:pic><xdr:nvPicPr><xdr:cNvPr id=\"{rid}\" name=\"Picture {rid}\"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed=\"rId{rid}\"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"0\" cy=\"0\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic>"
+        ));
+        body.push_str("<xdr:clientData/>");
+        body.push_str(close);
+        write_str(w, &body)?;
+    }
+    write_str(w, "</xdr:wsDr>")?;
+    Ok(())
+}
+
+/// Write `xl/drawings/_rels/drawingN.xml.rels` mapping each image rId to media.
+fn write_drawing_rels<W: Write>(w: &mut W, images: &[WorksheetImage]) -> Result<(), ExcelrsError> {
+    write_str(w, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#)?;
+    write_str(
+        w,
+        r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
+    )?;
+    for (idx, img) in images.iter().enumerate() {
+        let rid = idx + 1;
+        let ext = img.extension.to_lowercase();
+        write_str(
+            w,
+            &format!(
+                r#"<Relationship Id="rId{rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image{}.{}"/>"#,
+                img.media_index, ext
+            ),
+        )?;
+    }
+    write_str(w, "</Relationships>")?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // [Content_Types].xml
 // ---------------------------------------------------------------------------
 
-fn write_content_types<W: Write>(w: &mut W, sheet_count: usize) -> Result<(), ExcelrsError> {
+fn write_content_types<W: Write>(
+    w: &mut W,
+    sheet_count: usize,
+    media_exts: &BTreeSet<String>,
+    sheet_images: &[Vec<WorksheetImage>],
+    sheet_comments: &[Vec<(String, CellComment)>],
+) -> Result<(), ExcelrsError> {
     write_str(w, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#)?;
     write_str(
         w,
@@ -329,6 +574,45 @@ fn write_content_types<W: Write>(w: &mut W, sheet_count: usize) -> Result<(), Ex
         w,
         r#"<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>"#,
     )?;
+    // (v1.0.0) media + drawings + comments content types
+    for ext in media_exts {
+        write_str(
+            w,
+            &format!(
+                r#"<Default Extension="{ext}" ContentType="{}"/>"#,
+                media_content_type(ext)
+            ),
+        )?;
+    }
+    for (i, imgs) in sheet_images.iter().enumerate() {
+        if !imgs.is_empty() {
+            let n = i + 1;
+            write_str(
+                w,
+                &format!(
+                    r#"<Override PartName="/xl/drawings/drawing{n}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>"#,
+                ),
+            )?;
+        }
+    }
+    for (i, comments) in sheet_comments.iter().enumerate() {
+        if !comments.is_empty() {
+            let n = i + 1;
+            write_str(
+                w,
+                &format!(
+                    r#"<Override PartName="/xl/comments{n}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/>"#,
+                ),
+            )?;
+        }
+    }
+    // (v1.0.0) vmlDrawing content type for comment anchors (F2)
+    if sheet_comments.iter().any(|c| !c.is_empty()) {
+        write_str(
+            w,
+            r##"<Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/>"##,
+        )?;
+    }
     write_str(w, "</Types>")?;
     Ok(())
 }
@@ -358,13 +642,15 @@ fn write_rels_rels<W: Write>(w: &mut W) -> Result<(), ExcelrsError> {
 fn write_workbook_xml<W: Write>(
     w: &mut W,
     worksheets: &[Worksheet],
-    defined_names: &[DefinedName],
+    inner: &WorkbookInner,
 ) -> Result<(), ExcelrsError> {
     write_str(w, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#)?;
     write_str(
         w,
         r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
     )?;
+    // <bookViews> — (v1.0.0)
+    emit_book_views(w, inner)?;
     write_str(w, "<sheets>")?;
     for (i, ws) in worksheets.iter().enumerate() {
         let name = ws.name();
@@ -382,9 +668,32 @@ fn write_workbook_xml<W: Write>(
     }
     write_str(w, "</sheets>")?;
 
-    if !defined_names.is_empty() {
+    // <calcPr> — (v1.0.0)
+    emit_calc_pr(w, inner)?;
+
+    // Combine explicit defined names with per-sheet print area / print titles
+    // derived from each worksheet's page setup (v1.0.0).
+    let mut all_dns: Vec<DefinedName> = inner.defined_names().to_vec();
+    for ws in worksheets.iter() {
+        if let Some(ps) = ws.get_page_setup_inner() {
+            if let Some(pa) = &ps.print_area {
+                let dn = DefinedName::sheet_scoped("_xlnm.Print_Area", format!("{}!{}", ws.name(), pa), ws.name());
+                if !all_dns.iter().any(|x| x.name == dn.name && x.sheet == dn.sheet) {
+                    all_dns.push(dn);
+                }
+            }
+            if let Some(pt) = &ps.print_titles {
+                let dn = DefinedName::sheet_scoped("_xlnm.Print_Titles", format!("{}!{}", ws.name(), pt), ws.name());
+                if !all_dns.iter().any(|x| x.name == dn.name && x.sheet == dn.sheet) {
+                    all_dns.push(dn);
+                }
+            }
+        }
+    }
+
+    if !all_dns.is_empty() {
         write_str(w, "<definedNames>")?;
-        for dn in defined_names {
+        for dn in &all_dns {
             let sheet_attr = match &dn.sheet {
                 Some(s) => match worksheets.iter().position(|ws| ws.name() == s.as_str()) {
                     Some(idx) => format!(r#" localSheetId="{}""#, idx),
@@ -411,6 +720,95 @@ fn write_workbook_xml<W: Write>(
     }
 
     write_str(w, "</workbook>")?;
+    Ok(())
+}
+
+fn emit_book_views<W: Write>(w: &mut W, inner: &WorkbookInner) -> Result<(), ExcelrsError> {
+    if inner.views.is_empty() {
+        return Ok(());
+    }
+    write_str(w, "<bookViews>")?;
+    for v in &inner.views {
+        let mut attrs = String::new();
+        if let Some(x) = v.x_window {
+            attrs.push_str(&format!(" xWindow=\"{}\"", x));
+        }
+        if let Some(x) = v.y_window {
+            attrs.push_str(&format!(" yWindow=\"{}\"", x));
+        }
+        if let Some(x) = v.window_width {
+            attrs.push_str(&format!(" windowWidth=\"{}\"", x));
+        }
+        if let Some(x) = v.window_height {
+            attrs.push_str(&format!(" windowHeight=\"{}\"", x));
+        }
+        if let Some(x) = v.active_tab {
+            attrs.push_str(&format!(" activeTab=\"{}\"", x));
+        }
+        if let Some(x) = v.first_sheet {
+            attrs.push_str(&format!(" firstSheet=\"{}\"", x));
+        }
+        if let Some(x) = v.minimized {
+            attrs.push_str(if x { " minimized=\"1\"" } else { " minimized=\"0\"" });
+        }
+        if let Some(x) = v.show_horizontal_scroll {
+            attrs.push_str(if x {
+                " showHorizontalScroll=\"1\""
+            } else {
+                " showHorizontalScroll=\"0\""
+            });
+        }
+        if let Some(x) = v.show_vertical_scroll {
+            attrs.push_str(if x {
+                " showVerticalScroll=\"1\""
+            } else {
+                " showVerticalScroll=\"0\""
+            });
+        }
+        if let Some(x) = v.tab_ratio {
+            attrs.push_str(&format!(" tabRatio=\"{}\"", x));
+        }
+        if let Some(x) = &v.visibility {
+            attrs.push_str(&format!(" visibility=\"{}\"", escape(x)));
+        }
+        write_str(w, &format!("<workbookView{}/>", attrs))?;
+    }
+    write_str(w, "</bookViews>")?;
+    Ok(())
+}
+
+fn emit_calc_pr<W: Write>(w: &mut W, inner: &WorkbookInner) -> Result<(), ExcelrsError> {
+    let calc = match &inner.calc_properties {
+        Some(c) => c,
+        None => return Ok(()),
+    };
+    let mut attrs = String::new();
+    if let Some(x) = calc.full_calc_on_load {
+        attrs.push_str(if x {
+            " fullCalcOnLoad=\"1\""
+        } else {
+            " fullCalcOnLoad=\"0\""
+        });
+    }
+    if let Some(x) = calc.calc_id {
+        attrs.push_str(&format!(" calcId=\"{}\"", x));
+    }
+    if let Some(x) = &calc.calc_mode {
+        attrs.push_str(&format!(" calcMode=\"{}\"", escape(x)));
+    }
+    if let Some(x) = calc.ref_full_calc {
+        attrs.push_str(if x { " refFullCalc=\"1\"" } else { " refFullCalc=\"0\"" });
+    }
+    if let Some(x) = calc.iterate {
+        attrs.push_str(if x { " iterate=\"1\"" } else { " iterate=\"0\"" });
+    }
+    if let Some(x) = calc.iterate_count {
+        attrs.push_str(&format!(" iterateCount=\"{}\"", x));
+    }
+    if let Some(x) = calc.iterate_delta {
+        attrs.push_str(&format!(" iterateDelta=\"{}\"", x));
+    }
+    write_str(w, &format!("<calcPr{}/>", attrs))?;
     Ok(())
 }
 
@@ -450,7 +848,13 @@ fn write_workbook_rels<W: Write>(w: &mut W, sheet_count: usize) -> Result<(), Ex
 // ---------------------------------------------------------------------------
 
 /// Write the relationships XML for a single worksheet (hyperlinks).
-fn write_sheet_rels<W: Write>(w: &mut W, hyperlinks: &[SheetHyperlink]) -> Result<(), ExcelrsError> {
+fn write_sheet_rels<W: Write>(
+    w: &mut W,
+    hyperlinks: &[SheetHyperlink],
+    sheet_num: usize,
+    has_comments: bool,
+    has_drawing: bool,
+) -> Result<(), ExcelrsError> {
     write_str(w, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#)?;
     write_str(
         w,
@@ -463,6 +867,32 @@ fn write_sheet_rels<W: Write>(w: &mut W, hyperlinks: &[SheetHyperlink]) -> Resul
                 r#"<Relationship Id="{rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="{url}" TargetMode="External"/>"#,
                 rid = h.rid,
                 url = escape(&h.url),
+            ),
+        )?;
+    }
+    // (v1.0.0) comments + drawing relationships
+    let mut rel_id = hyperlinks.len() as u32 + 1;
+    if has_comments {
+        write_str(
+            w,
+            &format!(
+                r#"<Relationship Id="rId{rel_id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../comments{sheet_num}.xml"/>"#,
+            ),
+        )?;
+        rel_id += 1;
+        write_str(
+            w,
+            &format!(
+                r#"<Relationship Id=\"rId{rel_id}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing\" Target=\"../drawings/vmlDrawing{sheet_num}.vml\"/>"#,
+            ),
+        )?;
+        rel_id += 1;
+    }
+    if has_drawing {
+        write_str(
+            w,
+            &format!(
+                r#"<Relationship Id="rId{rel_id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing{sheet_num}.xml"/>"#,
             ),
         )?;
     }
@@ -634,10 +1064,129 @@ fn emit_auto_filter<W: Write>(w: &mut W, ws: &Worksheet) -> Result<(), ExcelrsEr
     Ok(())
 }
 
+fn emit_header_footer<W: Write>(w: &mut W, ws: &Worksheet) -> Result<(), ExcelrsError> {
+    let hf = match ws.get_header_footer_inner() {
+        Some(hf) => hf,
+        None => return Ok(()),
+    };
+    let mut attrs = String::new();
+    if let Some(v) = hf.align_with_margins {
+        attrs.push_str(if v {
+            " alignWithMargins=\"1\""
+        } else {
+            " alignWithMargins=\"0\""
+        });
+    }
+    if let Some(v) = hf.different_first {
+        attrs.push_str(if v {
+            " differentFirst=\"1\""
+        } else {
+            " differentFirst=\"0\""
+        });
+    }
+    if let Some(v) = hf.different_odd_even {
+        attrs.push_str(if v {
+            " differentOddEven=\"1\""
+        } else {
+            " differentOddEven=\"0\""
+        });
+    }
+    write_str(w, &format!("<headerFooter{}>", attrs))?;
+    if let Some(v) = &hf.odd_header {
+        write_str(w, &format!("<oddHeader>{}</oddHeader>", escape(v)))?;
+    }
+    if let Some(v) = &hf.odd_footer {
+        write_str(w, &format!("<oddFooter>{}</oddFooter>", escape(v)))?;
+    }
+    if let Some(v) = &hf.even_header {
+        write_str(w, &format!("<evenHeader>{}</evenHeader>", escape(v)))?;
+    }
+    if let Some(v) = &hf.even_footer {
+        write_str(w, &format!("<evenFooter>{}</evenFooter>", escape(v)))?;
+    }
+    if let Some(v) = &hf.first_header {
+        write_str(w, &format!("<firstHeader>{}</firstHeader>", escape(v)))?;
+    }
+    if let Some(v) = &hf.first_footer {
+        write_str(w, &format!("<firstFooter>{}</firstFooter>", escape(v)))?;
+    }
+    write_str(w, "</headerFooter>")?;
+    Ok(())
+}
+
+fn emit_page_setup<W: Write>(w: &mut W, ws: &Worksheet) -> Result<(), ExcelrsError> {
+    let ps = match ws.get_page_setup_inner() {
+        Some(ps) => ps,
+        None => return Ok(()),
+    };
+    // <pageMargins> — attribute order: left, right, top, bottom, header, footer
+    if let Some(m) = &ps.margins {
+        let f = |v: Option<f64>| v.unwrap_or(0.0);
+        write_str(
+            w,
+            &format!(
+                "<pageMargins left=\"{}\" right=\"{}\" top=\"{}\" bottom=\"{}\" header=\"{}\" footer=\"{}\"/>",
+                f(m.left),
+                f(m.right),
+                f(m.top),
+                f(m.bottom),
+                f(m.header),
+                f(m.footer)
+            ),
+        )?;
+    }
+    // <pageSetup>
+    let mut attrs = String::new();
+    if let Some(v) = &ps.orientation {
+        attrs.push_str(&format!(" orientation=\"{}\"", escape(v)));
+    }
+    if let Some(v) = ps.paper_size {
+        attrs.push_str(&format!(" paperSize=\"{}\"", v));
+    }
+    if let Some(v) = ps.fit_to_page {
+        attrs.push_str(if v { " fitToPage=\"1\"" } else { " fitToPage=\"0\"" });
+    }
+    if let Some(v) = ps.fit_to_width {
+        attrs.push_str(&format!(" fitToWidth=\"{}\"", v));
+    }
+    if let Some(v) = ps.fit_to_height {
+        attrs.push_str(&format!(" fitToHeight=\"{}\"", v));
+    }
+    if let Some(v) = ps.horizontal_dpi {
+        attrs.push_str(&format!(" horizontalDpi=\"{}\"", v));
+    }
+    if let Some(v) = ps.vertical_dpi {
+        attrs.push_str(&format!(" verticalDpi=\"{}\"", v));
+    }
+    if let Some(v) = ps.black_and_white {
+        attrs.push_str(if v {
+            " blackAndWhite=\"1\""
+        } else {
+            " blackAndWhite=\"0\""
+        });
+    }
+    if let Some(v) = ps.drawing_printed {
+        attrs.push_str(if v {
+            " drawingPrinted=\"1\""
+        } else {
+            " drawingPrinted=\"0\""
+        });
+    }
+    if let Some(v) = &ps.cell_comments {
+        attrs.push_str(&format!(" cellComments=\"{}\"", escape(v)));
+    }
+    if let Some(v) = ps.copies {
+        attrs.push_str(&format!(" copies=\"{}\"", v));
+    }
+    write_str(w, &format!("<pageSetup{}/>", attrs))?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // xl/worksheets/sheet{N}.xml
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn write_sheet_xml<W: Write>(
     w: &mut W,
     ws: &Worksheet,
@@ -646,6 +1195,8 @@ fn write_sheet_xml<W: Write>(
     row_style_indices: &[u32],
     hyperlinks: &[SheetHyperlink],
     data_validations: &[crate::model::data_validation::DataValidation],
+    drawing_rid: Option<u32>,
+    comment_rid: Option<u32>,
 ) -> Result<(), ExcelrsError> {
     write_str(w, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#)?;
     write_str(
@@ -747,6 +1298,19 @@ fn write_sheet_xml<W: Write>(
             )?;
         }
         write_str(w, "</hyperlinks>")?;
+    }
+
+    // <pageMargins> + <pageSetup> — (v1.0.0)
+    emit_page_setup(w, ws)?;
+    // <headerFooter> — (v1.0.0)
+    emit_header_footer(w, ws)?;
+    // <drawing> — (v1.0.0) link to the drawing part via relationship
+    if let Some(rid) = drawing_rid {
+        write_str(w, &format!(r#"<drawing r:id="rId{rid}"/>"#))?;
+    }
+
+    if let Some(rid) = comment_rid {
+        write_str(w, &format!(r#"<legacyDrawing r:id=\"rId{rid}\"/>"#))?;
     }
 
     write_str(w, "</worksheet>")?;
@@ -2054,21 +2618,24 @@ mod tests {
 
     #[test]
     fn test_write_defined_name_unresolved_sheet_errors() {
-        let ws = Worksheet::new("Sheet1".into());
-        let worksheets = vec![ws];
-        let defined_names = vec![DefinedName::sheet_scoped("X", "1", "GhostSheet")];
+        use crate::model::workbook_inner::WorkbookInner;
+        let mut inner = WorkbookInner::new();
+        inner.worksheets.push(Worksheet::new("Sheet1".into()));
+        inner.set_defined_names(vec![DefinedName::sheet_scoped("X", "1", "GhostSheet")]);
         let mut out = Vec::new();
-        let result = write_workbook_xml(&mut out, &worksheets, &defined_names);
+        let result = write_workbook_xml(&mut out, &inner.worksheets, &inner);
         assert!(result.is_err(), "should error on unresolved sheet scope");
     }
 
     #[test]
     fn test_write_defined_name_resolved_sheet_ok() {
+        use crate::model::workbook_inner::WorkbookInner;
         let ws = Worksheet::new("Sheet1".into());
-        let worksheets = vec![ws];
-        let defined_names = vec![DefinedName::sheet_scoped("X", "1", "Sheet1")];
+        let mut inner = WorkbookInner::new();
+        inner.worksheets.push(ws);
+        inner.set_defined_names(vec![DefinedName::sheet_scoped("X", "1", "Sheet1")]);
         let mut out = Vec::new();
-        let result = write_workbook_xml(&mut out, &worksheets, &defined_names);
+        let result = write_workbook_xml(&mut out, &inner.worksheets, &inner);
         assert!(result.is_ok(), "existing sheet should succeed");
         let output = String::from_utf8(out).unwrap();
         assert!(output.contains(r##"localSheetId="0""##), "should emit localSheetId");

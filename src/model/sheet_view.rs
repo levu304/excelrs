@@ -7,8 +7,7 @@ use napi_derive::napi;
 
 /// A single sheet view descriptor, mirroring a `<sheetView><pane>` pair.
 #[napi(object)]
-#[derive(Clone, Debug)]
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub struct SheetView {
     /// Pane state: "frozen", "split", or absent (`""`).
     pub state: Option<String>,
@@ -21,7 +20,6 @@ pub struct SheetView {
     /// Active pane identifier: "bottomLeft", "bottomRight", "topLeft", "topRight".
     pub active_pane: Option<String>,
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -15,7 +15,11 @@ use napi_derive::napi;
 
 use super::cell::{Cell, CellValue};
 use super::column::Column;
+use super::comment::CellComment;
 use super::data_validation::DataValidation;
+use super::header_footer::HeaderFooter;
+use super::image::{AddImageOptions, ImageInfo, WorksheetImage};
+use super::page_setup::PageSetup;
 use super::row::Row;
 use super::sheet_protection::SheetProtection;
 use super::sheet_view::SheetView;
@@ -39,6 +43,9 @@ pub struct Worksheet {
     auto_filter: Arc<Mutex<Option<String>>>,
     views: Arc<Mutex<Vec<SheetView>>>,
     protection: Arc<Mutex<Option<SheetProtection>>>,
+    header_footer: Arc<Mutex<Option<HeaderFooter>>>,
+    page_setup: Arc<Mutex<Option<PageSetup>>>,
+    images: Arc<Mutex<Vec<WorksheetImage>>>,
 }
 
 #[napi]
@@ -55,6 +62,9 @@ impl Worksheet {
             auto_filter: Arc::new(Mutex::new(None)),
             views: Arc::new(Mutex::new(Vec::new())),
             protection: Arc::new(Mutex::new(None)),
+            header_footer: Arc::new(Mutex::new(None)),
+            page_setup: Arc::new(Mutex::new(None)),
+            images: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -425,6 +435,43 @@ impl Worksheet {
         *self.protection.lock().expect("Worksheet protection lock poisoned") = val;
     }
 
+    // -- header_footer --
+
+    #[napi(getter)]
+    /// Get the worksheet's header/footer descriptor. Returns `None` if unset.
+    pub fn header_footer(&self) -> Option<HeaderFooter> {
+        self.header_footer
+            .lock()
+            .expect("Worksheet header_footer lock poisoned")
+            .clone()
+    }
+
+    #[napi(setter)]
+    /// Set the worksheet's header/footer descriptor. Pass `null` to clear.
+    pub fn set_header_footer(&mut self, val: Option<HeaderFooter>) {
+        *self
+            .header_footer
+            .lock()
+            .expect("Worksheet header_footer lock poisoned") = val;
+    }
+
+    // -- page_setup --
+
+    #[napi(getter)]
+    /// Get the worksheet's page setup / print descriptor. Returns `None` if unset.
+    pub fn page_setup(&self) -> Option<PageSetup> {
+        self.page_setup
+            .lock()
+            .expect("Worksheet page_setup lock poisoned")
+            .clone()
+    }
+
+    #[napi(setter)]
+    /// Set the worksheet's page setup / print descriptor. Pass `null` to clear.
+    pub fn set_page_setup(&mut self, val: Option<PageSetup>) {
+        *self.page_setup.lock().expect("Worksheet page_setup lock poisoned") = val;
+    }
+
     // -- data validations --
 
     /// Remove data validation for a specific cell reference (sqref).
@@ -437,6 +484,39 @@ impl Worksheet {
         let old_len = validations.len();
         validations.retain(|v| v.sqref != sqref);
         validations.len() < old_len
+    }
+
+    // -- images (v1.0.0) --
+
+    /// Add an embedded image to the worksheet. Returns the image index.
+    #[napi]
+    pub fn add_image(&self, opts: AddImageOptions) -> napi::Result<u32> {
+        let mut images = self.images.lock().expect("Worksheet images lock poisoned");
+        let idx = images.len() as u32;
+        images.push(WorksheetImage {
+            extension: opts.extension.clone(),
+            buffer: opts.buffer,
+            positioning: opts.positioning.unwrap_or_else(|| "oneCell".to_string()),
+            anchor: opts.anchor,
+            media_index: 0,
+        });
+        Ok(idx)
+    }
+
+    /// Return all embedded images on the worksheet.
+    #[napi]
+    pub fn get_images(&self) -> Vec<ImageInfo> {
+        self.images
+            .lock()
+            .expect("Worksheet images lock poisoned")
+            .iter()
+            .map(|img| ImageInfo {
+                extension: img.extension.clone(),
+                buffer: img.buffer.clone(),
+                positioning: img.positioning.clone(),
+                anchor: img.anchor.clone(),
+            })
+            .collect()
     }
 }
 
@@ -494,6 +574,41 @@ impl Worksheet {
         validations.push(dv);
     }
 
+    // -- images / comments (v1.0.0) --
+
+    /// Insert an image (used by reader).
+    pub fn insert_image(&self, img: WorksheetImage) {
+        self.images.lock().expect("Worksheet images lock poisoned").push(img);
+    }
+
+    /// Internal: read images for the writer.
+    pub fn get_images_inner(&self) -> Vec<WorksheetImage> {
+        self.images.lock().expect("Worksheet images lock poisoned").clone()
+    }
+
+    /// Attach a comment to a cell at (row, col) (used by reader & API).
+    pub fn insert_cell_comment(&self, row: u32, col: u32, comment: CellComment) {
+        self.with_cell_mut(row, col, |cell| {
+            cell.set_comment(Some(comment));
+        });
+    }
+
+    /// Get all cells carrying a comment (used by writer).
+    pub fn get_cell_comments(&self) -> Vec<(String, CellComment)> {
+        let mut out = Vec::new();
+        for row in self.rows() {
+            // Use all cells (not `written_cells`) so comment-only cells that
+            // carry no value still round-trip.
+            for cell in row.sorted_cells() {
+                let addr = cell.address();
+                if let Some(comment) = cell.comment() {
+                    out.push((addr, comment));
+                }
+            }
+        }
+        out
+    }
+
     /// Get all data validations for writing (used by writer).
     pub fn get_data_validations(&self) -> Vec<DataValidation> {
         self.data_validations
@@ -533,6 +648,35 @@ impl Worksheet {
         self.protection
             .lock()
             .expect("Worksheet protection lock poisoned")
+            .clone()
+    }
+
+    // -- header_footer (internal, used by reader/writer) --
+
+    pub fn set_header_footer_inner(&self, val: Option<HeaderFooter>) {
+        *self
+            .header_footer
+            .lock()
+            .expect("Worksheet header_footer lock poisoned") = val;
+    }
+
+    pub fn get_header_footer_inner(&self) -> Option<HeaderFooter> {
+        self.header_footer
+            .lock()
+            .expect("Worksheet header_footer lock poisoned")
+            .clone()
+    }
+
+    // -- page_setup (internal, used by reader/writer) --
+
+    pub fn set_page_setup_inner(&self, val: Option<PageSetup>) {
+        *self.page_setup.lock().expect("Worksheet page_setup lock poisoned") = val;
+    }
+
+    pub fn get_page_setup_inner(&self) -> Option<PageSetup> {
+        self.page_setup
+            .lock()
+            .expect("Worksheet page_setup lock poisoned")
             .clone()
     }
 }

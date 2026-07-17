@@ -19,6 +19,7 @@ use napi::Env;
 use napi_derive::napi;
 
 use crate::error::ExcelrsError;
+use crate::model::comment::CellComment;
 use crate::model::style::Style;
 use crate::types;
 
@@ -181,6 +182,8 @@ pub(crate) struct CellInner {
     pub formula: Option<String>,
     /// Style reference. `None` = Normal (index 0).
     pub style: Option<Style>,
+    /// Cell comment / note (v1.0.0). `None` = no comment.
+    pub comment: Option<CellComment>,
 }
 
 // ---------------------------------------------------------------------------
@@ -210,6 +213,7 @@ impl Cell {
                 value: CellValue::default(),
                 formula: None,
                 style: None,
+                comment: None,
             })),
         }
     }
@@ -327,6 +331,40 @@ impl Cell {
     #[napi(getter)]
     pub fn formula(&self) -> Option<String> {
         self.inner.lock().expect("Cell lock poisoned").formula.clone()
+    }
+
+    // -- comment / note (v1.0.0) --
+    /// Convenience getter for the comment text (ExcelJS `cell.note`).
+    /// Returns `None` when the cell has no comment.
+    #[napi(getter)]
+    pub fn note(&self) -> Option<String> {
+        self.inner
+            .lock()
+            .expect("Cell lock poisoned")
+            .comment
+            .as_ref()
+            .map(|c| c.text.clone())
+    }
+
+    /// Convenience setter for the comment text (ExcelJS `cell.note = "..."`).
+    /// Preserves any existing author.
+    #[napi(setter)]
+    pub fn set_note(&mut self, text: String) {
+        let mut inner = self.inner.lock().expect("Cell lock poisoned");
+        let author = inner.comment.as_ref().and_then(|c| c.author.clone());
+        inner.comment = Some(CellComment { text, author });
+    }
+
+    /// Full comment accessor (text + author).
+    #[napi(getter)]
+    pub fn comment(&self) -> Option<CellComment> {
+        self.inner.lock().expect("Cell lock poisoned").comment.clone()
+    }
+
+    /// Full comment setter (text + author).
+    #[napi(setter)]
+    pub fn set_comment(&mut self, c: Option<CellComment>) {
+        self.inner.lock().expect("Cell lock poisoned").comment = c;
     }
 
     // -- style (getter + setter) --

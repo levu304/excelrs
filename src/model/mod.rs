@@ -1,12 +1,17 @@
 pub mod cell;
 pub mod color;
 pub mod column;
+pub mod comment;
 pub mod data_validation;
 pub mod defined_name;
+pub mod header_footer;
+pub mod image;
+pub mod page_setup;
 pub mod row;
 pub mod sheet_protection;
 pub mod sheet_view;
 pub mod style;
 pub mod workbook;
 pub mod workbook_inner;
+pub mod workbook_view;
 pub mod worksheet;

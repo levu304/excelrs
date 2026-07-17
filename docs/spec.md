@@ -1,7 +1,7 @@
 # excelrs — Specification
 
 **Package:** `@levu304/excelrs` (scoped npm — unscoped name `excelrs` blocked as too similar to `exceljs`)
-**Version:** 0.6.0
+**Version:** 1.0.0
 **License:** MIT OR Apache-2.0
 **Author:** Solo maintainer (open source)
 **Status:** Implemented (published to npm as `@levu304/excelrs`)
@@ -16,7 +16,7 @@
 
 **npm package:** `@levu304/excelrs`. Install: `npm install @levu304/excelrs`.
 
-**v0.6.0 scope:** theme color and indexed color resolution on read. Theme color references (`theme="N"`) and indexed colors (`indexed="N"`) in `xl/styles.xml` are resolved to concrete ARGB hex strings via `xl/theme/theme1.xml` and the standard 56-entry system palette. See §6.8, §9.2.1.
+**v1.0.0 scope:** drop-in ExcelJS compatibility milestone. The remaining medium-effort ExcelJS parity gaps are closed — headers & footers, page setup / print, workbook views & calc properties, cell comments / notes, and images / drawings are all read/write round-trippable and verified against ExcelJS 4.4.0. See §9.2.4 for the area list and the OpenSpec `exceljs-parity` spec for requirement scenarios.
 
 ---
 
@@ -1272,17 +1272,27 @@ Standard OOXML types (`whole`, `decimal`, `list`, `date`, `time`, `textLength`,
 read, optional delimiter) and `write`/`writeFile` (serializes the first
 worksheet only — CSV is single-sheet).
 
+### 9.2.4 v1.0.0 — Drop-in ExcelJS compatibility milestone
+
+**Scope:** Closes the remaining medium-effort ExcelJS parity gaps. All five areas below are read/write round-trippable, verified against ExcelJS 4.4.0 (OpenSpec change `exceljs-parity`):
+
+- **Headers & footers** — `ws.headerFooter` read/write (`<headerFooter>` `&C`/`&L`/`&R` format codes).
+- **Page setup / print** — `ws.pageSetup` read/write (`pageMargins`, `paperSize`, `orientation`, `printArea`, `printTitles` via defined names).
+- **Workbook views & calc properties** — `workbook.views` / `workbook.calcProperties` (`<bookViews>`, `<calcPr>`).
+- **Comments** — `Cell.note` / `Cell.comment` read/write (`xl/commentsN.xml` + relationship, authors list).
+- **Images / drawings** — `ws.addImage` read/write (`xl/drawings/`, `xl/media/`, anchors, relationship resolution).
+
 ### 9.3 Future (v0.3+)
 
 - Streaming XLSX reader (row-by-row for large files).
 - Streaming XLSX writer.
 - Pivot table read/write.
-- Image read/write.
-- Cell comments/notes.
+- Image read/write. (shipped v1.0.0)
+- Cell comments/notes. (shipped v1.0.0)
 - Conditional formatting.
 - Formula evaluation (integration with a Rust formula engine).
 - Multi-sheet copy/move.
-- Worksheet protection.
+- Worksheet protection. (shipped v0.11.0)
 - XLSB binary format support.
 
 ---
@@ -1355,7 +1365,13 @@ These are capabilities that excelrs will **not** implement, now or in the future
 | `row.getCell(3)` | `row.getCell(3)` | JS glue dispatches to `getCellByColNum` |
 | `row.getCell('C')` | `row.getCell('C')` | JS glue dispatches to `getCellByColLetter` |
 | `col.width` | `col.width` | Via `#[napi(getter)]` / `#[napi(setter)]` |
+| `ws.headerFooter` | `ws.headerFooter` | Identical |
+| `ws.pageSetup` | `ws.pageSetup` | Identical |
+| `workbook.views` | `workbook.views` | Identical |
+| `workbook.calcProperties` | `workbook.calcProperties` | Identical |
+| `cell.note` / `cell.comment` | `cell.note` / `cell.comment` | Identical |
+| `ws.addImage` | `ws.addImage` | Identical |
 
 ---
 
-_Spec version: 1.4.1. Last updated: 2026-07-09. v0.3.0 (Style read + alignment emission) — full end-to-end style round-trip; see §9.2 for v0.2.0+ style model, §9.2.1 for remaining deferred items. v1.4.0: §9.2.1 removed Style read and Alignment emission rows; §1 updated to v0.3.0 scope; §6.8 added vertical middle→center mapping note. v1.4.1: reconciled header metadata (Version/Status) and removed stale "deferred to v0.3.0" references now that style read + writer alignment emission have shipped (§1, §4.3, §6.8, §9.2)._
+_Spec version: 1.5.0. Last updated: 2026-07-17. v0.3.0 (Style read + alignment emission) — full end-to-end style round-trip; see §9.2 for v0.2.0+ style model, §9.2.1 for remaining deferred items. v1.4.0: §9.2.1 removed Style read and Alignment emission rows; §1 updated to v0.3.0 scope; §6.8 added vertical middle→center mapping note. v1.4.1: reconciled header metadata (Version/Status) and removed stale "deferred to v0.3.0" references now that style read + writer alignment emission have shipped (§1, §4.3, §6.8, §9.2). v1.5.0: §9.2.4 documents v1.0.0 drop-in ExcelJS compatibility (headers/footers, page setup, workbook views & calc, comments, images — all read/write round-trippable); §9.3 marks those items shipped; Appendix B adds API mappings._
