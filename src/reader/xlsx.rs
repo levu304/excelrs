@@ -69,6 +69,16 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
         }
     }
 
+    // Step 3.55: parse conditional formatting from sheet XML and attach to worksheets
+    let per_sheet_cf = parse_sheet_conditional_formattings(data, sheet_count, &style_table.dxfs)?;
+    for (i, cfs) in per_sheet_cf.into_iter().enumerate() {
+        for cf in cfs {
+            inner.worksheets[i].insert_conditional_formatting(cf);
+        }
+    }
+    // Preserve foreign dxfs (e.g. pivot tables) for round-trip fidelity.
+    inner.dxfs = style_table.dxfs.clone();
+
     // Step 3.6: parse auto-filter ranges from sheet XML and attach
     let per_sheet_auto_filters = parse_sheet_auto_filters(data, sheet_count)?;
     for (i, af) in per_sheet_auto_filters.into_iter().enumerate() {
@@ -244,6 +254,225 @@ fn parse_sheet_data_validations(
     }
 
     Ok(all_dv)
+}
+
+/// Parse conditional formatting from `xl/worksheets/sheet{N}.xml` files.
+/// Returns a Vec of Vec where each inner Vec corresponds to a sheet's conditional formats.
+fn parse_sheet_conditional_formattings(
+    data: &[u8],
+    sheet_count: usize,
+    dxfs: &[crate::model::style::Dxf],
+) -> Result<Vec<Vec<crate::model::conditional_formatting::ConditionalFormat>>, ExcelrsError> {
+    use std::io::Cursor;
+    let cursor = Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
+
+    let mut all_cf: Vec<Vec<crate::model::conditional_formatting::ConditionalFormat>> = Vec::with_capacity(sheet_count);
+
+    for i in 0..sheet_count {
+        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+        let cfs = match archive.by_name(&path) {
+            Ok(entry) => {
+                let mut xml = String::new();
+                entry.take(MAX_ENTRY_BYTES).read_to_string(&mut xml)?;
+                parse_conditional_formatting_from_xml(&xml, dxfs)?
+            }
+            Err(_) => Vec::new(),
+        };
+        all_cf.push(cfs);
+    }
+
+    Ok(all_cf)
+}
+
+/// Parse `<conditionalFormatting>` elements from sheet XML into ConditionalFormat objects.
+fn parse_conditional_formatting_from_xml(
+    xml: &str,
+    dxfs: &[crate::model::style::Dxf],
+) -> Result<Vec<crate::model::conditional_formatting::ConditionalFormat>, ExcelrsError> {
+    use crate::model::conditional_formatting::{CfColor, CfRule, Cfvo, ConditionalFormat};
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut result: Vec<ConditionalFormat> = Vec::new();
+    let mut reader = Reader::from_str(xml);
+    let mut current_cf: Option<ConditionalFormat> = None;
+    let mut current_rule: Option<CfRule> = None;
+    let mut in_colorscale = false;
+    let mut in_databar = false;
+    let mut in_formula = false;
+    let mut formula_buf = String::new();
+
+    let mut events: u64 = 0;
+    loop {
+        let mut buf = Vec::new();
+        events += 1;
+        if events > MAX_EVENTS as u64 {
+            break;
+        }
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                match e.name().as_ref() {
+                    b"conditionalFormatting" => {
+                        if let Some(cf) = current_cf.take() {
+                            result.push(cf);
+                        }
+                        let mut cf = ConditionalFormat::default();
+                        for attr in e.attributes().flatten() {
+                            if attr.key.as_ref() == b"sqref" {
+                                cf.sqref = String::from_utf8_lossy(&attr.value).into_owned();
+                            }
+                        }
+                        current_cf = Some(cf);
+                    }
+                    b"cfRule" => {
+                        let mut rule = CfRule::default();
+                        for attr in e.attributes().flatten() {
+                            let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+                            let val = String::from_utf8_lossy(&attr.value).into_owned();
+                            match key.as_ref() {
+                                "type" => rule.r#type = val,
+                                "operator" => rule.operator = Some(val),
+                                "priority" => rule.priority = val.parse().unwrap_or(0),
+                                "dxfId" => rule.dxf_id = Some(val.parse().unwrap_or(0)),
+                                "timePeriod" => rule.time_period = Some(val),
+                                "rank" => rule.rank = Some(val.parse().unwrap_or(0)),
+                                "percent" => rule.percent = Some(parse_ooxml_bool(&val)),
+                                "bottom" => rule.bottom = Some(parse_ooxml_bool(&val)),
+                                "text" => rule.text = Some(val),
+                                "reverse" => rule.reverse = Some(parse_ooxml_bool(&val)),
+                                "showValue" => rule.show_value = Some(parse_ooxml_bool(&val)),
+                                _ => {}
+                            }
+                        }
+                        // Resolve the differential style from dxfs if referenced.
+                        if let Some(id) = rule.dxf_id {
+                            if (id as usize) < dxfs.len() {
+                                let d = &dxfs[id as usize];
+                                rule.style = Some(crate::model::style::Style {
+                                    font: d.font.clone(),
+                                    fill: d.fill.clone(),
+                                    border: d.border.clone(),
+                                    num_fmt: d.num_fmt.clone(),
+                                    ..Default::default()
+                                });
+                            }
+                        }
+                        current_rule = Some(rule);
+                    }
+                    b"formula" => {
+                        in_formula = true;
+                        formula_buf.clear();
+                    }
+                    b"colorScale" => in_colorscale = true,
+                    b"dataBar" => in_databar = true,
+                    b"iconSet" => {
+                        if let Some(ref mut r) = current_rule {
+                            for attr in e.attributes().flatten() {
+                                let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+                                let val = String::from_utf8_lossy(&attr.value).into_owned();
+                                match key.as_ref() {
+                                    "iconSet" => r.icon_set = Some(val),
+                                    "reverse" => r.reverse = Some(parse_ooxml_bool(&val)),
+                                    "showValue" => r.show_value = Some(parse_ooxml_bool(&val)),
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                    b"cfvo" => {
+                        let mut cfvo = Cfvo::default();
+                        for attr in e.attributes().flatten() {
+                            let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+                            let val = String::from_utf8_lossy(&attr.value).into_owned();
+                            match key.as_ref() {
+                                "type" => cfvo.r#type = val,
+                                "val" => cfvo.value = Some(val),
+                                _ => {}
+                            }
+                        }
+                        if let Some(ref mut r) = current_rule {
+                            r.cfvo.get_or_insert_with(Vec::new).push(cfvo);
+                        }
+                    }
+                    b"color" => {
+                        let mut c = CfColor::default();
+                        for attr in e.attributes().flatten() {
+                            let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+                            let val = String::from_utf8_lossy(&attr.value).into_owned();
+                            match key.as_ref() {
+                                "rgb" => c.argb = Some(val),
+                                "theme" => c.theme = Some(val.parse().unwrap_or(0)),
+                                "indexed" => c.indexed = Some(val.parse().unwrap_or(0)),
+                                "tint" => c.tint = Some(val.parse().unwrap_or(0.0)),
+                                _ => {}
+                            }
+                        }
+                        if let Some(ref mut r) = current_rule {
+                            if in_colorscale {
+                                r.color.get_or_insert_with(Vec::new).push(c);
+                            } else if in_databar {
+                                r.data_bar_color = Some(c);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Text(ref e)) if in_formula => {
+                formula_buf.push_str(&e.unescape().unwrap_or_default());
+            }
+            Ok(Event::End(ref e)) => {
+                let tag = e.name().as_ref().to_vec();
+                match &*tag {
+                    b"formula" if in_formula => {
+                        if let Some(ref mut r) = current_rule {
+                            r.formula.get_or_insert_with(Vec::new).push(formula_buf.clone());
+                        }
+                        in_formula = false;
+                    }
+                    b"colorScale" => in_colorscale = false,
+                    b"dataBar" => in_databar = false,
+                    b"cfRule" => {
+                        if let Some(mut r) = current_rule.take() {
+                            // containsText-family rules carry the text inside the
+                            // formula (quoted); prefer the `text` attribute, else
+                            // strip the quotes from the formula.
+                            if r.text.is_none()
+                                && matches!(
+                                    r.operator.as_deref(),
+                                    Some("containsText")
+                                        | Some("beginsWith")
+                                        | Some("endsWith")
+                                        | Some("notContainsText")
+                                )
+                            {
+                                if let Some(formulas) = &r.formula {
+                                    if let Some(f) = formulas.first() {
+                                        r.text = Some(f.trim_matches('"').to_string());
+                                    }
+                                }
+                            }
+                            if let Some(ref mut cf) = current_cf {
+                                cf.rules.push(r);
+                            }
+                        }
+                    }
+                    b"conditionalFormatting" => {
+                        if let Some(cf) = current_cf.take() {
+                            result.push(cf);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+
+    Ok(result)
 }
 
 /// Parse an OOXML boolean attribute. Accepts "1", "0", "true", "false" (case-insensitive).
@@ -2441,5 +2670,127 @@ mod tests {
         assert_eq!(runs[0].font.as_ref().unwrap().name.as_deref(), Some("Arial"));
         assert_eq!(runs[1].text, "World");
         assert!(runs[1].font.is_none());
+    }
+
+    #[test]
+    fn test_conditional_formatting_roundtrip() {
+        use crate::model::conditional_formatting::{CfRule, ConditionalFormat};
+        use crate::model::style::{Fill, Font, Style};
+        use crate::writer::xlsx::workbook_to_bytes;
+
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("Sheet1".into());
+        let cf = ConditionalFormat {
+            sqref: "A1:A10".into(),
+            rules: vec![CfRule {
+                r#type: "cellIs".into(),
+                priority: 0,
+                dxf_id: None,
+                operator: Some("lessThan".into()),
+                formula: Some(vec!["10".into()]),
+                text: None,
+                time_period: None,
+                rank: None,
+                percent: None,
+                bottom: None,
+                style: Some(Style {
+                    font: Some(Font {
+                        bold: Some(true),
+                        ..Default::default()
+                    }),
+                    fill: Some(Fill {
+                        kind: "solid".into(),
+                        foreground: Some("FFFF0000".into()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                cfvo: None,
+                color: None,
+                data_bar_color: None,
+                icon_set: None,
+                reverse: None,
+                show_value: None,
+            }],
+        };
+        ws.add_conditional_formatting(cf).unwrap();
+
+        let bytes = workbook_to_bytes(&inner).unwrap();
+        let read = crate::reader::xlsx::workbook_inner_from_bytes(&bytes).unwrap();
+        let cfs = read.worksheets[0].get_conditional_formatting();
+        assert_eq!(cfs.len(), 1, "conditional format count mismatch");
+        assert_eq!(cfs[0].sqref, "A1:A10");
+        assert_eq!(cfs[0].rules.len(), 1);
+        let r = &cfs[0].rules[0];
+        assert_eq!(r.r#type, "cellIs");
+        assert_eq!(r.operator.as_deref(), Some("lessThan"));
+        assert_eq!(r.formula.as_ref().unwrap(), &vec!["10".to_string()]);
+        assert!(r.dxf_id.is_some(), "dxfId should be assigned on write");
+        let style = r.style.as_ref().expect("style should round-trip");
+        assert_eq!(style.font.as_ref().unwrap().bold, Some(true));
+        assert_eq!(style.fill.as_ref().unwrap().foreground.as_deref(), Some("FFFF0000"));
+    }
+
+    #[test]
+    fn test_foreign_dxfs_preserved() {
+        use crate::model::style::{Dxf, Fill, Font};
+        use crate::writer::xlsx::workbook_to_bytes;
+
+        let mut inner = WorkbookInner::new();
+        inner.add_worksheet("Sheet1".into());
+        // Inject dxfs that no conditional-format rule references (e.g. pivot tables).
+        inner.dxfs.push(Dxf {
+            font: Some(Font {
+                bold: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        inner.dxfs.push(Dxf {
+            fill: Some(Fill {
+                kind: "solid".into(),
+                foreground: Some("FF00FF00".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+
+        let bytes = workbook_to_bytes(&inner).unwrap();
+        let read = crate::reader::xlsx::workbook_inner_from_bytes(&bytes).unwrap();
+        assert_eq!(read.dxfs.len(), 2, "foreign dxfs dropped on round-trip");
+    }
+
+    #[test]
+    fn test_cf_quickxml_attrs_isolated() {
+        use quick_xml::events::Event;
+        use quick_xml::Reader;
+        let xml = r##"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/><conditionalFormatting sqref="A1:A10"><cfRule type="cellIs"/></conditionalFormatting></worksheet>"##;
+        let mut reader = Reader::from_str(xml);
+        let mut found = std::collections::HashMap::new();
+        loop {
+            let mut buf = Vec::new();
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                    let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                    let mut attrs = String::new();
+                    for attr in e.attributes().flatten() {
+                        attrs.push_str(&format!(
+                            "{}={} ",
+                            String::from_utf8_lossy(attr.key.as_ref()),
+                            String::from_utf8_lossy(&attr.value)
+                        ));
+                    }
+                    found.insert(name, attrs);
+                }
+                Ok(Event::Eof) => break,
+                _ => {}
+            }
+        }
+        eprintln!("ISOLATED: {:?}", found);
+        assert!(
+            !found.get("conditionalFormatting").unwrap_or(&String::new()).is_empty(),
+            "conditionalFormatting attrs empty: {:?}",
+            found
+        );
     }
 }

@@ -10,6 +10,7 @@
 use chrono::{DateTime, Utc};
 
 use super::defined_name::DefinedName;
+use super::style::Dxf;
 use super::workbook_view::{CalcProperties, WorkbookView};
 use super::worksheet::Worksheet;
 
@@ -23,6 +24,9 @@ pub struct WorkbookInner {
     pub defined_names: Vec<DefinedName>,
     pub views: Vec<WorkbookView>,
     pub calc_properties: Option<CalcProperties>,
+    /// Differential formats (`<dxfs>`) carried from the source file. Preserved
+    /// on round-trip so foreign dxfs (e.g. pivot-table) survive.
+    pub dxfs: Vec<Dxf>,
 }
 
 impl WorkbookInner {
@@ -35,6 +39,7 @@ impl WorkbookInner {
             defined_names: Vec::new(),
             views: Vec::new(),
             calc_properties: None,
+            dxfs: Vec::new(),
         }
     }
 

@@ -65,7 +65,7 @@
 | Comments | shipped | v1.0.0 | `xl/commentsN.xml` part + relationship read/write |
 | Images / drawings | shipped | v1.0.0 | `xl/drawings/` part, media extraction, anchors read/write |
 | Tables | shipped | v1.1.0 | `xl/tables/` part + relationship read/write; `ws.addTable`/`getTable(s)`/`removeTable`; header/totals rows; `autoFilter` integration; header styling (metadata only) |
-| Conditional formatting | targeted | v1.2.0 | Complex OOXML + dxfs; targeted for v1.2.0 |
+| Conditional formatting | shipped | v1.2.0 | `<conditionalFormatting>` + `dxfs`; rule types `cellIs`, `expression`, `colorScale`, `dataBar`, `iconSet`, `top10`, `unique`/`duplicate`, `containsText`, `timePeriod`, blanks/errors/nonBlanks; priority ordering |
 | Charts | planned (distant) | — | Major subsystem; chart XML is very complex |
 | Pivot tables | planned (distant) | — | Major subsystem; extremely complex |
 | Formula evaluation | n-a | — | Separate interpreter; deferred v1+ |

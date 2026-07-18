@@ -2,6 +2,7 @@ pub mod cell;
 pub mod color;
 pub mod column;
 pub mod comment;
+pub mod conditional_formatting;
 pub mod data_validation;
 pub mod defined_name;
 pub mod header_footer;

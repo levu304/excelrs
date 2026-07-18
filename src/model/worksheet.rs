@@ -8,7 +8,7 @@
 //! `ws.setColumns([...])` work even when `ws` was obtained from
 //! `wb.addWorksheet("Sheet1")`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
 use napi_derive::napi;
@@ -16,6 +16,7 @@ use napi_derive::napi;
 use super::cell::{Cell, CellValue};
 use super::column::Column;
 use super::comment::CellComment;
+use super::conditional_formatting::ConditionalFormat;
 use super::data_validation::DataValidation;
 use super::header_footer::HeaderFooter;
 use super::image::{AddImageOptions, ImageInfo, WorksheetImage};
@@ -23,6 +24,7 @@ use super::page_setup::PageSetup;
 use super::row::Row;
 use super::sheet_protection::SheetProtection;
 use super::sheet_view::SheetView;
+use super::style::Dxf;
 use super::table::{AddTableOptions, Table, TableColumn, TableList, TableRow};
 use crate::model::style::Style;
 use crate::types;
@@ -63,6 +65,7 @@ pub struct Worksheet {
     columns: Arc<Mutex<Vec<Column>>>,
     merged_ranges: Arc<Mutex<Vec<String>>>,
     data_validations: Arc<Mutex<Vec<DataValidation>>>,
+    conditional_formats: Arc<Mutex<Vec<ConditionalFormat>>>,
     auto_filter: Arc<Mutex<Option<String>>>,
     views: Arc<Mutex<Vec<SheetView>>>,
     protection: Arc<Mutex<Option<SheetProtection>>>,
@@ -83,6 +86,7 @@ impl Worksheet {
             columns: Arc::new(Mutex::new(Vec::new())),
             merged_ranges: Arc::new(Mutex::new(Vec::new())),
             data_validations: Arc::new(Mutex::new(Vec::new())),
+            conditional_formats: Arc::new(Mutex::new(Vec::new())),
             auto_filter: Arc::new(Mutex::new(None)),
             views: Arc::new(Mutex::new(Vec::new())),
             protection: Arc::new(Mutex::new(None)),
@@ -409,6 +413,35 @@ impl Worksheet {
             .iter()
             .find(|v| v.sqref == sqref)
             .cloned()
+    }
+
+    // -- conditional formatting (v1.2.0) --
+
+    /// Add or update a conditional format. Upserts by sqref.
+    #[napi]
+    pub fn add_conditional_formatting(&self, cf: ConditionalFormat) -> napi::Result<()> {
+        if cf.sqref.trim().is_empty() {
+            return Err(napi::Error::from_reason(
+                "ConditionalFormat.sqref must not be empty".to_string(),
+            ));
+        }
+        let mut formats = self
+            .conditional_formats
+            .lock()
+            .expect("Worksheet conditional_formats lock poisoned");
+        // Upsert by sqref: remove old, add new.
+        formats.retain(|c| c.sqref != cf.sqref);
+        formats.push(cf);
+        Ok(())
+    }
+
+    /// Get all conditional formats for this worksheet, grouped by range.
+    #[napi]
+    pub fn get_conditional_formatting(&self) -> Vec<ConditionalFormat> {
+        self.conditional_formats
+            .lock()
+            .expect("Worksheet conditional_formats lock poisoned")
+            .clone()
     }
 
     // -- auto_filter --
@@ -827,6 +860,59 @@ impl Worksheet {
             .lock()
             .expect("Worksheet data_validations lock poisoned")
             .clone()
+    }
+
+    /// Attach a parsed conditional format (used by the reader).
+    pub fn insert_conditional_formatting(&self, cf: ConditionalFormat) {
+        self.conditional_formats
+            .lock()
+            .expect("Worksheet conditional_formats lock poisoned")
+            .push(cf);
+    }
+
+    /// Get all conditional formats for writing (used by writer).
+    pub fn get_conditional_formatting_inner(&self) -> Vec<ConditionalFormat> {
+        self.conditional_formats
+            .lock()
+            .expect("Worksheet conditional_formats lock poisoned")
+            .clone()
+    }
+
+    /// Assign worksheet-global unique `priority` (document order) and resolve
+    /// `dxfId` for each conditional-format rule, appending new differential
+    /// formats to `dxfs` (deduped by canonical key). Mutates the stored rules.
+    pub fn assign_conditional_formatting_dxf_ids(&self, dxfs: &mut Vec<Dxf>, dxf_map: &mut HashMap<String, u32>) {
+        let mut cfs = self
+            .conditional_formats
+            .lock()
+            .expect("Worksheet conditional_formats lock poisoned");
+        let mut priority = 0u32;
+        for cf in cfs.iter_mut() {
+            for rule in cf.rules.iter_mut() {
+                priority += 1;
+                rule.priority = priority;
+                match &rule.style {
+                    Some(style) => {
+                        let dxf = Dxf::from_style(style);
+                        if dxf.font.is_some() || dxf.fill.is_some() || dxf.border.is_some() || dxf.num_fmt.is_some() {
+                            let key = serde_json::to_string(&dxf).unwrap_or_default();
+                            let id = if let Some(&existing) = dxf_map.get(&key) {
+                                existing
+                            } else {
+                                let id = dxfs.len() as u32;
+                                dxfs.push(dxf);
+                                dxf_map.insert(key, id);
+                                id
+                            };
+                            rule.dxf_id = Some(id);
+                        } else {
+                            rule.dxf_id = None;
+                        }
+                    }
+                    None => rule.dxf_id = None,
+                }
+            }
+        }
     }
 
     // -- internal setters for reader --

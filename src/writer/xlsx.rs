@@ -30,7 +30,7 @@ use crate::model::cell::Cell;
 use crate::model::comment::CellComment;
 use crate::model::defined_name::DefinedName;
 use crate::model::image::WorksheetImage;
-use crate::model::style::Style;
+use crate::model::style::{Dxf, Style};
 use crate::model::table::Table;
 use crate::model::workbook_inner::WorkbookInner;
 use crate::model::worksheet::Worksheet;
@@ -177,7 +177,23 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
             v.extend(row_styles);
             v
         };
-        let style_table = styles::build_style_table(&all_styles);
+        // (v1.2.0) Collect conditional-format dxfs across all worksheets.
+        // Foreign dxfs from the source file (inner.dxfs) are preserved as the
+        // base; rule styles add new dxfs (deduped by canonical key). dxfIds and
+        // a document-order unique priority are assigned in-place on the rules.
+        let mut dxfs: Vec<Dxf> = inner.dxfs.clone();
+        let mut dxf_map: HashMap<String, u32> = HashMap::new();
+        for (i, d) in dxfs.iter().enumerate() {
+            if let Ok(key) = serde_json::to_string(d) {
+                dxf_map.insert(key, i as u32);
+            }
+        }
+        for ws in worksheets.iter() {
+            ws.assign_conditional_formatting_dxf_ids(&mut dxfs, &mut dxf_map);
+        }
+
+        let mut style_table = styles::build_style_table(&all_styles);
+        style_table.dxfs = dxfs;
         styles::emit_styles_xml(&mut zip, &style_table)?;
 
         // xl/worksheets/sheet{N}.xml
@@ -1330,6 +1346,125 @@ fn emit_page_setup<W: Write>(w: &mut W, ws: &Worksheet) -> Result<(), ExcelrsErr
 // xl/worksheets/sheet{N}.xml
 // ---------------------------------------------------------------------------
 
+// (v1.2.0) Conditional-formatting rule emission
+// ---------------------------------------------------------------------------
+
+fn emit_cf_color_attrs(col: &crate::model::conditional_formatting::CfColor) -> String {
+    let mut s = String::new();
+    if let Some(a) = &col.argb {
+        s.push_str(&format!(r#" rgb="{}""#, escape(a)));
+    }
+    if let Some(t) = col.theme {
+        s.push_str(&format!(r#" theme="{}""#, t));
+    }
+    if let Some(i) = col.indexed {
+        s.push_str(&format!(r#" indexed="{}""#, i));
+    }
+    if let Some(t) = col.tint {
+        s.push_str(&format!(r#" tint="{}""#, t));
+    }
+    s
+}
+
+fn emit_cf_rule<W: Write>(w: &mut W, rule: &crate::model::conditional_formatting::CfRule) -> Result<(), ExcelrsError> {
+    let mut attrs = format!(r#"type="{}" priority="{}""#, escape(&rule.r#type), rule.priority);
+    if let Some(op) = &rule.operator {
+        attrs.push_str(&format!(r#" operator="{}""#, escape(op)));
+    }
+    if let Some(id) = rule.dxf_id {
+        attrs.push_str(&format!(r#" dxfId="{}""#, id));
+    }
+    if let Some(tp) = &rule.time_period {
+        attrs.push_str(&format!(r#" timePeriod="{}""#, escape(tp)));
+    }
+    if let Some(rank) = rule.rank {
+        attrs.push_str(&format!(r#" rank="{}""#, rank));
+    }
+    if let Some(p) = rule.percent {
+        attrs.push_str(&format!(r#" percent="{}""#, if p { "1" } else { "0" }));
+    }
+    if let Some(b) = rule.bottom {
+        attrs.push_str(&format!(r#" bottom="{}""#, if b { "1" } else { "0" }));
+    }
+    if let Some(t) = &rule.text {
+        attrs.push_str(&format!(r#" text="{}""#, escape(t)));
+    }
+    if let Some(rev) = rule.reverse {
+        attrs.push_str(&format!(r#" reverse="{}""#, if rev { "1" } else { "0" }));
+    }
+    if let Some(sv) = rule.show_value {
+        attrs.push_str(&format!(r#" showValue="{}""#, if sv { "1" } else { "0" }));
+    }
+    write_str(w, &format!("<cfRule {}>", attrs))?;
+
+    if let Some(formulas) = &rule.formula {
+        for f in formulas {
+            write_str(w, &format!("<formula>{}</formula>", escape(f)))?;
+        }
+    }
+
+    match rule.r#type.as_str() {
+        "colorScale" => {
+            if let (Some(cfvo), Some(colors)) = (&rule.cfvo, &rule.color) {
+                write_str(w, "<colorScale>")?;
+                for c in cfvo {
+                    let val = c
+                        .value
+                        .as_ref()
+                        .map(|v| format!(r#" val="{}""#, escape(v)))
+                        .unwrap_or_default();
+                    write_str(w, &format!(r#"<cfvo type="{}"{}"/>"#, escape(&c.r#type), val))?;
+                }
+                for col in colors {
+                    write_str(w, &format!("<color{}/>", emit_cf_color_attrs(col)))?;
+                }
+                write_str(w, "</colorScale>")?;
+            }
+        }
+        "dataBar" => {
+            if let (Some(cfvo), Some(col)) = (&rule.cfvo, &rule.data_bar_color) {
+                write_str(w, "<dataBar>")?;
+                for c in cfvo {
+                    let val = c
+                        .value
+                        .as_ref()
+                        .map(|v| format!(r#" val="{}""#, escape(v)))
+                        .unwrap_or_default();
+                    write_str(w, &format!(r#"<cfvo type="{}"{}"/>"#, escape(&c.r#type), val))?;
+                }
+                write_str(w, &format!("<color{}/>", emit_cf_color_attrs(col)))?;
+                write_str(w, "</dataBar>")?;
+            }
+        }
+        "iconSet" => {
+            let icon_set = rule.icon_set.as_deref().unwrap_or("3TrafficLights");
+            write_str(w, &format!(r#"<iconSet iconSet="{}""#, escape(icon_set)))?;
+            if rule.reverse.unwrap_or(false) {
+                write_str(w, r#" reverse="1""#)?;
+            }
+            if !rule.show_value.unwrap_or(true) {
+                write_str(w, r#" showValue="0""#)?;
+            }
+            write_str(w, ">")?;
+            if let Some(cfvo) = &rule.cfvo {
+                for c in cfvo {
+                    let val = c
+                        .value
+                        .as_ref()
+                        .map(|v| format!(r#" val="{}""#, escape(v)))
+                        .unwrap_or_default();
+                    write_str(w, &format!(r#"<cfvo type="{}"{}"/>"#, escape(&c.r#type), val))?;
+                }
+            }
+            write_str(w, "</iconSet>")?;
+        }
+        _ => {}
+    }
+
+    write_str(w, "</cfRule>")?;
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn write_sheet_xml<W: Write>(
     w: &mut W,
@@ -1378,6 +1513,22 @@ fn write_sheet_xml<W: Write>(
             write_str(w, &format!(r#"<mergeCell ref="{}"/>"#, escape(range)))?;
         }
         write_str(w, "</mergeCells>")?;
+    }
+
+    // (v1.2.0) conditional formatting — after mergeCells, before dataValidations
+    let conditional_formats = ws.get_conditional_formatting_inner();
+    if !conditional_formats.is_empty() {
+        for cf in &conditional_formats {
+            if cf.rules.is_empty() {
+                continue;
+            }
+            let cf_line = format!(r#"<conditionalFormatting sqref="{}">"#, escape(&cf.sqref));
+            write_str(w, &cf_line)?;
+            for rule in &cf.rules {
+                emit_cf_rule(w, rule)?;
+            }
+            write_str(w, "</conditionalFormatting>")?;
+        }
     }
 
     // <dataValidations> - item 3 (v0.8.0)
