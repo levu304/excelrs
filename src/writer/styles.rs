@@ -13,7 +13,7 @@ use std::io::Write;
 use quick_xml::escape::escape;
 
 use crate::error::ExcelrsError;
-use crate::model::style::{Alignment, Border, Fill, Font, Style};
+use crate::model::style::{Alignment, Border, Dxf, Fill, Font, Style};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -36,6 +36,8 @@ pub struct StyleTable {
     /// Per-cell mapping into `cell_xfs`. Length equals the input style count.
     /// `cell_indices[i]` = the unique cellXfs index for the i-th input cell.
     pub cell_indices: Vec<u32>,
+    /// Differential formats (`<dxfs>`) referenced by conditional-format rules.
+    pub dxfs: Vec<Dxf>,
 }
 
 /// One cell level format (XF) record — indices into the sub-tables above.
@@ -216,6 +218,7 @@ pub fn build_style_table(styles: &[Option<Style>]) -> StyleTable {
         alignments,
         cell_xfs,
         cell_indices,
+        dxfs: Vec::new(),
     }
 }
 
@@ -257,7 +260,156 @@ pub fn emit_styles_xml<W: Write>(w: &mut W, table: &StyleTable) -> Result<(), Ex
         r#"<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>"#,
     )?;
 
+    // dxfs — differential formats referenced by conditional-format rules
+    emit_dxfs(w, &table.dxfs)?;
+
     write_str(w, "</styleSheet>")?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// dxfs (v1.2.0): differential formats for conditional formatting
+// ---------------------------------------------------------------------------
+
+/// Emit a single `<dxf>` differential format.
+fn emit_dxf<W: Write>(w: &mut W, dxf: &Dxf) -> Result<(), ExcelrsError> {
+    write_str(w, "<dxf>")?;
+
+    // font
+    if let Some(ref f) = dxf.font {
+        write_str(w, "<font>")?;
+        if let Some(sz) = f.size {
+            write_str(w, &format!(r#"<sz val="{}"/>"#, sz))?;
+        }
+        if let Some(ref name) = f.name {
+            write_str(w, &format!(r#"<name val="{}"/>"#, escape(name)))?;
+        }
+        if f.bold.unwrap_or(false) {
+            write_str(w, r#"<b/>"#)?;
+        }
+        if f.italic.unwrap_or(false) {
+            write_str(w, r#"<i/>"#)?;
+        }
+        if f.underline.unwrap_or(false) {
+            write_str(w, r#"<u/>"#)?;
+        }
+        write_str(w, &emit_color_attrs("color", &f.color, &f.color_theme, &f.color_tint))?;
+        write_str(w, "</font>")?;
+    }
+
+    // fill
+    if let Some(ref fill) = dxf.fill {
+        write_str(w, "<fill>")?;
+        if fill.kind == "gradient" {
+            let (el, attrs) = if fill.gradient_type.as_deref() == Some("path") {
+                let mut a = String::from(r#"type=\"path\""#);
+                if let Some(v) = fill.gradient_left {
+                    a.push_str(&format!(r#" left=\"{}\""#, v));
+                }
+                if let Some(v) = fill.gradient_right {
+                    a.push_str(&format!(r#" right=\"{}\""#, v));
+                }
+                if let Some(v) = fill.gradient_top {
+                    a.push_str(&format!(r#" top=\"{}\""#, v));
+                }
+                if let Some(v) = fill.gradient_bottom {
+                    a.push_str(&format!(r#" bottom=\"{}\""#, v));
+                }
+                ("gradientFill", a)
+            } else {
+                let mut a = String::from(r#"type=\"linear\""#);
+                if let Some(deg) = fill.gradient_degree {
+                    a.push_str(&format!(r#" degree=\"{}\""#, deg));
+                }
+                ("gradientFill", a)
+            };
+            write_str(w, &format!("<{} {}>", el, attrs))?;
+            if let Some(ref stops) = fill.gradient_stops {
+                for stop in stops {
+                    write_str(
+                        w,
+                        &format!(
+                            r#"<stop position=\"{}\"><color rgb=\"{}\"/></stop>"#,
+                            stop.position,
+                            escape(&stop.color)
+                        ),
+                    )?;
+                }
+            }
+            write_str(w, "</gradientFill>")?;
+        } else if fill.foreground.is_some() || fill.background.is_some() {
+            write_str(w, &format!(r#"<patternFill patternType=\"{}\">"#, escape(&fill.kind)))?;
+            write_str(
+                w,
+                &emit_color_attrs(
+                    "fgColor",
+                    &fill.foreground,
+                    &fill.foreground_theme,
+                    &fill.foreground_tint,
+                ),
+            )?;
+            write_str(
+                w,
+                &emit_color_attrs(
+                    "bgColor",
+                    &fill.background,
+                    &fill.background_theme,
+                    &fill.background_tint,
+                ),
+            )?;
+            write_str(w, "</patternFill>")?;
+        }
+        write_str(w, "</fill>")?;
+    }
+
+    // border
+    if let Some(ref b) = dxf.border {
+        write_str(w, "<border>")?;
+        for (side, el) in [
+            (&b.left, "left"),
+            (&b.right, "right"),
+            (&b.top, "top"),
+            (&b.bottom, "bottom"),
+            (&b.diagonal, "diagonal"),
+        ] {
+            match side {
+                Some(bs) => {
+                    if bs.style.is_empty() {
+                        write_str(w, &format!("<{}/>", el))?;
+                    } else {
+                        write_str(w, &format!(r#"<{} style=\"{}\">"#, el, escape(&bs.style)))?;
+                        write_str(
+                            w,
+                            &emit_color_attrs("color", &bs.color, &bs.color_theme, &bs.color_tint),
+                        )?;
+                        write_str(w, &format!("</{}>", el))?;
+                    }
+                }
+                None => {
+                    write_str(w, &format!("<{}/>", el))?;
+                }
+            }
+        }
+        write_str(w, "</border>")?;
+    }
+
+    // ponytail: dxf numFmt is omitted on write — it requires a numFmtId cross-
+    // referencing the custom numFmts table. Conditional-format dxfs with an
+    // explicit number format are rare; add when a test requires it.
+    write_str(w, "</dxf>")?;
+    Ok(())
+}
+
+/// Emit the `<dxfs>` collection. Omitted entirely when empty.
+fn emit_dxfs<W: Write>(w: &mut W, dxfs: &[Dxf]) -> Result<(), ExcelrsError> {
+    if dxfs.is_empty() {
+        return Ok(());
+    }
+    write_str(w, &format!(r#"<dxfs count=\"{}\">"#, dxfs.len()))?;
+    for dxf in dxfs {
+        emit_dxf(w, dxf)?;
+    }
+    write_str(w, "</dxfs>")?;
     Ok(())
 }
 

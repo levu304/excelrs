@@ -248,6 +248,36 @@ pub struct Style {
 }
 
 // ---------------------------------------------------------------------------
+// Differential format (dxf)
+// ---------------------------------------------------------------------------
+
+/// Differential format referenced by conditional-format rules via `dxfId`.
+///
+/// A subset of [`Style`] (no alignment) — only the font/fill/border/num-fmt
+/// bits that differ from Normal. Stored in `xl/styles.xml` `<dxfs>` and
+/// referenced from a worksheet `<cfRule dxfId="N">`.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct Dxf {
+    pub font: Option<Font>,
+    pub fill: Option<Fill>,
+    pub border: Option<Border>,
+    pub num_fmt: Option<String>,
+}
+
+impl Dxf {
+    /// Build a differential format from a cell style (used when emitting a
+    /// conditional-format rule's `style`).
+    pub fn from_style(s: &Style) -> Dxf {
+        Dxf {
+            font: s.font.clone(),
+            fill: s.fill.clone(),
+            border: s.border.clone(),
+            num_fmt: s.num_fmt.clone(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Validation helpers
 // ---------------------------------------------------------------------------
 

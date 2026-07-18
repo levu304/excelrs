@@ -365,6 +365,10 @@ export declare class Worksheet {
   addImage(opts: AddImageOptions): number
   /** Return all embedded images on the worksheet. */
   getImages(): Array<ImageInfo>
+  /** Add or update a conditional format (ExcelJS `ws.addConditionalFormatting`). Upserts by sqref. */
+  addConditionalFormatting(cf: ConditionalFormat): void
+  /** Return all conditional formats on the worksheet, grouped by range. */
+  getConditionalFormatting(): Array<ConditionalFormat>
   /**
    * Add a structured table to the worksheet (ExcelJS `ws.addTable`).
    *
@@ -504,6 +508,72 @@ export interface DataValidation {
   errorTitle?: string
   /** Error message type: "information", "warning", "stop". */
   errorStyle?: string
+}
+
+/** A color used by `colorScale` / `dataBar` / `iconSet` rules. */
+export interface CfColor {
+  /** ARGB/RGB hex. */
+  argb?: string
+  /** Theme color index. */
+  theme?: number
+  /** Indexed palette color. */
+  indexed?: number
+  /** Tint applied to the color. */
+  tint?: number
+}
+
+/** A conditional-format value object (`cfvo`): a stop on `colorScale` / `dataBar` / `iconSet`. */
+export interface Cfvo {
+  /** Value type: `num` | `percent` | `percentile` | `formula` | `min` | `max` | `autoMin` | `autoMax`. */
+  type: string
+  /** Value (absent for `min` / `max` / `autoMin` / `autoMax`). */
+  value?: string
+}
+
+/** One conditional-format rule. */
+export interface CfRule {
+  /** Rule type. */
+  type: string
+  /** Worksheet-global unique 1-based priority. */
+  priority: number
+  /** Index into the workbook `dxfs` collection (rules with a `style` only). */
+  dxfId?: number
+  /** `cellIs` / `containsText` operator. */
+  operator?: string
+  /** Formula(s). */
+  formula?: Array<string>
+  /** `containsText` text. */
+  text?: string
+  /** `timePeriod` value. */
+  timePeriod?: string
+  /** `top10` rank. */
+  rank?: number
+  /** `top10` percent flag. */
+  percent?: boolean
+  /** `top10` bottom flag. */
+  bottom?: boolean
+  /** Differential style applied to matching cells. */
+  style?: Style
+  /** `colorScale` / `dataBar` / `iconSet` value objects. */
+  cfvo?: Array<Cfvo>
+  /** `colorScale` colors. */
+  color?: Array<CfColor>
+  /** `dataBar` color. */
+  dataBarColor?: CfColor
+  /** `iconSet` name. */
+  iconSet?: string
+  /** `iconSet` reverse flag. */
+  reverse?: boolean
+  /** `dataBar` / `iconSet` show-value flag. */
+  showValue?: boolean
+}
+
+/** A conditional format: a cell range plus its rules. */
+export interface ConditionalFormat {
+  /** Cell range reference (e.g. `"A1:A10"` or `"A1:A10 C1:C10"`). */
+  sqref: string
+  /** Rules applied to `sqref`. */
+  rules: Array<CfRule>
 }
 
 /**

@@ -36,7 +36,7 @@ use quick_xml::Reader as XmlReader;
 
 use crate::error::ExcelrsError;
 use crate::model::color::{Color, ThemeColorScheme};
-use crate::model::style::{Alignment, Border, BorderStyle, Fill, Font, GradientStop, Style};
+use crate::model::style::{Alignment, Border, BorderStyle, Dxf, Fill, Font, GradientStop, Style};
 use crate::types;
 
 /// Per-sheet cell-to-style-index map: (1-indexed row, col) → cellXfs index.
@@ -83,6 +83,8 @@ pub struct StyleTableRead {
     pub fills: Vec<Fill>,
     pub borders: Vec<Border>,
     pub cell_xfs: Vec<ParsedCellXf>,
+    /// Differential formats (`<dxfs>`) — referenced by conditional-format rules.
+    pub dxfs: Vec<Dxf>,
 }
 
 /// One parsed `<xf>` record from `<cellXfs>`.
@@ -113,6 +115,7 @@ impl StyleTableRead {
             fills: Vec::new(),
             borders: Vec::new(),
             cell_xfs: Vec::new(),
+            dxfs: Vec::new(),
         }
     }
 
@@ -257,7 +260,11 @@ fn parse_color(attrs: &[Attribute], scheme: &ThemeColorScheme) -> Option<Color> 
     if let Some(idx_str) = str_attr(attrs, b"indexed") {
         if let Ok(index) = idx_str.parse::<usize>() {
             if let Some(rgb) = scheme.resolve_indexed(index) {
-                return Some(Color { rgb, theme: None, tint: None });
+                return Some(Color {
+                    rgb,
+                    theme: None,
+                    tint: None,
+                });
             }
         }
     }
@@ -681,6 +688,7 @@ pub fn parse_style_table(data: &[u8], scheme: &ThemeColorScheme) -> Result<Style
         fills,
         borders,
         cell_xfs,
+        dxfs: Vec::new(),
     })
 }
 
@@ -755,11 +763,15 @@ pub fn parse_styles_and_sheet_maps(
     };
 
     // Parse xl/styles.xml (optional — some files lack it)
-    let style_table = if let Ok(styles_bytes) = read_entry(&mut archive, "xl/styles.xml") {
+    let mut style_table = if let Ok(styles_bytes) = read_entry(&mut archive, "xl/styles.xml") {
         parse_style_table(&styles_bytes, &scheme)?
     } else {
         StyleTableRead::empty()
     };
+    // Differential formats (v1.2.0): parsed from the same styles bytes.
+    if let Ok(styles_bytes) = read_entry(&mut archive, "xl/styles.xml") {
+        style_table.dxfs = parse_dxfs(&styles_bytes, &scheme);
+    }
 
     // Parse sheet style maps
     let mut sheet_style_maps: Vec<SheetStyleMap> = Vec::with_capacity(sheet_count);
@@ -773,6 +785,220 @@ pub fn parse_styles_and_sheet_maps(
     }
 
     Ok((style_table, sheet_style_maps))
+}
+
+// ---------------------------------------------------------------------------
+// Differential formats (v1.2.0)
+// ---------------------------------------------------------------------------
+
+/// Parse the `<dxfs>` collection from `xl/styles.xml` into differential formats.
+///
+/// A `<dxf>` holds an optional `<font>`, `<fill>`, `<border>`, and `<numFmt>`.
+/// Isolated from the top-level `fonts`/`fills`/`borders` accumulators (which
+/// skip `dxfs`), so it never disturbs cell-style parsing.
+pub fn parse_dxfs(data: &[u8], scheme: &ThemeColorScheme) -> Vec<Dxf> {
+    let mut reader = XmlReader::from_reader(data);
+    let mut dxfs: Vec<Dxf> = Vec::new();
+    let mut current: Option<Dxf> = None;
+    let mut font: Option<Font> = None;
+    let mut fill: Option<Fill> = None;
+    let mut in_pattern_fill = false;
+    let mut border: Option<Border> = None;
+    let mut current_side: Option<String> = None;
+    let mut current_side_style: Option<BorderStyle> = None;
+    let mut in_dxf = false;
+    let mut events: u64 = 0;
+    loop {
+        events += 1;
+        if events > MAX_EVENTS as u64 {
+            break;
+        }
+        match reader.read_event() {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                let tag = e.local_name().as_ref().to_vec();
+                match &*tag {
+                    b"dxfs" => {
+                        in_dxf = true;
+                    }
+                    b"dxf" if in_dxf => {
+                        current = Some(Dxf::default());
+                        font = None;
+                        fill = None;
+                        in_pattern_fill = false;
+                        border = None;
+                        current_side = None;
+                        current_side_style = None;
+                    }
+                    // -- font --
+                    b"font" if current.is_some() => {
+                        font = Some(Font::default());
+                    }
+                    b"name" if font.is_some() => {
+                        if let Some(name) = str_attr(&e.attributes().filter_map(|a| a.ok()).collect::<Vec<_>>(), b"val")
+                        {
+                            if let Some(ref mut f) = font {
+                                f.name = Some(name.to_owned());
+                            }
+                        }
+                    }
+                    b"sz" if font.is_some() => {
+                        if let Some(sz) = f64_attr(&e.attributes().filter_map(|a| a.ok()).collect::<Vec<_>>(), b"val") {
+                            if let Some(ref mut f) = font {
+                                f.size = Some(sz);
+                            }
+                        }
+                    }
+                    b"b" if font.is_some() => {
+                        if let Some(ref mut f) = font {
+                            f.bold = Some(true);
+                        }
+                    }
+                    b"i" if font.is_some() => {
+                        if let Some(ref mut f) = font {
+                            f.italic = Some(true);
+                        }
+                    }
+                    b"u" if font.is_some() => {
+                        if let Some(ref mut f) = font {
+                            f.underline = Some(true);
+                        }
+                    }
+                    b"color" if font.is_some() => {
+                        let attrs: Vec<_> = e.attributes().filter_map(|a| a.ok()).collect();
+                        if let Some(c) = parse_color(&attrs, scheme) {
+                            if let Some(ref mut f) = font {
+                                f.color = Some(c.rgb);
+                                f.color_theme = c.theme;
+                                f.color_tint = c.tint;
+                            }
+                        }
+                    }
+                    // -- fill --
+                    b"fill" if current.is_some() => {
+                        fill = Some(Fill {
+                            kind: "none".into(),
+                            ..Default::default()
+                        });
+                        in_pattern_fill = false;
+                    }
+                    b"patternFill" if fill.is_some() => {
+                        in_pattern_fill = true;
+                        let attrs = e.attributes().filter_map(|a| a.ok()).collect::<Vec<_>>();
+                        if let Some(pt) = str_attr(&attrs, b"patternType") {
+                            if let Some(ref mut f) = fill {
+                                f.kind = pt.to_owned();
+                            }
+                        }
+                    }
+                    b"fgColor" if fill.is_some() || in_pattern_fill => {
+                        let attrs = e.attributes().filter_map(|a| a.ok()).collect::<Vec<_>>();
+                        if let Some(c) = parse_color(&attrs, scheme) {
+                            if let Some(ref mut f) = fill {
+                                f.foreground = Some(c.rgb);
+                                f.foreground_theme = c.theme;
+                                f.foreground_tint = c.tint;
+                            }
+                        }
+                    }
+                    b"bgColor" if fill.is_some() || in_pattern_fill => {
+                        let attrs = e.attributes().filter_map(|a| a.ok()).collect::<Vec<_>>();
+                        if let Some(c) = parse_color(&attrs, scheme) {
+                            if let Some(ref mut f) = fill {
+                                f.background = Some(c.rgb);
+                                f.background_theme = c.theme;
+                                f.background_tint = c.tint;
+                            }
+                        }
+                    }
+                    b"gradientFill" if fill.is_some() => {
+                        if let Some(ref mut f) = fill {
+                            f.kind = "gradient".to_owned();
+                        }
+                    }
+                    // -- border --
+                    b"border" if current.is_some() => {
+                        border = Some(Border::default());
+                    }
+                    b"left" | b"right" | b"top" | b"bottom" | b"diagonal" if border.is_some() => {
+                        let side_name = std::str::from_utf8(&tag).unwrap_or("").to_owned();
+                        let attrs = e.attributes().filter_map(|a| a.ok()).collect::<Vec<_>>();
+                        let style_val = str_attr(&attrs, b"style");
+                        current_side = Some(side_name);
+                        current_side_style = Some(BorderStyle {
+                            style: style_val.unwrap_or("").to_owned(),
+                            ..Default::default()
+                        });
+                    }
+                    b"color" if current_side.is_some() => {
+                        let attrs = e.attributes().filter_map(|a| a.ok()).collect::<Vec<_>>();
+                        if let Some(c) = parse_color(&attrs, scheme) {
+                            if let Some(ref mut bs) = current_side_style {
+                                bs.color = Some(c.rgb);
+                                bs.color_theme = c.theme;
+                                bs.color_tint = c.tint;
+                            }
+                        }
+                    }
+                    // -- numFmt --
+                    b"numFmt" if current.is_some() => {
+                        let attrs = e.attributes().filter_map(|a| a.ok()).collect::<Vec<_>>();
+                        if let Some(code) = str_attr(&attrs, b"formatCode") {
+                            if let Some(ref mut d) = current {
+                                d.num_fmt = Some(code.to_owned());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::End(ref e)) => {
+                let tag = e.local_name().as_ref().to_vec();
+                match &*tag {
+                    b"font" => {
+                        if let (Some(ref mut d), f) = (&mut current, font.take()) {
+                            d.font = f;
+                        }
+                    }
+                    b"fill" => {
+                        if let (Some(ref mut d), f) = (&mut current, fill.take()) {
+                            d.fill = f;
+                        }
+                    }
+                    b"border" => {
+                        if let (Some(ref mut d), b) = (&mut current, border.take()) {
+                            d.border = b;
+                        }
+                    }
+                    b"left" | b"right" | b"top" | b"bottom" | b"diagonal" if border.is_some() => {
+                        if let (Some(ref mut b), Some(style)) = (border.as_mut(), current_side_style.take()) {
+                            match &*tag {
+                                b"left" => b.left = Some(style),
+                                b"right" => b.right = Some(style),
+                                b"top" => b.top = Some(style),
+                                b"bottom" => b.bottom = Some(style),
+                                b"diagonal" => b.diagonal = Some(style),
+                                _ => {}
+                            }
+                        }
+                        current_side = None;
+                    }
+                    b"dxf" if in_dxf => {
+                        if let Some(d) = current.take() {
+                            dxfs.push(d);
+                        }
+                    }
+                    b"dxfs" => {
+                        in_dxf = false;
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+    dxfs
 }
 
 // ---------------------------------------------------------------------------
@@ -1286,6 +1512,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            dxfs: Vec::new(),
         };
         let style = table.resolve_style(1).unwrap();
         assert_eq!(style.font.as_ref().unwrap().bold, Some(true));
