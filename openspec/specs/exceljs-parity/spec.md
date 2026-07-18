@@ -65,3 +65,8 @@ Each `excelrs` release SHALL implement the next roadmap item(s) and update this 
 - **WHEN** release v1.1.0 is cut
 - **THEN** the matrix marks `tables` as `shipped`, advancing it from `planned`/`targeted`
 
+#### Scenario: v1.2.0 ships conditional formatting
+
+- **WHEN** release v1.2.0 is cut
+- **THEN** the matrix marks `conditional formatting` as `shipped`, advancing it from `targeted`
+
