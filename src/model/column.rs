@@ -29,6 +29,9 @@ pub struct Column {
     /// explicit cell-level style). Write-only in v0.2.0.
     #[serde(default)]
     pub(crate) style: Option<Style>,
+    /// Outline/grouping level for this column, `0`–`7` (Excel's cap). `0` means no grouping.
+    #[serde(default)]
+    pub(crate) outline_level: u8,
 }
 
 #[napi]
@@ -42,6 +45,7 @@ impl Column {
             width,
             hidden: false,
             style: None,
+            outline_level: 0,
         }
     }
 
@@ -105,6 +109,20 @@ impl Column {
         }
         self.style = Some(style.validate().map_err(|e| napi::Error::from_reason(e.to_string()))?);
         Ok(())
+    }
+
+    // -- outline level (grouping) --
+
+    /// Outline/grouping level for this column, `0`–`7` (Excel's cap). `0` means no grouping.
+    #[napi(getter)]
+    pub fn outline_level(&self) -> u8 {
+        self.outline_level
+    }
+
+    /// Set the outline/grouping level. Values are clamped to `0`–`7`.
+    #[napi(setter)]
+    pub fn set_outline_level(&mut self, val: u32) {
+        self.outline_level = val.min(7) as u8;
     }
 
     // -- col_num (read-only) --

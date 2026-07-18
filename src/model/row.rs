@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use napi_derive::napi;
 
 use super::cell::Cell;
+use super::cell::CellValue;
 use crate::model::style::Style;
 use crate::types;
 
@@ -23,6 +24,7 @@ pub struct Row {
     height: Arc<Mutex<Option<f64>>>,
     hidden: Arc<Mutex<bool>>,
     style: Arc<Mutex<Option<Style>>>,
+    outline_level: Arc<Mutex<u8>>,
 }
 
 #[napi]
@@ -35,6 +37,7 @@ impl Row {
             height: Arc::new(Mutex::new(None)),
             hidden: Arc::new(Mutex::new(false)),
             style: Arc::new(Mutex::new(None)),
+            outline_level: Arc::new(Mutex::new(0)),
         }
     }
 
@@ -67,7 +70,19 @@ impl Row {
         *self.hidden.lock().expect("Row hidden lock poisoned") = val;
     }
 
-    // -- style --
+    // -- outline level (grouping) --
+
+    /// Outline/grouping level for this row, `0`–`7` (Excel's cap). `0` means no grouping.
+    #[napi(getter)]
+    pub fn outline_level(&self) -> u32 {
+        *self.outline_level.lock().expect("Row outline_level lock poisoned") as u32
+    }
+
+    /// Set the outline/grouping level. Values are clamped to `0`–`7`.
+    #[napi(setter)]
+    pub fn set_outline_level(&mut self, val: u32) {
+        *self.outline_level.lock().expect("Row outline_level lock poisoned") = val.min(7) as u8;
+    }
 
     #[napi(getter)]
     pub fn style(&self) -> Option<Style> {
@@ -127,6 +142,54 @@ impl Row {
     /// Skips JSON validation (the style came from the source file's style table).
     pub fn set_style_raw(&mut self, val: Option<Style>) {
         *self.style.lock().expect("Row style lock poisoned") = val;
+    }
+
+    /// Internal: clear the row-level style and every cell's style. Used by
+    /// `Worksheet.duplicateRow` when `includeStyle` is false.
+    pub fn clear_styles(&mut self) {
+        *self.style.lock().expect("Row style lock poisoned") = None;
+        for cell in self.cells.values_mut() {
+            cell.set_style_raw(None);
+        }
+    }
+
+    /// Internal: renumber this row to `new_number`, updating the cached row
+    /// number and renumbering every cell (row + A1 address) so addresses stay
+    /// consistent after insert/splice/duplicate shifts.
+    pub fn renumber(&mut self, new_number: u32) {
+        self.number = new_number;
+        for cell in self.cells.values_mut() {
+            cell.renumber(new_number);
+        }
+    }
+
+    /// Internal: build a row at `number` from a list of JS values, reusing the
+    /// same value mapping as `Worksheet.add_row`.
+    pub fn from_values(number: u32, values: &[serde_json::Value]) -> Self {
+        let mut row = Row::new(number);
+        for (i, val) in values.iter().enumerate() {
+            let col = (i + 1) as u32;
+            let cv = match val {
+                serde_json::Value::Number(n) => CellValue {
+                    value_type: "Number".into(),
+                    number: n.as_f64(),
+                    ..Default::default()
+                },
+                serde_json::Value::String(s) => CellValue {
+                    value_type: "String".into(),
+                    string: Some(s.clone()),
+                    ..Default::default()
+                },
+                serde_json::Value::Bool(b) => CellValue {
+                    value_type: "Boolean".into(),
+                    boolean: Some(*b),
+                    ..Default::default()
+                },
+                _ => CellValue::default(),
+            };
+            row.set_cell_value(col, cv);
+        }
+        row
     }
 
     /// Number of cells in this row.

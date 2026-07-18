@@ -421,6 +421,15 @@ impl Cell {
         self.inner.lock().expect("Cell lock poisoned").formula = formula;
     }
 
+    /// Internal: renumber this cell to a new row, updating its cached `row`
+    /// and recomputing its A1 `address`. Used when rows are shifted
+    /// (insert/splice/duplicate) so cell addresses stay consistent.
+    pub fn renumber(&mut self, new_row: u32) {
+        let mut inner = self.inner.lock().expect("Cell lock poisoned");
+        inner.row = new_row;
+        inner.address = Cell::compute_address(new_row, inner.col);
+    }
+
     /// A cell is "effectively empty" when it has no value, no formula, and
     /// no style — i.e., it was only created by a read-side `getCell` and
     /// never populated. The writer skips these cells to avoid phantom output.

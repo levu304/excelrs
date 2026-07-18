@@ -8,7 +8,7 @@
 //! `ws.setColumns([...])` work even when `ws` was obtained from
 //! `wb.addWorksheet("Sheet1")`.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use napi_derive::napi;
@@ -73,6 +73,8 @@ pub struct Worksheet {
     page_setup: Arc<Mutex<Option<PageSetup>>>,
     images: Arc<Mutex<Vec<WorksheetImage>>>,
     tables: TableList,
+    row_breaks: Arc<Mutex<BTreeSet<u32>>>,
+    col_breaks: Arc<Mutex<BTreeSet<u32>>>,
 }
 
 #[napi]
@@ -94,6 +96,8 @@ impl Worksheet {
             page_setup: Arc::new(Mutex::new(None)),
             images: Arc::new(Mutex::new(Vec::new())),
             tables: Arc::new(Mutex::new(Vec::new())),
+            row_breaks: Arc::new(Mutex::new(BTreeSet::new())),
+            col_breaks: Arc::new(Mutex::new(BTreeSet::new())),
         }
     }
 
@@ -241,6 +245,180 @@ impl Worksheet {
             .lock()
             .expect("Worksheet rows lock poisoned")
             .remove(&row_number);
+    }
+
+    // -- row/column page breaks --
+
+    /// All row page breaks (1-indexed row numbers), sorted.
+    #[napi(getter)]
+    pub fn row_breaks(&self) -> Vec<u32> {
+        let mut v: Vec<u32> = self
+            .row_breaks
+            .lock()
+            .expect("Worksheet row_breaks lock poisoned")
+            .iter()
+            .copied()
+            .collect();
+        v.sort_unstable();
+        v
+    }
+
+    /// Replace the row page breaks with the given 1-indexed row numbers.
+    #[napi(setter)]
+    pub fn set_row_breaks(&mut self, breaks: Vec<u32>) {
+        *self.row_breaks.lock().expect("Worksheet row_breaks lock poisoned") = breaks.into_iter().collect();
+    }
+
+    /// All column page breaks (1-indexed column numbers), sorted.
+    #[napi(getter)]
+    pub fn col_breaks(&self) -> Vec<u32> {
+        let mut v: Vec<u32> = self
+            .col_breaks
+            .lock()
+            .expect("Worksheet col_breaks lock poisoned")
+            .iter()
+            .copied()
+            .collect();
+        v.sort_unstable();
+        v
+    }
+
+    /// Replace the column page breaks with the given 1-indexed column numbers.
+    #[napi(setter)]
+    pub fn set_col_breaks(&mut self, breaks: Vec<u32>) {
+        *self.col_breaks.lock().expect("Worksheet col_breaks lock poisoned") = breaks.into_iter().collect();
+    }
+
+    // -- row insertion / mutation --
+
+    /// Insert a new row at `row_number`, shifting existing rows at and below
+    /// `row_number` down by one. Optionally fills the new row from `values`.
+    /// Renumbers every affected row + cell (D1).
+    #[napi]
+    pub fn insert_row(&self, row_number: u32, values: Option<Vec<serde_json::Value>>) -> Row {
+        let mut rows_lock = self.rows.lock().expect("Worksheet rows lock poisoned");
+        let mut ordered: Vec<Row> = rows_lock.values().cloned().collect();
+        let idx = ((row_number as usize).saturating_sub(1)).min(ordered.len());
+        let new_row = match values {
+            Some(v) => Row::from_values(row_number, &v),
+            None => Row::new(row_number),
+        };
+        ordered.insert(idx, new_row);
+        let mut map = BTreeMap::new();
+        for (i, mut r) in ordered.into_iter().enumerate() {
+            let n = (i + 1) as u32;
+            r.renumber(n);
+            map.insert(n, r);
+        }
+        *rows_lock = map;
+        drop(rows_lock);
+        self.get_row(row_number)
+    }
+
+    /// Remove `count` rows starting at `start`, then insert the provided `rows`
+    /// value-arrays in their place. Renumbers everything below (D1). Returns the
+    /// removed rows.
+    #[napi]
+    pub fn splice_rows(&self, start: u32, count: u32, rows: Option<Vec<Vec<serde_json::Value>>>) -> Vec<Row> {
+        let mut rows_lock = self.rows.lock().expect("Worksheet rows lock poisoned");
+        let mut ordered: Vec<Row> = rows_lock.values().cloned().collect();
+        let start_idx = (start as usize).saturating_sub(1);
+        let removed: Vec<Row> = if start_idx < ordered.len() {
+            let tail = ordered.split_off(start_idx);
+            let take = (count as usize).min(tail.len());
+            let (taken, rest) = tail.split_at(take);
+            ordered.extend(rest.to_vec());
+            taken.to_vec()
+        } else {
+            Vec::new()
+        };
+        if let Some(new_rows) = rows {
+            for (i, vals) in new_rows.into_iter().enumerate() {
+                ordered.insert(start_idx + i, Row::from_values(0, &vals));
+            }
+        }
+        let mut map = BTreeMap::new();
+        for (i, mut r) in ordered.into_iter().enumerate() {
+            let n = (i + 1) as u32;
+            r.renumber(n);
+            map.insert(n, r);
+        }
+        *rows_lock = map;
+        removed
+    }
+
+    /// Insert `count` copies of the row at `row_number` immediately below it,
+    /// copying values and (when `include_style`) the row/cell styles. Renumbers
+    /// everything below (D1). Returns the duplicated rows.
+    #[napi]
+    pub fn duplicate_row(&self, row_number: u32, count: u32, include_style: bool) -> Vec<Row> {
+        let mut rows_lock = self.rows.lock().expect("Worksheet rows lock poisoned");
+        let mut ordered: Vec<Row> = rows_lock.values().cloned().collect();
+        let src_idx = (row_number as usize).saturating_sub(1);
+        let mut copies: Vec<Row> = if src_idx < ordered.len() {
+            let src = ordered[src_idx].clone();
+            (0..count)
+                .map(|_| {
+                    let mut c = src.clone();
+                    if !include_style {
+                        c.clear_styles();
+                    }
+                    c
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        for (i, c) in copies.iter_mut().enumerate() {
+            ordered.insert(src_idx + 1 + i, c.clone());
+        }
+        let mut map = BTreeMap::new();
+        for (i, mut r) in ordered.into_iter().enumerate() {
+            let n = (i + 1) as u32;
+            r.renumber(n);
+            map.insert(n, r);
+        }
+        *rows_lock = map;
+        drop(rows_lock);
+        self.get_rows(row_number + 1, count)
+    }
+
+    // -- reader hooks (used by the XLSX reader) --
+
+    /// Set the outline/grouping level of a row (creating it if absent).
+    pub fn insert_row_outline_level(&self, row_num: u32, level: u8) {
+        let mut rows = self.rows.lock().expect("Worksheet rows lock poisoned");
+        let ws_row = rows.entry(row_num).or_insert_with(|| Row::new(row_num));
+        ws_row.set_outline_level(level as u32);
+    }
+
+    /// Set the outline/grouping level of a column (creating it at `col_num` if absent).
+    pub fn insert_column_outline_level(&self, col_num: u32, level: u8) {
+        let mut cols = self.columns.lock().expect("Worksheet columns lock poisoned");
+        if let Some(col) = cols.iter_mut().find(|c| c.col_num() == col_num) {
+            col.set_outline_level(level as u32);
+        } else {
+            let mut c = Column::new(String::new(), String::new(), 0.0);
+            c.col_num = col_num;
+            c.set_outline_level(level as u32);
+            cols.push(c);
+        }
+    }
+
+    /// Add a row page break at the given 1-indexed row number.
+    pub fn insert_row_break(&self, row: u32) {
+        self.row_breaks
+            .lock()
+            .expect("Worksheet row_breaks lock poisoned")
+            .insert(row);
+    }
+
+    /// Add a column page break at the given 1-indexed column number.
+    pub fn insert_col_break(&self, col: u32) {
+        self.col_breaks
+            .lock()
+            .expect("Worksheet col_breaks lock poisoned")
+            .insert(col);
     }
 
     // -- rows (iterable) --
