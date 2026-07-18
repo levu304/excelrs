@@ -8,7 +8,7 @@
 //! `ws.setColumns([...])` work even when `ws` was obtained from
 //! `wb.addWorksheet("Sheet1")`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use napi_derive::napi;
@@ -431,6 +431,25 @@ impl Worksheet {
             .expect("Worksheet conditional_formats lock poisoned");
         // Upsert by sqref: remove old, add new.
         formats.retain(|c| c.sqref != cf.sqref);
+        // Fail loud: explicit (non-zero) priorities must be worksheet-global unique.
+        // ExcelJS silently emits duplicate/ambiguous priorities; we reject them.
+        let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        for c in formats.iter() {
+            for r in &c.rules {
+                if r.priority != 0 {
+                    seen.insert(r.priority);
+                }
+            }
+        }
+        for r in &cf.rules {
+            if r.priority != 0
+                && !seen.insert(r.priority) {
+                    return Err(napi::Error::from_reason(format!(
+                        "Duplicate conditional-format priority {}: priorities must be worksheet-global unique",
+                        r.priority
+                    )));
+                }
+        }
         formats.push(cf);
         Ok(())
     }
@@ -886,13 +905,20 @@ impl Worksheet {
             .conditional_formats
             .lock()
             .expect("Worksheet conditional_formats lock poisoned");
+        let mut used: HashSet<u32> = HashSet::new();
+        // Pass 1: reserve explicit priorities so auto-assignment never collides.
+        for cf in cfs.iter() {
+            for rule in &cf.rules {
+                if rule.priority != 0 {
+                    used.insert(rule.priority);
+                }
+            }
+        }
+        // Pass 2: auto-assign free priorities, then assign dxfIds for every rule.
         let mut priority = 0u32;
-        let mut used: std::collections::HashSet<u32> = std::collections::HashSet::new();
         for cf in cfs.iter_mut() {
             for rule in cf.rules.iter_mut() {
                 if rule.priority == 0 {
-                    // Auto-assign the next free 1-based priority, skipping
-                    // any value already taken by an explicit rule.
                     loop {
                         priority += 1;
                         if used.insert(priority) {
@@ -900,8 +926,6 @@ impl Worksheet {
                         }
                     }
                     rule.priority = priority;
-                } else {
-                    used.insert(rule.priority);
                 }
                 match &rule.style {
                     Some(style) => {

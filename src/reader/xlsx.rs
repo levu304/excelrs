@@ -2808,10 +2808,52 @@ mod tests {
         assert_eq!(a1.rules[0].priority, 5, "explicit priority 5 must be preserved");
         assert_eq!(a2.rules[0].priority, 2, "explicit priority 2 must be preserved");
         assert_ne!(a3.rules[0].priority, 0, "auto-assigned priority must be non-zero");
+        assert_eq!(a3.rules[0].priority, 1, "auto-assigned priority must be the first free slot (1)");
         let mut ps: Vec<u32> = cfs.iter().flat_map(|c| c.rules.iter().map(|r| r.priority)).collect();
         ps.sort_unstable();
         ps.dedup();
         assert_eq!(ps.len(), 3, "priorities must stay unique across the sheet");
+    }
+
+    #[test]
+    fn test_cf_auto_priority_never_collides_with_explicit() {
+        use crate::model::conditional_formatting::{CfRule, ConditionalFormat};
+        use crate::writer::xlsx::workbook_to_bytes;
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("Sheet1".into());
+        // Auto rule added FIRST (priority 0), then an explicit rule wanting 1.
+        ws.add_conditional_formatting(ConditionalFormat {
+            sqref: "A1".into(),
+            rules: vec![CfRule { r#type: "expression".into(), priority: 0, formula: Some(vec!["A1>1".into()]), ..Default::default() }],
+        }).unwrap();
+        ws.add_conditional_formatting(ConditionalFormat {
+            sqref: "A2".into(),
+            rules: vec![CfRule { r#type: "expression".into(), priority: 1, formula: Some(vec!["A2>1".into()]), ..Default::default() }],
+        }).unwrap();
+        let bytes = workbook_to_bytes(&inner).unwrap();
+        let read = crate::reader::xlsx::workbook_inner_from_bytes(&bytes).unwrap();
+        let cfs = read.worksheets[0].get_conditional_formatting();
+        let a1 = cfs.iter().find(|c| c.sqref == "A1").unwrap();
+        let a2 = cfs.iter().find(|c| c.sqref == "A2").unwrap();
+        assert_eq!(a2.rules[0].priority, 1, "explicit priority 1 must be honored");
+        assert_ne!(a1.rules[0].priority, 1, "auto rule must not steal explicit priority 1");
+        assert_eq!(a1.rules[0].priority, 2, "auto rule should take next free slot");
+    }
+
+    #[test]
+    fn test_cf_duplicate_explicit_priority_rejected() {
+        use crate::model::conditional_formatting::{CfRule, ConditionalFormat};
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("Sheet1".into());
+        ws.add_conditional_formatting(ConditionalFormat {
+            sqref: "A1".into(),
+            rules: vec![CfRule { r#type: "expression".into(), priority: 5, formula: Some(vec!["A1>1".into()]), ..Default::default() }],
+        }).unwrap();
+        let dup = ws.add_conditional_formatting(ConditionalFormat {
+            sqref: "A2".into(),
+            rules: vec![CfRule { r#type: "expression".into(), priority: 5, formula: Some(vec!["A2>1".into()]), ..Default::default() }],
+        });
+        assert!(dup.is_err(), "duplicate explicit priority must be rejected");
     }
 
     #[test]

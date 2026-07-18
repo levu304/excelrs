@@ -47,7 +47,10 @@ pub struct CfRule {
     /// | `top10` | `unique` | `duplicate` | `containsText` | `timePeriod`
     /// | `containsBlanks` | `notContainsBlanks` | `containsErrors` | `notContainsErrors`.
     pub r#type: String,
-    /// Worksheet-global unique 1-based priority. `0` = auto-assign on write (document order); any other value is honored as-is.
+    /// Worksheet-global unique 1-based priority. `0` = auto-assign on write
+    /// (document order; never collides with an explicit priority). Any other
+    /// value is honored as-is AND must be worksheet-global unique —
+    /// `Worksheet.addConditionalFormatting` rejects duplicate explicit priorities.
     pub priority: u32,
     /// Index into the workbook `dxfs` collection (rules with a `style` only).
     /// `None` for `colorScale` / `dataBar` / `iconSet`.
