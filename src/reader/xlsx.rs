@@ -1238,7 +1238,7 @@ fn parse_col_outline_levels_from_xml(xml: &str) -> Vec<(u32, u8)> {
                     }
                 }
                 if let (Some(lo), Some(hi), Some(l)) = (min, max, level) {
-                    for c in lo..=hi {
+                    for c in lo..=hi.min(16384) {
                         result.push((c, l.min(7)));
                     }
                 }
@@ -3452,6 +3452,36 @@ mod tests {
         assert!(
             ranges.contains(&"A1:C3".to_string()),
             "namespaced <mergeCell> must parse, got {ranges:?}"
+        );
+    }
+
+    // -- Security regression guards --
+
+    #[test]
+    fn test_xml_col_range_bounded() {
+        // Bug 1: XML range bomb — unbounded lo..=hi loop with u32 max.
+        // A single crafted <col> with min=1, max=4294967295 would iterate
+        // 4 billion times. This test verifies the fix caps hi at 16384.
+        let xml = r#"<cols><col min="1" max="4294967295" outlineLevel="1"/></cols>"#;
+
+        let start = std::time::Instant::now();
+        let result = parse_col_outline_levels_from_xml(xml);
+        let elapsed = start.elapsed();
+
+        // With fix (cap at 16384): ~16k entries, well under 100ms.
+        // Without fix: would either hang forever or OOM.
+        assert!(
+            elapsed.as_millis() < 5000,
+            "Bug 1: XML range bomb took {elapsed:?} — unbounded loop!"
+        );
+
+        assert!(!result.is_empty(), "should have parsed outline levels");
+
+        // Verify the max is bounded at Excel's column limit (16384)
+        let max_col = result.iter().map(|(c, _)| *c).max().unwrap_or(0);
+        assert!(
+            max_col <= 16384,
+            "Bug 1: max col {max_col} exceeds 16384 — unbounded range bomb"
         );
     }
 }

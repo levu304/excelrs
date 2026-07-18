@@ -144,6 +144,14 @@ impl Row {
         *self.style.lock().expect("Row style lock poisoned") = val;
     }
 
+    /// Create independent Arc copies of style and cell-inner fields so that
+    /// subsequent mutations (e.g. via `clear_styles`) don't corrupt the source row.
+    pub(crate) fn detach_styles(&mut self) {
+        let style_val = self.style.lock().expect("Row style lock poisoned").clone();
+        self.style = Arc::new(Mutex::new(style_val));
+        self.cells = self.cells.iter().map(|(&k, v)| (k, v.deep_clone())).collect();
+    }
+
     /// Internal: clear the row-level style and every cell's style. Used by
     /// `Worksheet.duplicateRow` when `includeStyle` is false.
     pub fn clear_styles(&mut self) {

@@ -312,7 +312,7 @@ impl Worksheet {
         }
         *rows_lock = map;
         drop(rows_lock);
-        self.get_row(row_number)
+        self.get_row((idx + 1) as u32)
     }
 
     /// Remove `count` rows starting at `start`, then insert the provided `rows`
@@ -332,9 +332,10 @@ impl Worksheet {
         } else {
             Vec::new()
         };
+        let insert_at = start_idx.min(ordered.len());
         if let Some(new_rows) = rows {
             for (i, vals) in new_rows.into_iter().enumerate() {
-                ordered.insert(start_idx + i, Row::from_values(0, &vals));
+                ordered.insert(insert_at + i, Row::from_values(0, &vals));
             }
         }
         let mut map = BTreeMap::new();
@@ -361,6 +362,7 @@ impl Worksheet {
                 .map(|_| {
                     let mut c = src.clone();
                     if !include_style {
+                        c.detach_styles();
                         c.clear_styles();
                     }
                     c
@@ -1434,5 +1436,83 @@ mod tests {
             Some(42.0),
             "value set on missing-row getCell must persist"
         );
+    }
+
+    // -- Edge-case regression guards --
+
+    #[test]
+    fn test_splice_rows_start_past_len_inserts_at_end() {
+        // splice_rows with start > row count must insert at end without panic.
+        let ws = Worksheet::new("test".to_string());
+        ws.add_row(vec![serde_json::json!(1)]);
+        ws.add_row(vec![serde_json::json!(2)]);
+        ws.add_row(vec![serde_json::json!(3)]);
+
+        // This would panic before fix: ordered.insert(start_idx + i, ...) with start_idx > ordered.len()
+        let result = std::panic::catch_unwind(|| {
+            ws.splice_rows(100, 0, Some(vec![vec![serde_json::json!(10)]]));
+        });
+        assert!(result.is_ok(), "splice_rows with start > row_count should not panic");
+        assert_eq!(ws.row_count(), 4, "should have 4 rows after insert past end");
+        // Row 4 should have our value
+        let cell = ws.get_cell_by_address("A4".into());
+        assert_eq!(
+            cell.value_raw().number,
+            Some(10.0),
+            "row 4 should contain inserted value"
+        );
+    }
+
+    #[test]
+    fn test_duplicate_row_include_style_false_does_not_corrupt_source() {
+        // duplicate_row(..., false) must not destroy source row's style via Arc aliasing.
+        let ws = Worksheet::new("test_alias".to_string());
+        ws.add_row(vec![serde_json::json!("hello")]);
+
+        // Set a style on row 1
+        // NOTE: This test is a canary — it asserts the SOURCE row keeps its style.
+        // If Row::Clone is fixed to deep-copy Arc contents, this passes.
+        // If Row still derives Clone (shallow-copy), it fails.
+        ws.get_cell_by_address("A1".into())
+            .set_style(serde_json::json!({
+                "font": { "bold": true, "color": "FF0000" }
+            }))
+            .unwrap();
+
+        ws.duplicate_row(1, 1, false);
+
+        assert!(
+            ws.get_cell_by_address("A1".into()).style()
+                .as_ref()
+                .and_then(|s| s.font.as_ref())
+                .and_then(|f| f.bold)
+                .unwrap_or(false),
+            "source row lost bold style after duplicate_row(1,1,false)"
+        );
+    }
+
+    #[test]
+    fn test_insert_row_past_end_returns_correct_position() {
+        // insert_row(100, ...) on 3-row sheet must return row 4, not phantom row 100.
+        let ws = Worksheet::new("test_phantom".to_string());
+        ws.add_row(vec![serde_json::json!(1)]);
+        ws.add_row(vec![serde_json::json!(2)]);
+        ws.add_row(vec![serde_json::json!(3)]);
+
+        let result = ws.insert_row(100, Some(vec![serde_json::json!(999)]));
+
+        let return_num = result.number();
+        assert_eq!(
+            return_num, 4,
+            "Bug 4: insert_row(100, ...) returned row {return_num}, expected 4"
+        );
+
+        assert_eq!(ws.row_count(), 4, "should have 4 rows, not more");
+
+        // Row 4 should have our value
+        let cell = ws.get_cell_by_address("A4".into());
+        assert_eq!(cell.value_raw().number, Some(999.0), "row 4 should contain our value");
+
+        // get_row(100) is not called here — entry().or_insert_with() creates rows on access.
     }
 }
