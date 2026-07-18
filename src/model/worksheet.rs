@@ -887,10 +887,22 @@ impl Worksheet {
             .lock()
             .expect("Worksheet conditional_formats lock poisoned");
         let mut priority = 0u32;
+        let mut used: std::collections::HashSet<u32> = std::collections::HashSet::new();
         for cf in cfs.iter_mut() {
             for rule in cf.rules.iter_mut() {
-                priority += 1;
-                rule.priority = priority;
+                if rule.priority == 0 {
+                    // Auto-assign the next free 1-based priority, skipping
+                    // any value already taken by an explicit rule.
+                    loop {
+                        priority += 1;
+                        if used.insert(priority) {
+                            break;
+                        }
+                    }
+                    rule.priority = priority;
+                } else {
+                    used.insert(rule.priority);
+                }
                 match &rule.style {
                     Some(style) => {
                         let dxf = Dxf::from_style(style);

@@ -2761,6 +2761,60 @@ mod tests {
     }
 
     #[test]
+    fn test_conditional_formatting_preserves_explicit_priority() {
+        use crate::model::conditional_formatting::{CfRule, ConditionalFormat};
+        use crate::writer::xlsx::workbook_to_bytes;
+
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("Sheet1".into());
+
+        // Explicit priorities out of document order; A3 uses 0 = auto-assign.
+        ws.add_conditional_formatting(ConditionalFormat {
+            sqref: "A1".into(),
+            rules: vec![CfRule {
+                r#type: "expression".into(),
+                priority: 5,
+                formula: Some(vec!["A1>1".into()]),
+                ..Default::default()
+            }],
+        }).unwrap();
+        ws.add_conditional_formatting(ConditionalFormat {
+            sqref: "A2".into(),
+            rules: vec![CfRule {
+                r#type: "expression".into(),
+                priority: 2,
+                formula: Some(vec!["A2>1".into()]),
+                ..Default::default()
+            }],
+        }).unwrap();
+        ws.add_conditional_formatting(ConditionalFormat {
+            sqref: "A3".into(),
+            rules: vec![CfRule {
+                r#type: "expression".into(),
+                priority: 0,
+                formula: Some(vec!["A3>1".into()]),
+                ..Default::default()
+            }],
+        }).unwrap();
+
+        let bytes = workbook_to_bytes(&inner).unwrap();
+        let read = crate::reader::xlsx::workbook_inner_from_bytes(&bytes).unwrap();
+        let cfs = read.worksheets[0].get_conditional_formatting();
+
+        let a1 = cfs.iter().find(|c| c.sqref == "A1").expect("A1 missing");
+        let a2 = cfs.iter().find(|c| c.sqref == "A2").expect("A2 missing");
+        let a3 = cfs.iter().find(|c| c.sqref == "A3").expect("A3 missing");
+
+        assert_eq!(a1.rules[0].priority, 5, "explicit priority 5 must be preserved");
+        assert_eq!(a2.rules[0].priority, 2, "explicit priority 2 must be preserved");
+        assert_ne!(a3.rules[0].priority, 0, "auto-assigned priority must be non-zero");
+        let mut ps: Vec<u32> = cfs.iter().flat_map(|c| c.rules.iter().map(|r| r.priority)).collect();
+        ps.sort_unstable();
+        ps.dedup();
+        assert_eq!(ps.len(), 3, "priorities must stay unique across the sheet");
+    }
+
+    #[test]
     fn test_cf_quickxml_attrs_isolated() {
         use quick_xml::events::Event;
         use quick_xml::Reader;
