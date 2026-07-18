@@ -1493,6 +1493,8 @@ fn write_sheet_xml<W: Write>(
     // <sheetViews> — freeze/split panes (v0.11.0)
     emit_sheet_views(w, ws)?;
 
+    emit_worksheet_cols(w, ws)?;
+
     write_str(w, "<sheetData>")?;
 
     write_cells_with_styles(w, ws, string_indices, cell_style_indices, row_style_indices)?;
@@ -1596,6 +1598,8 @@ fn write_sheet_xml<W: Write>(
         write_str(w, "</hyperlinks>")?;
     }
 
+    emit_worksheet_breaks(w, ws)?;
+
     // <pageMargins> + <pageSetup> — (v1.0.0)
     emit_page_setup(w, ws)?;
     // <headerFooter> — (v1.0.0)
@@ -1627,6 +1631,54 @@ fn write_sheet_xml<W: Write>(
 /// with a row-level style (including styled empty rows).
 /// Returns `Err` if `cell_style_indices` is exhausted before the last cell
 /// (writer internal invariant).
+/// Emit a minimal `<cols>` block containing only the grouped columns (those
+/// with `outlineLevel > 0`). When no column is grouped, emit nothing so default
+/// output stays byte-identical to the prior writer (which emitted no `<cols>`).
+fn emit_worksheet_cols<W: Write>(w: &mut W, ws: &Worksheet) -> Result<(), ExcelrsError> {
+    let cols = ws.columns();
+    let grouped: Vec<_> = cols.into_iter().filter(|c| c.outline_level() > 0).collect();
+    if grouped.is_empty() {
+        return Ok(());
+    }
+    write_str(w, &format!(r#"<cols count="{}">"#, grouped.len()))?;
+    for c in &grouped {
+        write_str(
+            w,
+            &format!(
+                r#"<col min="{}" max="{}" outlineLevel="{}"/>"#,
+                c.col_num(),
+                c.col_num(),
+                c.outline_level()
+            ),
+        )?;
+    }
+    write_str(w, "</cols>")?;
+    Ok(())
+}
+
+/// Emit `<rowBreaks>` and `<colBreaks>` in schema-correct position (after
+/// sheetData/merge/CF/DV/hyperlinks, before pageMargins). Each break is a
+/// `<brk id="N" max="16383"|"1048575" man="0"/>`. Both are omitted when empty.
+fn emit_worksheet_breaks<W: Write>(w: &mut W, ws: &Worksheet) -> Result<(), ExcelrsError> {
+    let row_breaks = ws.row_breaks();
+    if !row_breaks.is_empty() {
+        write_str(w, &format!(r#"<rowBreaks count="{}">"#, row_breaks.len()))?;
+        for b in &row_breaks {
+            write_str(w, &format!(r#"<brk id="{}" max="16383" man="0"/>"#, b))?;
+        }
+        write_str(w, "</rowBreaks>")?;
+    }
+    let col_breaks = ws.col_breaks();
+    if !col_breaks.is_empty() {
+        write_str(w, &format!(r#"<colBreaks count="{}">"#, col_breaks.len()))?;
+        for b in &col_breaks {
+            write_str(w, &format!(r#"<brk id="{}" max="1048575" man="0"/>"#, b))?;
+        }
+        write_str(w, "</colBreaks>")?;
+    }
+    Ok(())
+}
+
 fn write_cells_with_styles<W: Write>(
     w: &mut W,
     ws: &Worksheet,
@@ -1648,9 +1700,20 @@ fn write_cells_with_styles<W: Write>(
             continue;
         }
 
-        // Emit <row> with optional s="N" for row-level style
-        if has_row_style {
+        let row_outline = row.outline_level();
+        // Emit <row> with optional s="N" for row-level style and outlineLevel for grouping
+        if has_row_style && row_outline > 0 {
+            write!(
+                w,
+                r#"<row r="{}" s="{}" outlineLevel="{}">"#,
+                row.number(),
+                row_style_idx,
+                row_outline
+            )?;
+        } else if has_row_style {
             write!(w, r#"<row r="{}" s="{}">"#, row.number(), row_style_idx)?;
+        } else if row_outline > 0 {
+            write!(w, r#"<row r="{}" outlineLevel="{}">"#, row.number(), row_outline)?;
         } else {
             write!(w, r#"<row r="{}">"#, row.number())?;
         }
@@ -2496,7 +2559,7 @@ mod tests {
         let read = crate::reader::xlsx::workbook_inner_from_bytes(&bytes).unwrap();
         let ws = &read.worksheets()[0];
         assert_eq!(ws.is_merged(3, 3), Some("B2:D4".to_string())); // inside
-        assert_eq!(ws.is_merged(1, 1), None);                       // outside
+        assert_eq!(ws.is_merged(1, 1), None); // outside
     }
 
     /// Row-level style survives a write → read round-trip. The writer emits
@@ -2528,6 +2591,81 @@ mod tests {
             style.fill.as_ref().and_then(|f| f.foreground.as_deref()),
             Some("FFFFFFFF")
         );
+    }
+
+    #[test]
+    fn test_round_trip_worksheet_structure() {
+        use crate::reader::xlsx::workbook_inner_from_bytes;
+
+        let mut inner = WorkbookInner::new();
+        let mut ws = inner.add_worksheet("Struct".into());
+        ws.add_row(vec![serde_json::json!(1), serde_json::json!(2)]);
+        ws.add_row(vec![serde_json::json!(3), serde_json::json!(4)]);
+        ws.add_row(vec![serde_json::json!(5), serde_json::json!(6)]);
+
+        // grouping + breaks (set before the shifts so they travel with rows)
+        ws.get_row(2).set_outline_level(2);
+        ws.insert_column_outline_level(2, 1);
+        ws.set_row_breaks(vec![5, 10]);
+        ws.set_col_breaks(vec![3]);
+
+        // shift rows: insert / duplicate / splice
+        ws.insert_row(2, Some(vec![serde_json::json!("x"), serde_json::json!("y")]));
+        ws.duplicate_row(1, 1, true);
+        ws.splice_rows(2, 1, Some(vec![vec![serde_json::json!("a"), serde_json::json!("b")]]));
+
+        let bytes = crate::writer::xlsx::workbook_to_bytes(&inner).unwrap();
+        let read = workbook_inner_from_bytes(&bytes).unwrap();
+        let ws = &read.worksheets()[0];
+
+        // The [3,4] row carried outline level 2; after insert/duplicate/splice
+        // it lands on row 4 and must keep its grouping + value.
+        assert_eq!(ws.get_row(4).outline_level(), 2, "row 4 outline level");
+        assert_eq!(
+            ws.get_cell_by_address("A4".into()).value_raw().number,
+            Some(3.0),
+            "row 4 value preserved through shifts"
+        );
+
+        // Column 2 grouping preserved.
+        let cols = ws.columns();
+        let col2 = cols.iter().find(|c| c.col_num() == 2);
+        assert!(
+            col2.is_some_and(|c| c.outline_level() == 1),
+            "column 2 outline level should round-trip"
+        );
+
+        // Breaks preserved.
+        let mut rb = ws.row_breaks();
+        rb.sort();
+        assert_eq!(rb, vec![5, 10], "row breaks should round-trip");
+        assert_eq!(ws.col_breaks(), vec![3], "col breaks should round-trip");
+    }
+
+    #[test]
+    fn test_regression_plain_sheet_no_grouping_or_breaks() {
+        use std::io::{Cursor, Read};
+        use zip::ZipArchive;
+
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("Plain".into());
+        ws.add_row(vec![serde_json::json!(1), serde_json::json!(2)]);
+        ws.add_row(vec![serde_json::json!(3), serde_json::json!(4)]);
+        let bytes = crate::writer::xlsx::workbook_to_bytes(&inner).unwrap();
+
+        let mut archive = ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut xml = String::new();
+        archive
+            .by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut xml)
+            .unwrap();
+
+        assert!(!xml.contains("outlineLevel"), "plain sheet must not emit outlineLevel");
+        assert!(!xml.contains("<cols"), "plain sheet must not emit <cols>");
+        assert!(!xml.contains("rowBreaks"), "plain sheet must not emit rowBreaks");
+        assert!(!xml.contains("colBreaks"), "plain sheet must not emit colBreaks");
+        assert!(xml.contains("<row r=\"1\""), "row element present and clean");
     }
 
     fn build_test_worksheet() -> Worksheet {

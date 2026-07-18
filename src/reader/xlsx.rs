@@ -186,6 +186,38 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
         }
     }
 
+    // Step 3.17: row outline levels (grouping) — writer emits <row outlineLevel="N">.
+    let per_sheet_row_outline = parse_sheet_row_outline_levels(data, sheet_count)?;
+    for (i, levels) in per_sheet_row_outline.into_iter().enumerate() {
+        for (row_num, level) in levels {
+            inner.worksheets[i].insert_row_outline_level(row_num, level);
+        }
+    }
+
+    // Step 3.18: column outline levels (grouping) — writer emits <col outlineLevel="N">.
+    let per_sheet_col_outline = parse_sheet_col_outline_levels(data, sheet_count)?;
+    for (i, levels) in per_sheet_col_outline.into_iter().enumerate() {
+        for (col_num, level) in levels {
+            inner.worksheets[i].insert_column_outline_level(col_num, level);
+        }
+    }
+
+    // Step 3.19: row page breaks — writer emits <rowBreaks>.
+    let per_sheet_row_breaks = parse_sheet_row_breaks(data, sheet_count)?;
+    for (i, breaks) in per_sheet_row_breaks.into_iter().enumerate() {
+        for b in breaks {
+            inner.worksheets[i].insert_row_break(b);
+        }
+    }
+
+    // Step 3.20: column page breaks — writer emits <colBreaks>.
+    let per_sheet_col_breaks = parse_sheet_col_breaks(data, sheet_count)?;
+    for (i, breaks) in per_sheet_col_breaks.into_iter().enumerate() {
+        for b in breaks {
+            inner.worksheets[i].insert_col_break(b);
+        }
+    }
+
     // Step 4: parse defined names from xl/workbook.xml
     let defined_names = workbook::parse_defined_names(data, &sheet_names)?;
     inner.set_defined_names(defined_names);
@@ -1078,6 +1110,218 @@ fn parse_row_styles_from_xml(xml: &str, style_table: &StyleTableRead) -> Vec<(u3
                 if let (Some(r), Some(s)) = (row_num, xf_idx) {
                     if let Some(style) = style_table.resolve_style(s) {
                         result.push((r, style));
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+    result
+}
+
+/// Parse row outline levels from every worksheet part. Returns one vector per
+/// sheet (index aligned with `sheet_count`), each holding `(row_number, level)`
+/// pairs from the `<row r="N" outlineLevel="M">` attribute.
+fn parse_sheet_row_outline_levels(data: &[u8], sheet_count: usize) -> Result<Vec<Vec<(u32, u8)>>, ExcelrsError> {
+    use std::io::{Cursor, Read};
+    let cursor = Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
+    let mut all: Vec<Vec<(u32, u8)>> = Vec::with_capacity(sheet_count);
+    for i in 0..sheet_count {
+        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+        let levels = match archive.by_name(&path) {
+            Ok(entry) => {
+                let mut xml = String::new();
+                entry.take(MAX_ENTRY_BYTES).read_to_string(&mut xml)?;
+                parse_row_outline_levels_from_xml(&xml)
+            }
+            Err(_) => Vec::new(),
+        };
+        all.push(levels);
+    }
+    Ok(all)
+}
+
+/// Extract `<row r="N" outlineLevel="M">` pairs from a worksheet XML blob.
+fn parse_row_outline_levels_from_xml(xml: &str) -> Vec<(u32, u8)> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut result: Vec<(u32, u8)> = Vec::new();
+    let mut events: u64 = 0;
+    loop {
+        buf.clear();
+        events += 1;
+        if events > MAX_EVENTS as u64 {
+            break;
+        }
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) if e.name().as_ref() == b"row" => {
+                let mut row_num: Option<u32> = None;
+                let mut level: Option<u8> = None;
+                for attr in e.attributes().flatten() {
+                    let key = attr.key.as_ref();
+                    let val = String::from_utf8_lossy(&attr.value);
+                    if key == b"r" {
+                        row_num = val.trim().parse().ok();
+                    } else if key == b"outlineLevel" {
+                        level = val.trim().parse().ok();
+                    }
+                }
+                if let (Some(r), Some(l)) = (row_num, level) {
+                    result.push((r, l.min(7)));
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+    result
+}
+
+/// Parse column outline levels from every worksheet part. Returns one vector
+/// per sheet (index aligned with `sheet_count`), each holding `(col_number, level)`
+/// pairs from `<cols><col min="N" max="N" outlineLevel="M"/>`.
+fn parse_sheet_col_outline_levels(data: &[u8], sheet_count: usize) -> Result<Vec<Vec<(u32, u8)>>, ExcelrsError> {
+    use std::io::{Cursor, Read};
+    let cursor = Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
+    let mut all: Vec<Vec<(u32, u8)>> = Vec::with_capacity(sheet_count);
+    for i in 0..sheet_count {
+        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+        let levels = match archive.by_name(&path) {
+            Ok(entry) => {
+                let mut xml = String::new();
+                entry.take(MAX_ENTRY_BYTES).read_to_string(&mut xml)?;
+                parse_col_outline_levels_from_xml(&xml)
+            }
+            Err(_) => Vec::new(),
+        };
+        all.push(levels);
+    }
+    Ok(all)
+}
+
+/// Extract column outline levels from a worksheet XML blob. A `<col>` may span
+/// `min`..`max`; the level is applied to every column in that range.
+fn parse_col_outline_levels_from_xml(xml: &str) -> Vec<(u32, u8)> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut result: Vec<(u32, u8)> = Vec::new();
+    let mut events: u64 = 0;
+    loop {
+        buf.clear();
+        events += 1;
+        if events > MAX_EVENTS as u64 {
+            break;
+        }
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) if e.name().as_ref() == b"col" => {
+                let mut min: Option<u32> = None;
+                let mut max: Option<u32> = None;
+                let mut level: Option<u8> = None;
+                for attr in e.attributes().flatten() {
+                    let key = attr.key.as_ref();
+                    let val = String::from_utf8_lossy(&attr.value);
+                    if key == b"min" {
+                        min = val.trim().parse().ok();
+                    } else if key == b"max" {
+                        max = val.trim().parse().ok();
+                    } else if key == b"outlineLevel" {
+                        level = val.trim().parse().ok();
+                    }
+                }
+                if let (Some(lo), Some(hi), Some(l)) = (min, max, level) {
+                    for c in lo..=hi.min(16384) {
+                        result.push((c, l.min(7)));
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+    result
+}
+
+/// Parse row page breaks from every worksheet part. Returns one vector per
+/// sheet (index aligned with `sheet_count`) of 1-indexed row numbers.
+fn parse_sheet_row_breaks(data: &[u8], sheet_count: usize) -> Result<Vec<Vec<u32>>, ExcelrsError> {
+    use std::io::{Cursor, Read};
+    let cursor = Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
+    let mut all: Vec<Vec<u32>> = Vec::with_capacity(sheet_count);
+    for i in 0..sheet_count {
+        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+        let breaks = match archive.by_name(&path) {
+            Ok(entry) => {
+                let mut xml = String::new();
+                entry.take(MAX_ENTRY_BYTES).read_to_string(&mut xml)?;
+                parse_breaks_from_xml(&xml, b"rowBreaks")
+            }
+            Err(_) => Vec::new(),
+        };
+        all.push(breaks);
+    }
+    Ok(all)
+}
+
+/// Parse column page breaks from every worksheet part.
+fn parse_sheet_col_breaks(data: &[u8], sheet_count: usize) -> Result<Vec<Vec<u32>>, ExcelrsError> {
+    use std::io::{Cursor, Read};
+    let cursor = Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
+    let mut all: Vec<Vec<u32>> = Vec::with_capacity(sheet_count);
+    for i in 0..sheet_count {
+        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+        let breaks = match archive.by_name(&path) {
+            Ok(entry) => {
+                let mut xml = String::new();
+                entry.take(MAX_ENTRY_BYTES).read_to_string(&mut xml)?;
+                parse_breaks_from_xml(&xml, b"colBreaks")
+            }
+            Err(_) => Vec::new(),
+        };
+        all.push(breaks);
+    }
+    Ok(all)
+}
+
+/// Extract `<brk id="N"/>` ids from within the `<tag>` block of a worksheet XML blob.
+fn parse_breaks_from_xml(xml: &str, tag: &[u8]) -> Vec<u32> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut result: Vec<u32> = Vec::new();
+    let mut in_block = false;
+    let mut events: u64 = 0;
+    loop {
+        buf.clear();
+        events += 1;
+        if events > MAX_EVENTS as u64 {
+            break;
+        }
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) if e.name().as_ref() == tag => {
+                in_block = true;
+            }
+            Ok(Event::End(ref e)) if e.name().as_ref() == tag => {
+                in_block = false;
+            }
+            Ok(Event::Empty(ref e)) | Ok(Event::Start(ref e)) if in_block && e.name().as_ref() == b"brk" => {
+                for attr in e.attributes().flatten() {
+                    if attr.key.as_ref() == b"id" {
+                        if let Ok(id) = String::from_utf8_lossy(&attr.value).trim().parse::<u32>() {
+                            result.push(id);
+                        }
                     }
                 }
             }
@@ -2373,6 +2617,132 @@ mod tests {
         buf
     }
 
+    // -- worksheet-structure (v1.3.0): Excel-authored grouping + breaks --
+
+    #[test]
+    fn test_read_excel_authored_grouping_and_breaks() {
+        use std::io::Write;
+
+        // Build a minimal but valid xlsx whose sheet XML is shaped the way
+        // Excel emits it: <cols> grouping, <row outlineLevel>, <rowBreaks>,
+        // <colBreaks>. This exercises the reader parse passes (Steps 3.17-3.20)
+        // against real Excel-shaped markup rather than our own round-trip.
+        let mut buf = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let options: zip::write::FileOptions<'_, ()> =
+                zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+            zip.start_file("[Content_Types].xml", options).unwrap();
+            write!(
+                zip,
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
+</Types>"#
+            )
+            .unwrap();
+
+            zip.start_file("_rels/.rels", options).unwrap();
+            write!(
+                zip,
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"#
+            )
+            .unwrap();
+
+            zip.start_file("xl/workbook.xml", options).unwrap();
+            write!(
+                zip,
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>"#
+            )
+            .unwrap();
+
+            zip.start_file("xl/_rels/workbook.xml.rels", options).unwrap();
+            write!(
+                zip,
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>"#
+            )
+            .unwrap();
+
+            zip.start_file("xl/worksheets/sheet1.xml", options).unwrap();
+            write!(
+                zip,
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <cols>
+    <col min="1" max="2" outlineLevel="1"/>
+  </cols>
+  <sheetData>
+    <row r="1" outlineLevel="2">
+      <c r="A1" t="inlineStr"><is><t>hello</t></is></c>
+    </row>
+    <row r="2">
+      <c r="A2" t="inlineStr"><is><t>world</t></is></c>
+    </row>
+  </sheetData>
+  <rowBreaks count="1">
+    <brk id="3" max="16383" man="0"/>
+  </rowBreaks>
+  <colBreaks count="1">
+    <brk id="2" max="1048575" man="0"/>
+  </colBreaks>
+</worksheet>"#
+            )
+            .unwrap();
+
+            zip.start_file("xl/sharedStrings.xml", options).unwrap();
+            write!(
+                zip,
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="0" uniqueCount="0"/>
+"#
+            )
+            .unwrap();
+
+            zip.finish().unwrap();
+        }
+
+        let read = workbook_inner_from_bytes(&buf).unwrap();
+        let ws = &read.worksheets()[0];
+
+        // grouping preserved
+        assert_eq!(ws.get_row(1).outline_level(), 2, "row 1 outline level");
+        let cols = ws.columns();
+        let col1 = cols.iter().find(|c| c.col_num() == 1);
+        assert!(
+            col1.is_some_and(|c| c.outline_level() == 1),
+            "column 1 outline level should round-trip"
+        );
+
+        // breaks preserved
+        assert_eq!(ws.row_breaks(), vec![3], "row breaks");
+        assert_eq!(ws.col_breaks(), vec![2], "col breaks");
+
+        // write-back preserves the structure (read -> write -> read)
+        let bytes2 = crate::writer::xlsx::workbook_to_bytes(&read).unwrap();
+        let read2 = workbook_inner_from_bytes(&bytes2).unwrap();
+        let ws2 = &read2.worksheets()[0];
+        assert_eq!(ws2.get_row(1).outline_level(), 2, "row 1 outline level (write-back)");
+        assert_eq!(ws2.row_breaks(), vec![3], "row breaks (write-back)");
+        assert_eq!(ws2.col_breaks(), vec![2], "col breaks (write-back)");
+    }
+
     // -- data validation parse tests --
 
     #[test]
@@ -3082,6 +3452,36 @@ mod tests {
         assert!(
             ranges.contains(&"A1:C3".to_string()),
             "namespaced <mergeCell> must parse, got {ranges:?}"
+        );
+    }
+
+    // -- Security regression guards --
+
+    #[test]
+    fn test_xml_col_range_bounded() {
+        // Bug 1: XML range bomb — unbounded lo..=hi loop with u32 max.
+        // A single crafted <col> with min=1, max=4294967295 would iterate
+        // 4 billion times. This test verifies the fix caps hi at 16384.
+        let xml = r#"<cols><col min="1" max="4294967295" outlineLevel="1"/></cols>"#;
+
+        let start = std::time::Instant::now();
+        let result = parse_col_outline_levels_from_xml(xml);
+        let elapsed = start.elapsed();
+
+        // With fix (cap at 16384): ~16k entries, well under 100ms.
+        // Without fix: would either hang forever or OOM.
+        assert!(
+            elapsed.as_millis() < 5000,
+            "Bug 1: XML range bomb took {elapsed:?} — unbounded loop!"
+        );
+
+        assert!(!result.is_empty(), "should have parsed outline levels");
+
+        // Verify the max is bounded at Excel's column limit (16384)
+        let max_col = result.iter().map(|(c, _)| *c).max().unwrap_or(0);
+        assert!(
+            max_col <= 16384,
+            "Bug 1: max col {max_col} exceeds 16384 — unbounded range bomb"
         );
     }
 }

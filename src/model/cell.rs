@@ -412,6 +412,14 @@ impl Cell {
 
     /// Internal: set the style directly (used by reader, set_columns).
     /// Skips the serde_json::Value dispatch.
+    /// Deep clone: creates a new independent `Arc<Mutex<CellInner>>`
+    /// (clone shares the existing Arc, mutate the same backing state).
+    pub(crate) fn deep_clone(&self) -> Self {
+        Cell {
+            inner: Arc::new(Mutex::new(self.inner.lock().expect("Cell lock poisoned").clone())),
+        }
+    }
+
     pub fn set_style_raw(&mut self, style: Option<Style>) {
         self.inner.lock().expect("Cell lock poisoned").style = style;
     }
@@ -419,6 +427,15 @@ impl Cell {
     /// Internal: set the formula string (used by reader).
     pub fn set_formula(&mut self, formula: Option<String>) {
         self.inner.lock().expect("Cell lock poisoned").formula = formula;
+    }
+
+    /// Internal: renumber this cell to a new row, updating its cached `row`
+    /// and recomputing its A1 `address`. Used when rows are shifted
+    /// (insert/splice/duplicate) so cell addresses stay consistent.
+    pub fn renumber(&mut self, new_row: u32) {
+        let mut inner = self.inner.lock().expect("Cell lock poisoned");
+        inner.row = new_row;
+        inner.address = Cell::compute_address(new_row, inner.col);
     }
 
     /// A cell is "effectively empty" when it has no value, no formula, and
