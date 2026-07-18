@@ -208,7 +208,11 @@ jobs:
             const wb = new Workbook();
             const ws = wb.addWorksheet('test');
             ws.addRow([1, 2, 3]);
-            ws.setCellStyle(1, 2, { font: { bold: true } });
+            const style = {
+              font: { bold: true },
+              fill: { kind: 'solid', foreground: 'FFFF0000' }
+            };
+            ws.setCellStyle(1, 2, style);
             wb.xlsx.write()
               .then(buf => {
                 if (buf.length < 100) {
@@ -217,6 +221,26 @@ jobs:
                   );
                 }
                 console.log('✓ native binding works, xlsx size:', buf.length);
+                const wb2 = new Workbook();
+                return wb2.xlsx.read(buf).then(() => {
+                  const s = wb2.getWorksheet('test')
+                    .getCellByRc(1, 2).style;
+                  if (!s || !s.font || s.font.bold !== true) {
+                    throw new Error(
+                      'style lost on read: font.bold not preserved'
+                    );
+                  }
+                  if (!s.fill || s.fill.kind !== 'solid' ||
+                      s.fill.foreground !== 'FFFF0000') {
+                    const got = s.fill &&
+                      s.fill.kind + '/' + s.fill.foreground;
+                    throw new Error(
+                      'style lost on read: fill not preserved' +
+                      ' (got ' + got + ')'
+                    );
+                  }
+                  console.log('✓ styled xlsx round-trips through read path');
+                });
               })
               .catch(err => {
                 console.error('FAIL:', err.message);

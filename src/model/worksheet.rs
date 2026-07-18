@@ -267,22 +267,13 @@ impl Worksheet {
     /// the cell is mutated inside the locked row map.
     #[napi]
     pub fn set_cell_style(&self, row: u32, col: u32, style: serde_json::Value) -> napi::Result<()> {
-        // Use the raw setter to bypass the napi-rs setter codegen
-        // (#[napi(setter)] renames the function, making it unreachable
-        // when called from another Rust method).
-        if style.is_null() {
-            self.with_cell_mut(row, col, |cell| cell.set_style_raw(None));
-            return Ok(());
-        }
-        let parsed: crate::model::style::Style =
-            serde_json::from_value(style).map_err(|e| napi::Error::from_reason(format!("style: {e}")))?;
-        if parsed.is_empty() {
-            self.with_cell_mut(row, col, |cell| cell.set_style_raw(None));
-            return Ok(());
-        }
-        let validated = parsed.validate().map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        self.with_cell_mut(row, col, |cell| cell.set_style_raw(Some(validated)));
-        Ok(())
+        // Delegate to the canonical Cell::set_style (single source of truth)
+        // instead of re-implementing parse/validate via set_style_raw.
+        let mut result = Ok(());
+        self.with_cell_mut(row, col, |cell| {
+            result = cell.set_style(style);
+        });
+        result
     }
 
     /// Replace the worksheet's column definitions.
