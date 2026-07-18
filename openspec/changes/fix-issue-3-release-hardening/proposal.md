@@ -11,7 +11,7 @@ Targeted release: **v1.2.1** (user-specified). Note: the crate's current `Cargo.
 
 - **Refactor `Worksheet::set_cell_style`** to delegate to `Cell::set_style` (single source of truth) via `with_cell_mut`, capturing the `napi::Result`. Remove the duplicated parse/validate branches (worksheet.rs:274-285) and the incorrect comment at worksheet.rs:272-274.
 - **Keep `Cell::set_style_raw`** (cell.rs:415) `pub` *only* for the reader/column paths that pass a pre-validated `Style` (`insert_cell_style` at worksheet.rs:803; reader call sites at xlsx.rs:2578/2607). It is no longer used by `set_cell_style`.
-- **Extend the `release.yml` Functional smoke test** to write a styled workbook, read it back, and assert that cell-level `font.bold` and `fill.color` survive the round-trip — failing the release job on any mismatch before publish. Scope limited to cell-level font/fill only (no Hyperlink/RichText/row-level style) to avoid false failures.
+- **Extend the `release.yml` Functional smoke test** to write a styled workbook, read it back, and assert that cell-level `font.bold` and `fill.foreground` survive the round-trip — failing the release job on any mismatch before publish. Scope limited to cell-level font/fill only (no Hyperlink/RichText/row-level style) to avoid false failures.
 
 No public API or observable behavior change for consumers. No dependency changes.
 
