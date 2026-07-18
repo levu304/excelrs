@@ -442,13 +442,12 @@ impl Worksheet {
             }
         }
         for r in &cf.rules {
-            if r.priority != 0
-                && !seen.insert(r.priority) {
-                    return Err(napi::Error::from_reason(format!(
-                        "Duplicate conditional-format priority {}: priorities must be worksheet-global unique",
-                        r.priority
-                    )));
-                }
+            if r.priority != 0 && !seen.insert(r.priority) {
+                return Err(napi::Error::from_reason(format!(
+                    "Duplicate conditional-format priority {}: priorities must be worksheet-global unique",
+                    r.priority
+                )));
+            }
         }
         formats.push(cf);
         Ok(())

@@ -2777,7 +2777,8 @@ mod tests {
                 formula: Some(vec!["A1>1".into()]),
                 ..Default::default()
             }],
-        }).unwrap();
+        })
+        .unwrap();
         ws.add_conditional_formatting(ConditionalFormat {
             sqref: "A2".into(),
             rules: vec![CfRule {
@@ -2786,7 +2787,8 @@ mod tests {
                 formula: Some(vec!["A2>1".into()]),
                 ..Default::default()
             }],
-        }).unwrap();
+        })
+        .unwrap();
         ws.add_conditional_formatting(ConditionalFormat {
             sqref: "A3".into(),
             rules: vec![CfRule {
@@ -2795,7 +2797,8 @@ mod tests {
                 formula: Some(vec!["A3>1".into()]),
                 ..Default::default()
             }],
-        }).unwrap();
+        })
+        .unwrap();
 
         let bytes = workbook_to_bytes(&inner).unwrap();
         let read = crate::reader::xlsx::workbook_inner_from_bytes(&bytes).unwrap();
@@ -2808,7 +2811,10 @@ mod tests {
         assert_eq!(a1.rules[0].priority, 5, "explicit priority 5 must be preserved");
         assert_eq!(a2.rules[0].priority, 2, "explicit priority 2 must be preserved");
         assert_ne!(a3.rules[0].priority, 0, "auto-assigned priority must be non-zero");
-        assert_eq!(a3.rules[0].priority, 1, "auto-assigned priority must be the first free slot (1)");
+        assert_eq!(
+            a3.rules[0].priority, 1,
+            "auto-assigned priority must be the first free slot (1)"
+        );
         let mut ps: Vec<u32> = cfs.iter().flat_map(|c| c.rules.iter().map(|r| r.priority)).collect();
         ps.sort_unstable();
         ps.dedup();
@@ -2824,12 +2830,24 @@ mod tests {
         // Auto rule added FIRST (priority 0), then an explicit rule wanting 1.
         ws.add_conditional_formatting(ConditionalFormat {
             sqref: "A1".into(),
-            rules: vec![CfRule { r#type: "expression".into(), priority: 0, formula: Some(vec!["A1>1".into()]), ..Default::default() }],
-        }).unwrap();
+            rules: vec![CfRule {
+                r#type: "expression".into(),
+                priority: 0,
+                formula: Some(vec!["A1>1".into()]),
+                ..Default::default()
+            }],
+        })
+        .unwrap();
         ws.add_conditional_formatting(ConditionalFormat {
             sqref: "A2".into(),
-            rules: vec![CfRule { r#type: "expression".into(), priority: 1, formula: Some(vec!["A2>1".into()]), ..Default::default() }],
-        }).unwrap();
+            rules: vec![CfRule {
+                r#type: "expression".into(),
+                priority: 1,
+                formula: Some(vec!["A2>1".into()]),
+                ..Default::default()
+            }],
+        })
+        .unwrap();
         let bytes = workbook_to_bytes(&inner).unwrap();
         let read = crate::reader::xlsx::workbook_inner_from_bytes(&bytes).unwrap();
         let cfs = read.worksheets[0].get_conditional_formatting();
@@ -2847,11 +2865,22 @@ mod tests {
         let ws = inner.add_worksheet("Sheet1".into());
         ws.add_conditional_formatting(ConditionalFormat {
             sqref: "A1".into(),
-            rules: vec![CfRule { r#type: "expression".into(), priority: 5, formula: Some(vec!["A1>1".into()]), ..Default::default() }],
-        }).unwrap();
+            rules: vec![CfRule {
+                r#type: "expression".into(),
+                priority: 5,
+                formula: Some(vec!["A1>1".into()]),
+                ..Default::default()
+            }],
+        })
+        .unwrap();
         let dup = ws.add_conditional_formatting(ConditionalFormat {
             sqref: "A2".into(),
-            rules: vec![CfRule { r#type: "expression".into(), priority: 5, formula: Some(vec!["A2>1".into()]), ..Default::default() }],
+            rules: vec![CfRule {
+                r#type: "expression".into(),
+                priority: 5,
+                formula: Some(vec!["A2>1".into()]),
+                ..Default::default()
+            }],
         });
         assert!(dup.is_err(), "duplicate explicit priority must be rejected");
     }
