@@ -24,12 +24,12 @@ Constraints: pure internal/CI change — no public API or observable behavior ch
 
 - **Delegate via `with_cell_mut`, capturing the `napi::Result`.** `with_cell_mut` (worksheet.rs:774) closes over `FnOnce(&mut Cell) -> ()`; we assign the result into an outer `mut result` and return it. *Why:* single source of truth eliminates the validation-drift risk (two copies of null→None / parse / `is_empty`→None / `validate()` at cell.rs:387-398 vs worksheet.rs:275-285). *Alternative considered:* keep the duplication but manually keep it in sync — rejected; sync-by-hand is exactly the failure mode we're removing.
 - **Keep `Cell::set_style_raw` `pub`, scoped to reader/column paths.** It is genuinely needed by `insert_cell_style` (worksheet.rs:803) and reader call sites (xlsx.rs:2578/2607) that pass a pre-validated `Style`. Making it private would force re-validation there. *Why:* those paths bypass parse/validate deliberately and correctly. It is simply no longer called by `set_cell_style`.
-- **Smoke-test scope = cell-level `font.bold` + `fill.color` only.** *Why:* these are proven to round-trip by `test_round_trip_style_preserved`; broader scope (Hyperlink/RichText/row style) is out of this change and would cause false CI failures.
+- **Smoke-test scope = cell-level `font.bold` + `fill.foreground` only.** *Why:* these are proven to round-trip by `test_round_trip_style_preserved`; broader scope (Hyperlink/RichText/row style) is out of this change and would cause false CI failures.
 
 ## Risks / Trade-offs
 
 - **[Risk]** If `with_cell_mut` swallows napi errors, the captured result could mask a failure. → *Mitigation:* confirm `with_cell_mut` propagates the closure's result before merging; covered by `test_round_trip_style_preserved`.
-- **[Risk]** The read path may serialize `fill.color` in a different string form than written, causing a false smoke-test failure. → *Mitigation:* limit assertions to `font.bold` (bool) and `fill.color` (already proven round-trip by the existing Rust test); run the amended smoke test on a branch before relying on it in release.
+- **[Risk]** The read path may serialize `fill.foreground` in a different string form than written, causing a false smoke-test failure. → *Mitigation:* limit assertions to `font.bold` (bool) and `fill.foreground` (already proven round-trip by the existing Rust test); run the amended smoke test on a branch before relying on it in release.
 - **[Risk]** Version label mismatch — crate is `0.13.0`, issue body says `v0.4.0`, this change targets `v1.2.1`. → *Mitigation:* noted in proposal; reconcile the actual version bump at release time (no code impact).
 
 ## Migration Plan

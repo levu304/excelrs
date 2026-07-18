@@ -6,8 +6,8 @@ The release pipeline SHALL round-trip a styled `.xlsx` workbook through both the
 
 #### Scenario: Styled workbook round-trips through the read path
 
-- **WHEN** the release smoke test writes a workbook with a cell styled `font.bold = true` and `fill.color = "FFFF0000"`, then reads that workbook back from bytes
-- **THEN** the read-back cell SHALL report `font.bold = true` and `fill.color = "FFFF0000"`, and the release job SHALL fail if either assertion is false
+- **WHEN** the release smoke test writes a workbook with a cell styled `font.bold = true` and `fill.foreground = "FFFF0000"`, then reads that workbook back from bytes
+- **THEN** the read-back cell SHALL report `font.bold = true` and `fill.foreground = "FFFF0000"`, and the release job SHALL fail if either assertion is false
 
 #### Scenario: Existing writer-only behavior is preserved
 
