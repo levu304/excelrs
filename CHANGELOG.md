@@ -19,6 +19,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `Worksheet.isMerged(row, col)` query to test merged-range membership.
 - Tolerate namespace-prefixed `<x:mergeCell>` from non-conformant producers.
 
+## [1.3.0] — 2026-07-18
+
+### Added
+
+- Row/Column `outlineLevel` (0–7) grouping (API, read, write).
+- `Worksheet.rowBreaks` / `colBreaks` page break getters/setters (API, read, write).
+- `Worksheet.insertRow(rowNumber, values?)` — shift rows below down by one.
+- `Worksheet.spliceRows(start, count, rows?)` — remove + insert rows.
+- `Worksheet.duplicateRow(rowNumber, count, includeStyle)` — copy rows.
+
+### Fixed
+
+- **RC-1 (Critical):** XML range bomb — cap column range at 16384 in reader.
+- **RC-2 (High):** `spliceRows` panic — clamp insert index on start > row count.
+- **RC-3 (High):** `duplicateRow` Arc aliasing — `detach_styles()` deep-copy before `clear_styles()`.
+- **RC-4 (High):** `insertRow` phantom row — return actual post-renumbered position.
+
 ## [1.2.1] — 2026-07-18
 
 ### Added

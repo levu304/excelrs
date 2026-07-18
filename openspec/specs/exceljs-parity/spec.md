@@ -3,7 +3,9 @@
 ## Purpose
 
 Tracks `excelrs`'s feature parity with [ExcelJS](https://github.com/exceljs/exceljs) and governs how the porting roadmap is derived, prioritized, and consumed by releases. This is the contract that future releases MODIFY to record newly shipped/partial areas. Introduced by change `v0-10-0-exceljs-roadmap-align`.
+
 ## Requirements
+
 ### Requirement: excelrs maintains an ExcelJS feature-parity matrix
 
 `excelrs` SHALL maintain a feature-parity matrix that maps each ExcelJS feature area to exactly one status: `shipped`, `partial`, `planned`, or `n-a` (explicitly out of scope). The matrix SHALL be derived by comparing `excelrs`'s actually-implemented behavior (verified against `openspec/specs/*`, `CHANGELOG.md`, and source) against the ExcelJS documented API surface.
@@ -70,3 +72,7 @@ Each `excelrs` release SHALL implement the next roadmap item(s) and update this 
 - **WHEN** release v1.2.0 is cut
 - **THEN** the matrix marks `conditional formatting` as `shipped`, advancing it from `targeted`
 
+#### Scenario: v1.3.0 ships worksheet-structure parity finish
+
+- **WHEN** release v1.3.0 is cut
+- **THEN** the matrix marks the remaining v1.x `planned` rows — `insert/splice/duplicate rows`, `row/col outlineLevel (grouping)`, and `row/col page breaks` — as `shipped`, advancing each from `planned`
