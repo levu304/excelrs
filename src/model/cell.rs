@@ -415,7 +415,9 @@ impl Cell {
     /// Deep clone: creates a new independent `Arc<Mutex<CellInner>>`
     /// (clone shares the existing Arc, mutate the same backing state).
     pub(crate) fn deep_clone(&self) -> Self {
-        Cell { inner: Arc::new(Mutex::new(self.inner.lock().expect("Cell lock poisoned").clone())) }
+        Cell {
+            inner: Arc::new(Mutex::new(self.inner.lock().expect("Cell lock poisoned").clone())),
+        }
     }
 
     pub fn set_style_raw(&mut self, style: Option<Style>) {

@@ -1482,7 +1482,8 @@ mod tests {
         ws.duplicate_row(1, 1, false);
 
         assert!(
-            ws.get_cell_by_address("A1".into()).style()
+            ws.get_cell_by_address("A1".into())
+                .style()
                 .as_ref()
                 .and_then(|s| s.font.as_ref())
                 .and_then(|f| f.bold)
