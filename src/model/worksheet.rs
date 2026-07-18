@@ -375,6 +375,26 @@ impl Worksheet {
         self.get_merged_ranges()
     }
 
+    /// Query whether the 1-indexed (row, col) lies inside any merged range.
+    /// Returns the enclosing range string (e.g. `"B2:D4"`) if so, else `None`.
+    /// Read companion to `mergedRanges`; closes the ExcelJS per-cell merged-state
+    /// parity gap without duplicating range state.
+    #[napi]
+    pub fn is_merged(&self, row: u32, col: u32) -> Option<String> {
+        for range in self.get_merged_ranges() {
+            let parts: Vec<&str> = range.split(':').collect();
+            if parts.len() != 2 {
+                continue;
+            }
+            let (c1, r1) = crate::types::parse_address(parts[0]).ok()?;
+            let (c2, r2) = crate::types::parse_address(parts[1]).ok()?;
+            if col >= c1 && col <= c2 && row >= r1 && row <= r2 {
+                return Some(range);
+            }
+        }
+        None
+    }
+
     // -- data_validations --
 
     /// Get all data validations for this worksheet.

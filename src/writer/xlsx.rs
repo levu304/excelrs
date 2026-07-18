@@ -2485,6 +2485,20 @@ mod tests {
         assert_eq!(other.value_raw().value_type.as_str(), "Null");
     }
 
+    /// `Worksheet.is_merged(row, col)` reports membership in any merged range.
+    #[test]
+    fn test_is_merged_query() {
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("M".into());
+        ws.insert_cell_value(2, 2, crate::model::cell::CellValue::string("anchor"));
+        ws.merge_cells("B2:D4".into()).unwrap();
+        let bytes = crate::writer::xlsx::workbook_to_bytes(&inner).unwrap();
+        let read = crate::reader::xlsx::workbook_inner_from_bytes(&bytes).unwrap();
+        let ws = &read.worksheets()[0];
+        assert_eq!(ws.is_merged(3, 3), Some("B2:D4".to_string())); // inside
+        assert_eq!(ws.is_merged(1, 1), None);                       // outside
+    }
+
     /// Row-level style survives a write → read round-trip. The writer emits
     /// `<row s="N">`; this change restores it into Row.style on read.
     #[test]

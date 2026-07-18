@@ -1005,7 +1005,7 @@ fn parse_merge_cells_from_xml(xml: &str) -> Vec<String> {
             break;
         }
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) if e.name().as_ref() == b"mergeCell" => {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) if e.local_name().as_ref() == b"mergeCell" => {
                 for attr in e.attributes().flatten() {
                     if attr.key.as_ref() == b"ref" {
                         result.push(String::from_utf8_lossy(&attr.value).into_owned());
@@ -3070,6 +3070,18 @@ mod tests {
         assert!(
             ranges.contains(&"A1:C3".to_string()),
             "explicit <mergeCell></mergeCell> must be parsed, got {ranges:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_merge_cells_namespaced() {
+        // A producer that emits a namespace-prefixed <x:mergeCell> must still
+        // be parsed — the matcher must compare local name, not qualified name.
+        let xml = r#"<mergeCells count="1"><x:mergeCell ref="A1:C3"></x:mergeCell></mergeCells>"#;
+        let ranges = parse_merge_cells_from_xml(xml);
+        assert!(
+            ranges.contains(&"A1:C3".to_string()),
+            "namespaced <mergeCell> must parse, got {ranges:?}"
         );
     }
 }
