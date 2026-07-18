@@ -333,6 +333,11 @@ export declare class Worksheet {
    * emission in the writer. Duplicate ranges are silently ignored.
    */
   mergeCells(range: string): void
+  /**
+   * Get all merged ranges for this worksheet (e.g. `["B2:D4"]`).
+   * Read companion to `mergeCells` — populated by the reader on read.
+   */
+  get mergedRanges(): Array<string>
   /** Get all data validations for this worksheet. */
   get dataValidations(): Array<DataValidation>
   /** Add or update a data validation. Upserts by sqref. */

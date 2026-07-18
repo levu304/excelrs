@@ -123,6 +123,12 @@ impl Row {
         cell.set_value_raw(value);
     }
 
+    /// Set the row style directly from a resolved `Style` — used by the reader.
+    /// Skips JSON validation (the style came from the source file's style table).
+    pub fn set_style_raw(&mut self, val: Option<Style>) {
+        *self.style.lock().expect("Row style lock poisoned") = val;
+    }
+
     /// Number of cells in this row.
     pub fn cell_count(&self) -> usize {
         self.cells.len()

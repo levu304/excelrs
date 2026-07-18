@@ -2452,6 +2452,70 @@ mod tests {
         assert_eq!(style.fill.as_ref().map(|f| f.kind.as_str()), Some("solid"));
     }
 
+    /// Merged cell ranges survive a write → read round-trip (v0.5.0 writer,
+    /// this change adds the reader path). The anchor keeps its value and the
+    /// other cells in the range carry no phantom value.
+    #[test]
+    fn test_round_trip_merge_cells() {
+        use crate::model::cell::CellValue;
+        use crate::reader::xlsx::workbook_inner_from_bytes;
+
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("Merge".into());
+        // Only the top-left anchor (B2) holds a value; the rest of the merge
+        // range is left empty so we can assert no phantom value on read.
+        ws.insert_cell_value(2, 2, CellValue::string("anchor"));
+        ws.merge_cells("B2:D4".into()).unwrap();
+
+        let bytes = crate::writer::xlsx::workbook_to_bytes(&inner).unwrap();
+        let read_back = workbook_inner_from_bytes(&bytes).unwrap();
+        let ws = &read_back.worksheets()[0];
+
+        let ranges = ws.get_merged_ranges();
+        assert!(
+            ranges.iter().any(|r| r == "B2:D4"),
+            "merged range B2:D4 should round-trip"
+        );
+
+        // Anchor keeps its value.
+        let anchor = ws.get_cell_by_address("B2".into());
+        assert_eq!(anchor.value_raw().string.as_deref(), Some("anchor"));
+        // Non-master cell carries no value.
+        let other = ws.get_cell_by_address("C3".into());
+        assert_eq!(other.value_raw().value_type.as_str(), "Null");
+    }
+
+    /// Row-level style survives a write → read round-trip. The writer emits
+    /// `<row s="N">`; this change restores it into Row.style on read.
+    #[test]
+    fn test_round_trip_row_style() {
+        use crate::reader::xlsx::workbook_inner_from_bytes;
+
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("RowStyle".into());
+        ws.add_row(vec![serde_json::json!("a"), serde_json::json!("b")]);
+        ws.add_row(vec![serde_json::json!("c"), serde_json::json!("d")]);
+        ws.get_row(2)
+            .set_style(serde_json::json!({
+                "font": { "bold": true, "color": "FFFF0000" },
+                "fill": { "kind": "solid", "foreground": "FFFFFFFF" },
+            }))
+            .unwrap();
+
+        let bytes = crate::writer::xlsx::workbook_to_bytes(&inner).unwrap();
+        let read_back = workbook_inner_from_bytes(&bytes).unwrap();
+        let ws = &read_back.worksheets()[0];
+
+        let row = ws.get_row(2);
+        let style = row.style().expect("row 2 style should round-trip");
+        assert_eq!(style.font.as_ref().unwrap().bold, Some(true));
+        assert_eq!(style.font.as_ref().unwrap().color.as_deref(), Some("FFFF0000"));
+        assert_eq!(
+            style.fill.as_ref().and_then(|f| f.foreground.as_deref()),
+            Some("FFFFFFFF")
+        );
+    }
+
     fn build_test_worksheet() -> Worksheet {
         let mut ws = Worksheet::new("Test".into());
         ws.set_id(1);

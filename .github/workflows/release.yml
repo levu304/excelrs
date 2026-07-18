@@ -208,11 +208,21 @@ jobs:
             const wb = new Workbook();
             const ws = wb.addWorksheet('test');
             ws.addRow([1, 2, 3]);
+            ws.addRow(['x', 'y', 'z']);
+            ws.addRow(['p', 'q', 'r']);
             const style = {
               font: { bold: true },
               fill: { kind: 'solid', foreground: 'FFFF0000' }
             };
             ws.setCellStyle(1, 2, style);
+            // Row-level style (read-path gap closed by this change).
+            ws.getRow(3).style = {
+              font: { bold: true, color: 'FFFF0000' },
+              fill: { kind: 'solid', foreground: 'FFFFFFFF' }
+            };
+            // Merge (writer emits <mergeCells> since v0.5.0; reader now
+            // restores it — read-path gap closed by this change).
+            ws.mergeCells('B2:D2');
             wb.xlsx.write()
               .then(buf => {
                 if (buf.length < 100) {
@@ -223,8 +233,8 @@ jobs:
                 console.log('✓ native binding works, xlsx size:', buf.length);
                 const wb2 = new Workbook();
                 return wb2.xlsx.read(buf).then(() => {
-                  const s = wb2.getWorksheet('test')
-                    .getCellByRc(1, 2).style;
+                  const ws2 = wb2.getWorksheet('test');
+                  const s = ws2.getCellByRc(1, 2).style;
                   if (!s || !s.font || s.font.bold !== true) {
                     throw new Error(
                       'style lost on read: font.bold not preserved'
@@ -240,6 +250,29 @@ jobs:
                     );
                   }
                   console.log('✓ styled xlsx round-trips through read path');
+                  // Merged range must survive the read path.
+                  const merges = ws2.mergedRanges || [];
+                  if (!merges.includes('B2:D2')) {
+                    throw new Error(
+                      'merge lost on read: mergedRanges=' +
+                      JSON.stringify(merges)
+                    );
+                  }
+                  console.log('✓ merged range round-trips through read path');
+                  // Row-level style must survive the read path.
+                  const rs = ws2.getRow(3).style;
+                  if (!rs || !rs.font || rs.font.bold !== true ||
+                      rs.font.color !== 'FFFF0000') {
+                    throw new Error(
+                      'row style lost on read: ' + JSON.stringify(rs)
+                    );
+                  }
+                  if (!rs.fill || rs.fill.foreground !== 'FFFFFFFF') {
+                    throw new Error(
+                      'row style lost on read: fill=' + JSON.stringify(rs.fill)
+                    );
+                  }
+                  console.log('✓ row style round-trips through read path');
                 });
               })
               .catch(err => {

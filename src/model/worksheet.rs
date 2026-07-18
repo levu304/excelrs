@@ -368,6 +368,13 @@ impl Worksheet {
         Ok(())
     }
 
+    /// Get all merged ranges for this worksheet (e.g. `["B2:D4"]`).
+    /// Read companion to `mergeCells`; exercised by the read-path round-trip.
+    #[napi(getter)]
+    pub fn merged_ranges(&self) -> Vec<String> {
+        self.get_merged_ranges()
+    }
+
     // -- data_validations --
 
     /// Get all data validations for this worksheet.
@@ -793,6 +800,25 @@ impl Worksheet {
     /// Set the style on a cell at (row, col) — used by the reader.
     pub fn insert_cell_style(&self, row: u32, col: u32, style: Style) {
         self.with_cell_mut(row, col, |cell| cell.set_style_raw(Some(style)));
+    }
+
+    /// Set the style on a row — used by the reader. Creates the row if it does
+    /// not yet exist (a styled empty row has no cells to materialize it).
+    pub fn insert_row_style(&self, row: u32, style: Style) {
+        let mut rows = self.rows.lock().expect("Worksheet rows lock poisoned");
+        let ws_row = rows.entry(row).or_insert_with(|| Row::new(row));
+        ws_row.set_style_raw(Some(style));
+    }
+
+    /// Append a merged range (used by the reader). Duplicate ranges ignored.
+    pub fn insert_merge_range(&self, range: String) {
+        let mut ranges = self
+            .merged_ranges
+            .lock()
+            .expect("Worksheet merged_ranges lock poisoned");
+        if !ranges.contains(&range) {
+            ranges.push(range);
+        }
     }
 
     /// Insert a data validation into the worksheet (used by reader).

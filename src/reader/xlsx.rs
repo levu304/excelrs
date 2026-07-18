@@ -22,7 +22,7 @@ use crate::error::ExcelrsError;
 use crate::model::cell::{CellValue, RichTextRun};
 use crate::model::header_footer::HeaderFooter;
 use crate::model::page_setup::{PageMargins, PageSetup};
-use crate::model::style::Font;
+use crate::model::style::{Font, Style};
 use crate::model::workbook::Workbook;
 use crate::model::workbook_inner::WorkbookInner;
 
@@ -164,6 +164,25 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
         for mut t in tables {
             t.rows = reconstruct_table_rows(&inner.worksheets[i], &t);
             inner.worksheets[i].insert_table(t);
+        }
+    }
+
+    // Step 3.15: merged cell ranges — writer emits <mergeCells> since v0.5.0,
+    // but the reader never restored them. Attach per-sheet ranges.
+    let per_sheet_merges = parse_sheet_merge_cells(data, sheet_count)?;
+    for (i, ranges) in per_sheet_merges.into_iter().enumerate() {
+        for range in ranges {
+            inner.worksheets[i].insert_merge_range(range);
+        }
+    }
+
+    // Step 3.16: row-level styles — writer emits <row s="N">, but the reader
+    // never restored Row.style. Resolve the xf index through the same style
+    // table used for cells and attach to the row (mirrors insert_cell_style).
+    let per_sheet_row_styles = parse_sheet_row_styles(data, sheet_count, &style_table)?;
+    for (i, styles) in per_sheet_row_styles.into_iter().enumerate() {
+        for (row_num, style) in styles {
+            inner.worksheets[i].insert_row_style(row_num, style);
         }
     }
 
@@ -946,6 +965,128 @@ fn parse_header_footer_from_xml(xml: &str) -> Option<HeaderFooter> {
     } else {
         Some(hf)
     }
+}
+
+/// Parse merged cell ranges from every worksheet part. Returns one vector
+/// per sheet (index aligned with `sheet_count`), each holding the raw `ref`
+/// strings from `<mergeCell ref="A1:C3"/>`.
+fn parse_sheet_merge_cells(data: &[u8], sheet_count: usize) -> Result<Vec<Vec<String>>, ExcelrsError> {
+    use std::io::{Cursor, Read};
+    let cursor = Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
+    let mut all: Vec<Vec<String>> = Vec::with_capacity(sheet_count);
+    for i in 0..sheet_count {
+        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+        let ranges = match archive.by_name(&path) {
+            Ok(entry) => {
+                let mut xml = String::new();
+                entry.take(MAX_ENTRY_BYTES).read_to_string(&mut xml)?;
+                parse_merge_cells_from_xml(&xml)
+            }
+            Err(_) => Vec::new(),
+        };
+        all.push(ranges);
+    }
+    Ok(all)
+}
+
+/// Extract `<mergeCell ref="…"/>` entries from a worksheet XML blob.
+fn parse_merge_cells_from_xml(xml: &str) -> Vec<String> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut result: Vec<String> = Vec::new();
+    let mut events: u64 = 0;
+    loop {
+        buf.clear();
+        events += 1;
+        if events > MAX_EVENTS as u64 {
+            break;
+        }
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Empty(ref e)) if e.name().as_ref() == b"mergeCell" => {
+                for attr in e.attributes().flatten() {
+                    if attr.key.as_ref() == b"ref" {
+                        result.push(String::from_utf8_lossy(&attr.value).into_owned());
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+    result
+}
+
+/// Parse row-level styles from every worksheet part. Returns one vector per
+/// sheet (index aligned with `sheet_count`), each holding `(row_number, Style)`
+/// pairs resolved from the `<row r="N" s="M">` attribute via `style_table`.
+fn parse_sheet_row_styles(
+    data: &[u8],
+    sheet_count: usize,
+    style_table: &StyleTableRead,
+) -> Result<Vec<Vec<(u32, Style)>>, ExcelrsError> {
+    use std::io::{Cursor, Read};
+    let cursor = Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
+    let mut all: Vec<Vec<(u32, Style)>> = Vec::with_capacity(sheet_count);
+    for i in 0..sheet_count {
+        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+        let styles = match archive.by_name(&path) {
+            Ok(entry) => {
+                let mut xml = String::new();
+                entry.take(MAX_ENTRY_BYTES).read_to_string(&mut xml)?;
+                parse_row_styles_from_xml(&xml, style_table)
+            }
+            Err(_) => Vec::new(),
+        };
+        all.push(styles);
+    }
+    Ok(all)
+}
+
+/// Extract `<row r="N" s="M">` style indices from a worksheet XML blob and
+/// resolve each to a `Style` through the shared read-side style table.
+fn parse_row_styles_from_xml(xml: &str, style_table: &StyleTableRead) -> Vec<(u32, Style)> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut result: Vec<(u32, Style)> = Vec::new();
+    let mut events: u64 = 0;
+    loop {
+        buf.clear();
+        events += 1;
+        if events > MAX_EVENTS as u64 {
+            break;
+        }
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) if e.name().as_ref() == b"row" => {
+                let mut row_num: Option<u32> = None;
+                let mut xf_idx: Option<u32> = None;
+                for attr in e.attributes().flatten() {
+                    let key = attr.key.as_ref();
+                    let val = String::from_utf8_lossy(&attr.value);
+                    if key == b"r" {
+                        row_num = val.trim().parse().ok();
+                    } else if key == b"s" {
+                        xf_idx = val.trim().parse().ok();
+                    }
+                }
+                if let (Some(r), Some(s)) = (row_num, xf_idx) {
+                    if let Some(style) = style_table.resolve_style(s) {
+                        result.push((r, style));
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+    result
 }
 
 // ---------------------------------------------------------------------------
