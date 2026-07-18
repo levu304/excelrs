@@ -1005,7 +1005,7 @@ fn parse_merge_cells_from_xml(xml: &str) -> Vec<String> {
             break;
         }
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Empty(ref e)) if e.name().as_ref() == b"mergeCell" => {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) if e.name().as_ref() == b"mergeCell" => {
                 for attr in e.attributes().flatten() {
                     if attr.key.as_ref() == b"ref" {
                         result.push(String::from_utf8_lossy(&attr.value).into_owned());
@@ -3057,6 +3057,19 @@ mod tests {
             !found.get("conditionalFormatting").unwrap_or(&String::new()).is_empty(),
             "conditionalFormatting attrs empty: {:?}",
             found
+        );
+    }
+
+    #[test]
+    fn test_parse_merge_cells_explicit_open_close() {
+        // Some producers serialize empty elements as explicit open/close
+        // (<mergeCell ref="…"></mergeCell>) instead of self-closing. The reader
+        // must accept both forms (mirrors every other matcher in this file).
+        let xml = r#"<mergeCells count="1"><mergeCell ref="A1:C3"></mergeCell></mergeCells>"#;
+        let ranges = parse_merge_cells_from_xml(xml);
+        assert!(
+            ranges.contains(&"A1:C3".to_string()),
+            "explicit <mergeCell></mergeCell> must be parsed, got {ranges:?}"
         );
     }
 }
