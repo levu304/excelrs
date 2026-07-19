@@ -11,6 +11,6 @@
 
 ## 3. Verify & land
 
-- [ ] 3.1 `cargo test --lib stream` fully green (existing + new test).
-- [ ] 3.2 Confirm `index.d.ts` / `package.json` unchanged.
-- [ ] 3.3 Commit on `v2-0-0-streaming-parity-capstone` branch; push; confirm CI green on PR #24.
+- [x] 3.1 `cargo test --lib stream` fully green (existing + new test).
+- [x] 3.2 Confirm `index.d.ts` / `package.json` unchanged.
+- [x] 3.3 Commit on `v2-0-0-streaming-parity-capstone` branch; push; confirm CI green on PR #24.
