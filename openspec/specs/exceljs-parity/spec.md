@@ -3,9 +3,7 @@
 ## Purpose
 
 Tracks `excelrs`'s feature parity with [ExcelJS](https://github.com/exceljs/exceljs) and governs how the porting roadmap is derived, prioritized, and consumed by releases. This is the contract that future releases MODIFY to record newly shipped/partial areas. Introduced by change `v0-10-0-exceljs-roadmap-align`.
-
 ## Requirements
-
 ### Requirement: excelrs maintains an ExcelJS feature-parity matrix
 
 `excelrs` SHALL maintain a feature-parity matrix that maps each ExcelJS feature area to exactly one status: `shipped`, `partial`, `planned`, or `n-a` (explicitly out of scope). The matrix SHALL be derived by comparing `excelrs`'s actually-implemented behavior (verified against `openspec/specs/*`, `CHANGELOG.md`, and source) against the ExcelJS documented API surface.
@@ -76,3 +74,31 @@ Each `excelrs` release SHALL implement the next roadmap item(s) and update this 
 
 - **WHEN** release v1.3.0 is cut
 - **THEN** the matrix marks the remaining v1.x `planned` rows — `insert/splice/duplicate rows`, `row/col outlineLevel (grouping)`, and `row/col page breaks` — as `shipped`, advancing each from `planned`
+
+#### Scenario: v2.0.0 ships streaming XLSX and completes the parity program
+
+- **WHEN** release v2.0.0 is cut
+- **THEN** the matrix marks `workbook IO (streams)` as `shipped` and the ROADMAP records the v1.x drop-in ExcelJS-4.4.0 parity program as complete, with charts, pivot tables, formula evaluation, themes-write, sheet state, tab color, and default properties listed as out of scope
+
+### Requirement: excelrs declares the ExcelJS-4.4.0 v1.x parity program complete
+
+After release v2.0.0, `excelrs` SHALL declare the ExcelJS-4.4.0 v1.x drop-in
+compatibility parity program **complete**: every feature area in the v1.x
+targeted roadmap (including `streaming XLSX`, and all v0.x–v1.x areas) SHALL be
+marked `shipped` (or `partial` where explicitly noted), and the ROADMAP SHALL
+record the program as complete. The following areas SHALL be explicitly recorded
+as intentionally out of the completed program and remain `planned` / `n-a`:
+charts, pivot tables, and formula evaluation (distant / deferred), plus
+themes-write, sheet state (visible/hidden), tab color, and default worksheet
+properties (post-v2.0.0 triage).
+
+#### Scenario: Streaming closes the final matrix area
+
+- **WHEN** release v2.0.0 is cut
+- **THEN** the parity matrix marks `workbook IO (streams)` as `shipped`, leaving no targeted v1.x area unshipped
+
+#### Scenario: Program declared complete with documented exclusions
+
+- **WHEN** the v2.0.0 release is recorded
+- **THEN** the ROADMAP records the v1.x drop-in ExcelJS-4.4.0 parity program as complete, and charts, pivot tables, formula evaluation, themes-write, sheet state, tab color, and default properties are listed as out of scope (`planned` / `n-a`)
+

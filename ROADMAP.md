@@ -126,7 +126,7 @@ The v1.0.0 drop-in compatibility milestone is complete. Post-v1 work ships as a 
 | **v1.1.0** | **Tables** | high | shipped | `ws.addTable` / `ws.getTable(s)` / `ws.removeTable`; `Table` / `TableColumn` / `TableRow` model; `xl/tables/tableN.xml` + relationship; `autoFilter` integration; header/totals rows; header styling |
 | **v1.2.0** | **Conditional formatting** | high | targeted | read/write `<conditionalFormatting>` + `dxfs`; rule types `cellIs`, `expression`/formula, `colorScale`, `dataBar`, `iconSet`, `top10`, `unique`/`duplicate`, `containsText`, `timePeriod`, blanks/errors/nonBlanks; priority ordering |
 | **v1.3.0** | **Worksheet-structure parity finish** | medium | targeted | `insertRow(s)` / `spliceRows` / `duplicateRow`; row/col `outlineLevel` (grouping); `rowBreaks` / `colBreaks` page breaks — closes the remaining "planned" v1.x parity-matrix rows |
-| **v2.0.0** | **Streaming XLSX + parity capstone** | high | in progress | streaming reader/writer architecture for large files (SAX-based); **declares the ExcelJS-4.4.0 v1.x drop-in parity program complete** (exclusions: charts, pivot tables, formula evaluation, themes-write, sheet state, tab color, default properties); streaming surface is non-breaking (new `stream` namespace only) |
+| **v2.0.0** | **Streaming XLSX + parity capstone** | high | shipped | streaming reader/writer architecture for large files (SAX-based); **declares the ExcelJS-4.4.0 v1.x drop-in parity program complete** (exclusions: charts, pivot tables, formula evaluation, themes-write, sheet state, tab color, default properties); streaming surface is non-breaking (new `stream` namespace only) |
 
 **Deferred to v3+ (distant, unchanged):**
 
