@@ -95,8 +95,8 @@ struct RowEmit {
 /// Max bytes read from a single zip entry on the streaming path. Bounds the
 /// *actual* decompressed bytes (via `take`), not just the declared size, so a
 /// part that declares a small size but decompresses large cannot exhaust memory.
-/// Max SAX events per sheet (anti-billion-row / entity-expansion guard).
 const MAX_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
+/// Max SAX events per sheet (anti-billion-row / entity-expansion guard).
 const MAX_EVENTS: usize = 5_000_000;
 
 // ---------------------------------------------------------------------------
@@ -213,7 +213,15 @@ fn parse_workbook_sheet_targets(
                 }
                 if let (Some(name), Some(rid)) = (name, rid) {
                     if let Some(target) = rid_to_target.get(&rid) {
-                        result.push((name, format!("xl/{}", target)));
+                        // Rels targets are relative to xl/ by default, but may be
+                        // absolute (package-rooted, leading '/'). Strip the leading
+                        // '/' for absolute targets; prefix xl/ for relative ones.
+                        let path = if let Some(pkg) = target.strip_prefix('/') {
+                            pkg.to_string()
+                        } else {
+                            format!("xl/{}", target)
+                        };
+                        result.push((name, path));
                     }
                 }
             }
@@ -1097,6 +1105,84 @@ mod tests {
         assert_eq!(
             sheets[0].rows[0].cells[0].value,
             StreamValue::Text("Custom".to_string())
+        );
+    }
+
+    #[test]
+    fn stream_read_resolves_sheet_by_absolute_rels_target() {
+        // Like stream_read_resolves_sheet_by_rels_target, but the rels Target is
+        // *absolute* (package-rooted, leading '/'). Without the fix the reader
+        // builds "xl//xl/worksheets/sheet_v2.xml" and silently yields an empty
+        // sheet; with the fix it strips the leading '/' and reads the real part.
+        use std::io::Write;
+        let mut buf = Vec::new();
+        {
+            let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let opts = zip::write::SimpleFileOptions::default();
+
+            w.start_file("[Content_Types].xml", opts).unwrap();
+            w.write_all(concat!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+                r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">"#,
+                r#"<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>"#,
+                r#"<Default Extension="xml" ContentType="application/xml"/>"#,
+                r#"<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>"#,
+                r#"<Override PartName="/xl/worksheets/sheet_v2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>"#,
+                r#"</Types>"#,
+            ).as_bytes()).unwrap();
+
+            w.start_file("_rels/.rels", opts).unwrap();
+            w.write_all(concat!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+                r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
+                r#"<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>"#,
+                r#"</Relationships>"#,
+            ).as_bytes()).unwrap();
+
+            w.start_file("xl/workbook.xml", opts).unwrap();
+            w.write_all(
+                concat!(
+                    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+                    r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main""#,
+                    r#" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
+                    r#"<sheets><sheet name="AbsTarget" sheetId="1" r:id="rId1"/></sheets>"#,
+                    r#"</workbook>"#,
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+
+            w.start_file("xl/_rels/workbook.xml.rels", opts).unwrap();
+            w.write_all(concat!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+                r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
+                r#"<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet""#,
+                r#" Target="/xl/worksheets/sheet_v2.xml"/>"#,
+                r#"</Relationships>"#,
+            ).as_bytes()).unwrap();
+
+            w.start_file("xl/worksheets/sheet_v2.xml", opts).unwrap();
+            w.write_all(
+                concat!(
+                    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+                    r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"#,
+                    r#"<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>AbsoluteCustom</t></is></c></row></sheetData>"#,
+                    r#"</worksheet>"#,
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+
+            w.finish().unwrap();
+        }
+
+        let sheets = stream_read(&buf).expect("read");
+        assert_eq!(sheets.len(), 1);
+        assert_eq!(sheets[0].name, "AbsTarget");
+        assert_eq!(sheets[0].rows.len(), 1);
+        assert_eq!(
+            sheets[0].rows[0].cells[0].value,
+            StreamValue::Text("AbsoluteCustom".to_string())
         );
     }
 
