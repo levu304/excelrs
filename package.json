@@ -1,6 +1,6 @@
 {
   "name": "@levu304/excelrs",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "Native XLSX spreadsheet library for Node.js (Rust port of exceljs)",
   "main": "index.js",
   "types": "index.d.ts",

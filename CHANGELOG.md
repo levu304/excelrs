@@ -6,7 +6,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.0.1] — 2026-07-19
+## [2.0.2] — 2026-07-19
+
+### Fixed
+
+- **Release publish auth.** v2.0.1 failed because `actions/setup-node` with
+  `registry-url` creates a temp `.npmrc` via `NPM_CONFIG_USERCONFIG` that
+  shadows the npm CLI's OIDC token exchange. Removed `registry-url` from the
+  publish job's setup-node step — npm defaults to `registry.npmjs.org`, and
+  the OIDC detection finds the `ACTIONS_ID_TOKEN_REQUEST_TOKEN` env var
+  without interference from a stale npmrc.
+
+## [2.0.1] — 2026-07-19 (aborted — publish auth failure)
+
+Attempted OIDC migration; `registry-url` in setup-node blocked OIDC detect.
+Skipped at the same SHA as 2.0.0 for the main package.
 
 ### Changed
 
