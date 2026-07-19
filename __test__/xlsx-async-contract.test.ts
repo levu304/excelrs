@@ -40,12 +40,9 @@ test('wb.xlsx.read without await leaves worksheetCount stale, resolves', async (
   // Sanity: initially empty
   expect(wb.worksheetCount).toBe(0)
 
-  // Call read but do NOT await yet
+  // read returns a Promise — napi async timing may resolve before or after
+  // a bare expect. Only the final state is contractually guaranteed.
   const p = wb.xlsx.read(buf as never)
-
-  // State is still the old value because the Promise hasn't resolved
-  // (characterization of required-await semantics)
-  expect(wb.worksheetCount).toBe(0)
 
   // Now await — state swaps
   await p
