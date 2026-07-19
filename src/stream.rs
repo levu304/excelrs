@@ -143,9 +143,14 @@ fn parse_workbook_sheet_targets(data: &[u8]) -> Result<Vec<(String, u32)>, Excel
 
     // r:id → target (e.g. "worksheets/sheet3.xml")
     let mut rid_to_target: HashMap<String, String> = HashMap::new();
-    if let Ok(rels) = archive.by_name("xl/_rels/workbook.xml.rels") {
+    if let Ok(mut rels) = archive.by_name("xl/_rels/workbook.xml.rels") {
+        if rels.size() > MAX_ENTRY_BYTES {
+            return Err(ExcelrsError::Read(format!(
+                "workbook.xml.rels exceeds streaming size limit ({MAX_ENTRY_BYTES} bytes)"
+            )));
+        }
         let mut xml = String::new();
-        rels.take(MAX_ENTRY_BYTES).read_to_string(&mut xml)?;
+        rels.read_to_string(&mut xml)?;
         let mut reader = XmlReader::from_str(&xml);
         let mut buf = Vec::new();
         loop {
@@ -174,8 +179,13 @@ fn parse_workbook_sheet_targets(data: &[u8]) -> Result<Vec<(String, u32)>, Excel
 
     // document-order <sheet name r:id> in xl/workbook.xml
     let mut workbook_xml = String::new();
-    if let Ok(wb) = archive.by_name("xl/workbook.xml") {
-        wb.take(MAX_ENTRY_BYTES).read_to_string(&mut workbook_xml)?;
+    if let Ok(mut wb) = archive.by_name("xl/workbook.xml") {
+        if wb.size() > MAX_ENTRY_BYTES {
+            return Err(ExcelrsError::Read(format!(
+                "workbook.xml exceeds streaming size limit ({MAX_ENTRY_BYTES} bytes)"
+            )));
+        }
+        wb.read_to_string(&mut workbook_xml)?;
     }
     let mut reader = XmlReader::from_str(&workbook_xml);
     let mut buf = Vec::new();
@@ -244,27 +254,39 @@ fn parse_shared_strings(data: &[u8]) -> Result<Vec<String>, ExcelrsError> {
     let mut strings: Vec<String> = Vec::new();
     let mut cur: Option<String> = None;
     let mut in_t = false;
+    let mut in_rph = false;
     let mut events: u64 = 0;
     loop {
         buf.clear();
         events += 1;
         if events > MAX_EVENTS as u64 {
-            break;
+            return Err(ExcelrsError::Read(format!(
+                "sharedStrings.xml exceeds event limit ({MAX_EVENTS})"
+            )));
         }
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) if e.name().as_ref() == b"si" => {
                 cur = Some(String::new());
             }
+            Ok(Event::Empty(ref e)) if e.name().as_ref() == b"si" => {
+                strings.push(String::new());
+            }
+            Ok(Event::Start(ref e)) if e.name().as_ref() == b"rPh" || e.name().as_ref() == b"phoneticPr" => {
+                in_rph = true;
+            }
             Ok(Event::Start(ref e)) if e.name().as_ref() == b"t" => {
                 in_t = true;
             }
-            Ok(Event::Text(ref e)) if in_t => {
+            Ok(Event::Text(ref e)) if in_t && !in_rph => {
                 if let Some(c) = cur.as_mut() {
                     c.push_str(&e.unescape().unwrap_or_default());
                 }
             }
             Ok(Event::End(ref e)) if e.name().as_ref() == b"t" => {
                 in_t = false;
+            }
+            Ok(Event::End(ref e)) if e.name().as_ref() == b"rPh" || e.name().as_ref() == b"phoneticPr" => {
+                in_rph = false;
             }
             Ok(Event::End(ref e)) if e.name().as_ref() == b"si" => {
                 if let Some(s) = cur.take() {
@@ -313,7 +335,9 @@ fn parse_sheet_rows(
         buf.clear();
         events += 1;
         if events > MAX_EVENTS as u64 {
-            break;
+            return Err(ExcelrsError::Read(format!(
+                "sheet exceeds event limit ({MAX_EVENTS})"
+            )));
         }
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) if e.name().as_ref() == b"sheetData" => in_sheet_data = true,
@@ -913,5 +937,27 @@ mod tests {
         let read = stream_read(&bytes).expect("read");
         assert_eq!(read.len(), 1);
         assert_eq!(read[0].rows[0].cells[0].value, StreamValue::Formula("B1&C1".into()));
+    }
+
+    #[test]
+    fn shared_strings_handles_empty_and_phonetic() {
+        // Minimal xlsx zip containing only xl/sharedStrings.xml.
+        let sst = concat!(
+            "<sst xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">",
+            "<si/>",
+            "<si><t>alpha</t></si>",
+            "<si><t>\u{6771}\u{4eac}</t><rPh sb=\"0\" eb=\"1\"><t>\u{30c8}\u{30a6}\u{30ad}\u{30e7}\u{30a6}</t></rPh></si>",
+            "</sst>",
+        );
+        let mut buf = Vec::new();
+        {
+            let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let opts = zip::write::SimpleFileOptions::default();
+            w.start_file("xl/sharedStrings.xml", opts).unwrap();
+            w.write_all(sst.as_bytes()).unwrap();
+            w.finish().unwrap();
+        }
+        let strings = parse_shared_strings(&buf).expect("parse");
+        assert_eq!(strings, vec!["", "alpha", "\u{6771}\u{4eac}"]);
     }
 }
