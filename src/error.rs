@@ -19,6 +19,10 @@ pub enum ExcelrsError {
     #[error("Invalid XLSX format: {0}")]
     Parse(String),
 
+    /// Streaming / read-time guard (e.g. entry exceeds the size limit).
+    #[error("Read error: {0}")]
+    Read(String),
+
     /// Requested sheet does not exist.
     #[error("Sheet '{0}' not found")]
     SheetNotFound(String),

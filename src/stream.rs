@@ -117,9 +117,14 @@ pub fn stream_read(data: &[u8]) -> Result<Vec<StreamSheet>, ExcelrsError> {
     for (name, sheet_num) in ordered {
         let path = format!("xl/worksheets/sheet{}.xml", sheet_num);
         let xml = match archive.by_name(&path) {
-            Ok(entry) => {
+            Ok(mut entry) => {
+                if entry.size() > MAX_ENTRY_BYTES {
+                    return Err(ExcelrsError::Read(format!(
+                        "worksheet '{path}' exceeds streaming size limit ({MAX_ENTRY_BYTES} bytes)"
+                    )));
+                }
                 let mut s = String::new();
-                entry.take(MAX_ENTRY_BYTES).read_to_string(&mut s)?;
+                entry.read_to_string(&mut s)?;
                 s
             }
             Err(_) => String::new(),
@@ -222,12 +227,17 @@ fn sheet_number_from_target(target: &str) -> Option<u32> {
 /// Parse `xl/sharedStrings.xml` into an index-ordered vector of strings.
 fn parse_shared_strings(data: &[u8]) -> Result<Vec<String>, ExcelrsError> {
     let mut archive = zip::ZipArchive::new(Cursor::new(data)).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
-    let entry = match archive.by_name("xl/sharedStrings.xml") {
+    let mut entry = match archive.by_name("xl/sharedStrings.xml") {
         Ok(e) => e,
         Err(_) => return Ok(Vec::new()),
     };
+    if entry.size() > MAX_ENTRY_BYTES {
+        return Err(ExcelrsError::Read(format!(
+            "sharedStrings.xml exceeds streaming size limit ({MAX_ENTRY_BYTES} bytes)"
+        )));
+    }
     let mut xml = String::new();
-    entry.take(MAX_ENTRY_BYTES).read_to_string(&mut xml)?;
+    entry.read_to_string(&mut xml)?;
 
     let mut reader = XmlReader::from_str(&xml);
     let mut buf = Vec::new();
@@ -296,6 +306,7 @@ fn parse_sheet_rows(
     let mut value_buf = String::new();
     let mut in_inline = false;
     let mut inline_buf = String::new();
+    let mut in_f = false;
 
     let mut events: u64 = 0;
     loop {
@@ -359,6 +370,11 @@ fn parse_sheet_rows(
             }
             Ok(Event::Start(ref e)) if in_cell && e.name().as_ref() == b"f" => {
                 has_formula = true;
+                in_f = true;
+                formula_buf.clear();
+            }
+            Ok(Event::Empty(ref e)) if in_cell && e.name().as_ref() == b"f" => {
+                has_formula = true;
                 formula_buf.clear();
             }
             Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) if in_cell && e.name().as_ref() == b"is" => {
@@ -372,7 +388,7 @@ fn parse_sheet_rows(
                 if in_inline {
                     inline_buf.push_str(&t);
                 }
-                if has_formula && in_cell {
+                if in_f {
                     formula_buf.push_str(&t);
                 }
             }
@@ -390,6 +406,9 @@ fn parse_sheet_rows(
             }
             Ok(Event::End(ref e)) if in_cell && e.name().as_ref() == b"is" => {
                 in_inline = false;
+            }
+            Ok(Event::End(ref e)) if in_cell && e.name().as_ref() == b"f" => {
+                in_f = false;
             }
             Ok(Event::Eof) => break,
             Err(_) => break,
@@ -730,7 +749,7 @@ fn write_sheet_xml<W: Write>(
                 ),
                 3 => (
                     " t=\"str\"".to_string(),
-                    format!("<f>{}</f><v>{}</v>", escape(&ce.formula), escape(&ce.formula)),
+                    format!("<f>{}</f><v>0</v>", escape(&ce.formula)),
                 ),
                 _ => ("".to_string(), String::new()),
             };
@@ -874,5 +893,25 @@ mod tests {
         assert_eq!(read[0].name, "Src");
         assert_eq!(read[0].rows[0].cells[0].value, txt("greeting"));
         assert_eq!(read[0].rows[1].cells[0].value, num(99.0));
+    }
+
+    #[test]
+    fn stream_formula_roundtrip() {
+        let sheets = vec![StreamSheet {
+            name: "S".into(),
+            rows: vec![StreamRow {
+                r: 1,
+                cells: vec![StreamCell {
+                    col: 4,
+                    value: StreamValue::Formula("B1&C1".into()),
+                    style: None,
+                }],
+                style: None,
+            }],
+        }];
+        let bytes = stream_write(&sheets).expect("write");
+        let read = stream_read(&bytes).expect("read");
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].rows[0].cells[0].value, StreamValue::Formula("B1&C1".into()));
     }
 }
