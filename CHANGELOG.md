@@ -6,6 +6,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1] — 2026-07-19
+
+### Changed
+
+- **Published via npm OIDC trusted publishing.** The release pipeline no longer
+  uses a long-lived `NPM_TOKEN` secret. `npm publish` authenticates via a
+  per-job OIDC token exchange (npm trusted publishers), eliminating the
+  standing-exposure risk of a write token in repo secrets.
+- **Bumped Node.js to 22.14.0** in CI and release workflows (was 20). Provides
+  OIDC-capable npm 11.x and an LTS through April 2027.
+
+### Removed
+
+- `NPM_TOKEN` secret — the four platform packages plus main package all publish
+  via OIDC. The repo secret has been deleted.
+
 ## [2.0.0] — 2026-07-19
 
 ### Added
