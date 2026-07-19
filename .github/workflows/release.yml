@@ -91,6 +91,9 @@ jobs:
         with:
           node-version: 22.14.0
 
+      - name: Upgrade npm for OIDC support
+        run: npm install -g npm@11
+
       - name: Install pnpm
         run: corepack enable
 

@@ -6,7 +6,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.0.2] — 2026-07-19
+## [2.0.3] — 2026-07-19
+
+### Fixed
+
+- **Release publish auth.** v2.0.1 and v2.0.2 failed because Node 22.14.0 as
+  resolved by the pinned `setup-node` SHA ships npm 10.x, which does not
+  support OIDC token exchange. Added `npm install -g npm@11` before the
+  publish step to ensure npm CLI ≥11.5.1 can detect the
+  `ACTIONS_ID_TOKEN_REQUEST_TOKEN` env var and perform the OIDC exchange.
+
+## [2.0.2] — 2026-07-19 (aborted — npm OIDC detection missing)
+
+Setup-node SHA resolved npm 10.x without OIDC support. v2.0.2 was a tag-only
+release; same binary content as v2.0.0.
 
 ### Fixed
 
