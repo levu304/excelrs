@@ -1,10 +1,14 @@
 {
   "name": "@levu304/excelrs",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "description": "Native XLSX spreadsheet library for Node.js (Rust port of exceljs)",
   "main": "index.js",
   "types": "index.d.ts",
   "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/levu304/excelrs.git"
+  },
   "packageManager": "pnpm@9.15.4",
   "napi": {
     "binaryName": "excelrs",
