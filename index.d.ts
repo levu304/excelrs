@@ -147,6 +147,12 @@ export declare class Workbook {
    */
   get xlsx(): WorkbookXlsx
   /**
+   * Returns a `WorkbookStream` handle for streaming XLSX I/O
+   * (ExcelJS `workbook.stream`).  Yields/accepts sheet/row/cell structures
+   * without materializing the full in-memory model.
+   */
+  get stream(): WorkbookStream
+  /**
    * Returns a `WorkbookCsv` handle for async CSV I/O.
    *
    * The handle shares the same underlying `Arc<Mutex<WorkbookInner>>`
@@ -256,6 +262,58 @@ export declare class WorkbookXlsx {
    * returned Promise resolves.
    */
   writeFile(path: string): Promise<void>
+}
+
+/**
+ * Streaming XLSX I/O namespace (ExcelJS `workbook.stream`).
+ *
+ * Obtained via `Workbook.stream` getter.  Exposes the streaming `xlsx`
+ * read/write handle.  v2.0.0 scope: cell *values* (numbers, strings,
+ * booleans, formulas) cross the FFI boundary; per-cell styles remain
+ * available through the in-memory `xlsx` path.
+ */
+export declare class WorkbookStream {
+  /** Returns the streaming `xlsx` handle. */
+  get xlsx(): WorkbookStreamXlsx
+}
+
+/**
+ * Streaming `xlsx` read/write handle (ExcelJS `workbook.stream.xlsx`).
+ */
+export declare class WorkbookStreamXlsx {
+  /**
+   * Stream-read an .xlsx `Buffer` into sheet/row/cell structures without
+   * materializing the full in-memory model.
+   */
+  read(buffer: Buffer): Promise<Array<StreamSheet>>
+  /**
+   * Stream-write sheet/row/cell structures to an .xlsx `Buffer` without
+   * materializing the full in-memory model.
+   */
+  write(sheets: Array<StreamSheet>): Promise<Buffer>
+}
+
+/** A cross-FFI cell value. Exactly one field is populated per cell. */
+export interface StreamValue {
+  number?: number | null
+  text?: string | null
+  boolean?: boolean | null
+  formula?: string | null
+}
+/** A single streamed cell. `col` is 1-indexed. */
+export interface StreamCell {
+  col: number
+  value: StreamValue
+}
+/** A streamed row. `r` is 1-indexed. */
+export interface StreamRow {
+  r: number
+  cells: Array<StreamCell>
+}
+/** A streamed worksheet. */
+export interface StreamSheet {
+  name: string
+  rows: Array<StreamRow>
 }
 
 /**

@@ -6,6 +6,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] — 2026-07-19
+
+### Added
+
+- **Streaming XLSX (capstone).** `workbook.stream.xlsx.read(buffer)` and `workbook.stream.xlsx.write(sheets)` stream `.xlsx` I/O without materializing the full in-memory `Workbook` model (SAX parse + per-entry zip). The v2.0.0 FFI collects sheet objects into a JS array; constant-memory Node `Readable`/`Writable` / `AsyncIterable` bridging is a deferred follow-up (the Rust core already streams row-by-row). Cell *values* (number / string / boolean / formula) cross the FFI; per-cell styles remain on the in-memory `xlsx` path.
+- **ExcelJS-4.4.0 v1.x drop-in parity program declared complete.** Every v1.x targeted area is now `shipped`. Explicitly out of scope (tracked for post-v2.0.0 triage): charts, pivot tables, formula evaluation, themes-write, sheet state (visible/hidden), tab color, default worksheet properties.
+
+### Fixed
+
+- None.
+
+### Migration
+
+- v2.0.0 is non-breaking: streaming is purely additive (new `stream` namespace). All 1.x APIs (`read`/`write`, `csv`, worksheet structure, styling, tables, conditional formatting) are unchanged.
+
 ## [1.2.2] — 2026-07-18
 
 ### Added

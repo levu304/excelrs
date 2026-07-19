@@ -15,6 +15,7 @@ use super::workbook_inner::WorkbookInner;
 use super::workbook_view::{CalcProperties, WorkbookView};
 use super::worksheet::Worksheet;
 use crate::csv::WorkbookCsv;
+use crate::stream_handle::WorkbookStream;
 use crate::xlsx::WorkbookXlsx;
 
 /// Top-level workbook document.
@@ -87,6 +88,17 @@ impl Workbook {
     #[napi(getter)]
     pub fn xlsx(&self) -> WorkbookXlsx {
         WorkbookXlsx::new(Arc::clone(&self.inner))
+    }
+
+    /// Returns a `WorkbookStream` handle for streaming XLSX I/O
+    /// (ExcelJS `workbook.stream`).
+    ///
+    /// The handle shares the same underlying `Arc<Mutex<WorkbookInner>>`.
+    /// Streaming read/write yield/accept sheet/row/cell structures without
+    /// materializing the full in-memory model.
+    #[napi(getter)]
+    pub fn stream(&self) -> WorkbookStream {
+        WorkbookStream::new(Arc::clone(&self.inner))
     }
 
     /// Returns a `WorkbookCsv` handle for async CSV I/O.

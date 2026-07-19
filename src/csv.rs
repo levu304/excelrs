@@ -678,8 +678,14 @@ mod tests {
         let ws = &p.worksheets[0];
         assert_eq!(ws.row_count(), 1);
         assert_eq!(ws.column_count(), 3);
-        assert_eq!(ws.get_cell_by_address("A1".into()).value_raw().string.as_deref(), Some("a"));
-        assert_eq!(ws.get_cell_by_address("B1".into()).value_raw().string.as_deref(), Some("b"));
+        assert_eq!(
+            ws.get_cell_by_address("A1".into()).value_raw().string.as_deref(),
+            Some("a")
+        );
+        assert_eq!(
+            ws.get_cell_by_address("B1".into()).value_raw().string.as_deref(),
+            Some("b")
+        );
     }
 
     #[test]
