@@ -421,6 +421,7 @@ fn parse_sheet_rows(
             }
             Ok(Event::End(ref e)) if in_cell && e.name().as_ref() == b"c" => {
                 in_cell = false;
+                in_f = false; // ponytail: bound flag to cell; malformed missing </f> can't leak into next cell
                 let value = build_cell_value(&cell_type, &value_buf, &inline_buf, &formula_buf, has_formula, shared);
                 cells.push(StreamCell {
                     col: cell_col,
@@ -937,6 +938,47 @@ mod tests {
         let read = stream_read(&bytes).expect("read");
         assert_eq!(read.len(), 1);
         assert_eq!(read[0].rows[0].cells[0].value, StreamValue::Formula("B1&C1".into()));
+    }
+
+    #[test]
+    fn stream_read_preserves_multi_sheet_order() {
+        // Regression net for the sheet name<->file pairing / document-order path
+        // (audit risk A1). If pairing regresses, names/order/values here fail.
+        let sheets = vec![
+            StreamSheet {
+                name: "First".into(),
+                rows: vec![StreamRow {
+                    r: 1,
+                    cells: vec![StreamCell { col: 1, value: num(11.0), style: None }],
+                    style: None,
+                }],
+            },
+            StreamSheet {
+                name: "Second".into(),
+                rows: vec![StreamRow {
+                    r: 1,
+                    cells: vec![StreamCell { col: 1, value: num(22.0), style: None }],
+                    style: None,
+                }],
+            },
+            StreamSheet {
+                name: "Third".into(),
+                rows: vec![StreamRow {
+                    r: 1,
+                    cells: vec![StreamCell { col: 1, value: num(33.0), style: None }],
+                    style: None,
+                }],
+            },
+        ];
+        let bytes = stream_write(&sheets).expect("write");
+        let read = stream_read(&bytes).expect("read");
+        assert_eq!(read.len(), 3);
+        assert_eq!(read[0].name, "First");
+        assert_eq!(read[1].name, "Second");
+        assert_eq!(read[2].name, "Third");
+        assert_eq!(read[0].rows[0].cells[0].value, num(11.0));
+        assert_eq!(read[1].rows[0].cells[0].value, num(22.0));
+        assert_eq!(read[2].rows[0].cells[0].value, num(33.0));
     }
 
     #[test]
