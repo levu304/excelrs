@@ -47,6 +47,8 @@ pub enum StreamValue {
     Bool(bool),
     /// Formula text (cached value is not retained on the streaming path).
     Formula(String),
+    /// Empty cell (no value). Distinct from `Text("")` (an empty-string cell).
+    Empty,
 }
 
 /// A single cell in a streamed row. `col` is 1-indexed (Excel convention).
@@ -90,7 +92,11 @@ struct RowEmit {
     style_pos: usize,
 }
 
+/// Max bytes read from a single zip entry on the streaming path. Bounds the
+/// *actual* decompressed bytes (via `take`), not just the declared size, so a
+/// part that declares a small size but decompresses large cannot exhaust memory.
 const MAX_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
+/// Max SAX events per sheet (anti-billion-row / entity-expansion guard).
 const MAX_EVENTS: usize = 5_000_000;
 
 // ---------------------------------------------------------------------------
@@ -107,24 +113,23 @@ pub fn stream_read(data: &[u8]) -> Result<Vec<StreamSheet>, ExcelrsError> {
 
     // Sheet order + names come from xl/workbook.xml, mapped to sheet numbers via
     // xl/_rels/workbook.xml.rels (r:id → worksheets/sheetN.xml).
-    let ordered = parse_workbook_sheet_targets(data)?;
+    let ordered = parse_workbook_sheet_targets(&mut archive)?;
     let sheet_count = ordered.len();
 
     let (style_table, _maps) = reader_styles::parse_styles_and_sheet_maps(data, sheet_count)?;
-    let shared = parse_shared_strings(data)?;
+    let shared = parse_shared_strings(&mut archive)?;
 
     let mut sheets = Vec::with_capacity(sheet_count);
-    for (name, sheet_num) in ordered {
-        let path = format!("xl/worksheets/sheet{}.xml", sheet_num);
+    for (name, path) in ordered {
         let xml = match archive.by_name(&path) {
-            Ok(mut entry) => {
+            Ok(entry) => {
                 if entry.size() > MAX_ENTRY_BYTES {
                     return Err(ExcelrsError::Read(format!(
                         "worksheet '{path}' exceeds streaming size limit ({MAX_ENTRY_BYTES} bytes)"
                     )));
                 }
                 let mut s = String::new();
-                entry.read_to_string(&mut s)?;
+                entry.take(MAX_ENTRY_BYTES).read_to_string(&mut s)?;
                 s
             }
             Err(_) => String::new(),
@@ -138,19 +143,19 @@ pub fn stream_read(data: &[u8]) -> Result<Vec<StreamSheet>, ExcelrsError> {
 
 /// Parse `xl/workbook.xml` + its rels, returning `(sheet_name, sheet_number)`
 /// in document order.
-fn parse_workbook_sheet_targets(data: &[u8]) -> Result<Vec<(String, u32)>, ExcelrsError> {
-    let mut archive = zip::ZipArchive::new(Cursor::new(data)).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
-
+fn parse_workbook_sheet_targets(
+    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+) -> Result<Vec<(String, String)>, ExcelrsError> {
     // r:id → target (e.g. "worksheets/sheet3.xml")
     let mut rid_to_target: HashMap<String, String> = HashMap::new();
-    if let Ok(mut rels) = archive.by_name("xl/_rels/workbook.xml.rels") {
+    if let Ok(rels) = archive.by_name("xl/_rels/workbook.xml.rels") {
         if rels.size() > MAX_ENTRY_BYTES {
             return Err(ExcelrsError::Read(format!(
                 "workbook.xml.rels exceeds streaming size limit ({MAX_ENTRY_BYTES} bytes)"
             )));
         }
         let mut xml = String::new();
-        rels.read_to_string(&mut xml)?;
+        rels.take(MAX_ENTRY_BYTES).read_to_string(&mut xml)?;
         let mut reader = XmlReader::from_str(&xml);
         let mut buf = Vec::new();
         loop {
@@ -179,18 +184,18 @@ fn parse_workbook_sheet_targets(data: &[u8]) -> Result<Vec<(String, u32)>, Excel
 
     // document-order <sheet name r:id> in xl/workbook.xml
     let mut workbook_xml = String::new();
-    if let Ok(mut wb) = archive.by_name("xl/workbook.xml") {
+    if let Ok(wb) = archive.by_name("xl/workbook.xml") {
         if wb.size() > MAX_ENTRY_BYTES {
             return Err(ExcelrsError::Read(format!(
                 "workbook.xml exceeds streaming size limit ({MAX_ENTRY_BYTES} bytes)"
             )));
         }
-        wb.read_to_string(&mut workbook_xml)?;
+        wb.take(MAX_ENTRY_BYTES).read_to_string(&mut workbook_xml)?;
     }
     let mut reader = XmlReader::from_str(&workbook_xml);
     let mut buf = Vec::new();
     let mut in_sheets = false;
-    let mut result: Vec<(String, u32)> = Vec::new();
+    let mut result: Vec<(String, String)> = Vec::new();
     loop {
         buf.clear();
         match reader.read_event_into(&mut buf) {
@@ -208,9 +213,15 @@ fn parse_workbook_sheet_targets(data: &[u8]) -> Result<Vec<(String, u32)>, Excel
                 }
                 if let (Some(name), Some(rid)) = (name, rid) {
                     if let Some(target) = rid_to_target.get(&rid) {
-                        if let Some(num) = sheet_number_from_target(target) {
-                            result.push((name, num));
-                        }
+                        // Rels targets are relative to xl/ by default, but may be
+                        // absolute (package-rooted, leading '/'). Strip the leading
+                        // '/' for absolute targets; prefix xl/ for relative ones.
+                        let path = if let Some(pkg) = target.strip_prefix('/') {
+                            pkg.to_string()
+                        } else {
+                            format!("xl/{}", target)
+                        };
+                        result.push((name, path));
                     }
                 }
             }
@@ -222,22 +233,14 @@ fn parse_workbook_sheet_targets(data: &[u8]) -> Result<Vec<(String, u32)>, Excel
 
     if result.is_empty() {
         // Fallback: a single default sheet.
-        result.push(("Sheet1".to_string(), 1));
+        result.push(("Sheet1".to_string(), "xl/worksheets/sheet1.xml".to_string()));
     }
     Ok(result)
 }
 
-/// Extract the trailing sheet number from a target like `worksheets/sheet3.xml`.
-fn sheet_number_from_target(target: &str) -> Option<u32> {
-    let file = target.rsplit('/').next().unwrap_or(target);
-    let stem: String = file.chars().filter(|c| c.is_ascii_digit()).collect();
-    stem.parse().ok()
-}
-
 /// Parse `xl/sharedStrings.xml` into an index-ordered vector of strings.
-fn parse_shared_strings(data: &[u8]) -> Result<Vec<String>, ExcelrsError> {
-    let mut archive = zip::ZipArchive::new(Cursor::new(data)).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
-    let mut entry = match archive.by_name("xl/sharedStrings.xml") {
+fn parse_shared_strings(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> Result<Vec<String>, ExcelrsError> {
+    let entry = match archive.by_name("xl/sharedStrings.xml") {
         Ok(e) => e,
         Err(_) => return Ok(Vec::new()),
     };
@@ -247,7 +250,7 @@ fn parse_shared_strings(data: &[u8]) -> Result<Vec<String>, ExcelrsError> {
         )));
     }
     let mut xml = String::new();
-    entry.read_to_string(&mut xml)?;
+    entry.take(MAX_ENTRY_BYTES).read_to_string(&mut xml)?;
 
     let mut reader = XmlReader::from_str(&xml);
     let mut buf = Vec::new();
@@ -463,10 +466,16 @@ fn build_cell_value(
         "str" => StreamValue::Text(value.to_string()),
         "inlineStr" => StreamValue::Text(inline.to_string()),
         "e" => StreamValue::Text(value.to_string()),
-        _ => match value.trim().parse::<f64>() {
-            Ok(n) => StreamValue::Number(n),
-            Err(_) => StreamValue::Text(value.to_string()),
-        },
+        _ => {
+            if value.is_empty() {
+                // ponytail: empty cell (no value) is distinct from an empty-string cell
+                return StreamValue::Empty;
+            }
+            match value.trim().parse::<f64>() {
+                Ok(n) => StreamValue::Number(n),
+                Err(_) => StreamValue::Text(value.to_string()),
+            }
+        }
     }
 }
 
@@ -563,6 +572,15 @@ pub fn stream_write(sheets: &[StreamSheet]) -> Result<Vec<u8>, ExcelrsError> {
                             str_idx: 0,
                             bool_val: false,
                             formula: f.clone(),
+                            style_pos,
+                        },
+                        StreamValue::Empty => CellEmit {
+                            col: cell.col,
+                            kind: 4,
+                            num: 0.0,
+                            str_idx: 0,
+                            bool_val: false,
+                            formula: String::new(),
                             style_pos,
                         },
                     };
@@ -1009,7 +1027,292 @@ mod tests {
             w.write_all(sst.as_bytes()).unwrap();
             w.finish().unwrap();
         }
-        let strings = parse_shared_strings(&buf).expect("parse");
+        let cursor = std::io::Cursor::new(&buf[..]);
+        let mut archive = zip::ZipArchive::new(cursor).expect("archive");
+        let strings = parse_shared_strings(&mut archive).expect("parse");
         assert_eq!(strings, vec!["", "alpha", "\u{6771}\u{4eac}"]);
+    }
+
+    #[test]
+    fn stream_read_resolves_sheet_by_rels_target() {
+        // Build a minimal xlsx zip where the rels target uses a non-default filename.
+        use std::io::Write;
+        let mut buf = Vec::new();
+        {
+            let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let opts = zip::write::SimpleFileOptions::default();
+
+            w.start_file("[Content_Types].xml", opts).unwrap();
+            w.write_all(concat!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+                r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">"#,
+                r#"<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>"#,
+                r#"<Default Extension="xml" ContentType="application/xml"/>"#,
+                r#"<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>"#,
+                r#"<Override PartName="/xl/worksheets/sheet_v2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>"#,
+                r#"</Types>"#,
+            ).as_bytes()).unwrap();
+
+            w.start_file("_rels/.rels", opts).unwrap();
+            w.write_all(concat!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+                r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
+                r#"<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>"#,
+                r#"</Relationships>"#,
+            ).as_bytes()).unwrap();
+
+            w.start_file("xl/workbook.xml", opts).unwrap();
+            w.write_all(
+                concat!(
+                    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+                    r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main""#,
+                    r#" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
+                    r#"<sheets><sheet name="NonDefault" sheetId="1" r:id="rId1"/></sheets>"#,
+                    r#"</workbook>"#,
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+
+            w.start_file("xl/_rels/workbook.xml.rels", opts).unwrap();
+            w.write_all(concat!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+                r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
+                r#"<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet""#,
+                r#" Target="worksheets/sheet_v2.xml"/>"#,
+                r#"</Relationships>"#,
+            ).as_bytes()).unwrap();
+
+            w.start_file("xl/worksheets/sheet_v2.xml", opts).unwrap();
+            w.write_all(
+                concat!(
+                    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+                    r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"#,
+                    r#"<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Custom</t></is></c></row></sheetData>"#,
+                    r#"</worksheet>"#,
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+
+            w.finish().unwrap();
+        }
+
+        let sheets = stream_read(&buf).expect("read");
+        assert_eq!(sheets.len(), 1);
+        assert_eq!(sheets[0].name, "NonDefault");
+        assert_eq!(sheets[0].rows.len(), 1);
+        assert_eq!(
+            sheets[0].rows[0].cells[0].value,
+            StreamValue::Text("Custom".to_string())
+        );
+    }
+
+    #[test]
+    fn stream_read_resolves_sheet_by_absolute_rels_target() {
+        // Like stream_read_resolves_sheet_by_rels_target, but the rels Target is
+        // *absolute* (package-rooted, leading '/'). Without the fix the reader
+        // builds "xl//xl/worksheets/sheet_v2.xml" and silently yields an empty
+        // sheet; with the fix it strips the leading '/' and reads the real part.
+        use std::io::Write;
+        let mut buf = Vec::new();
+        {
+            let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let opts = zip::write::SimpleFileOptions::default();
+
+            w.start_file("[Content_Types].xml", opts).unwrap();
+            w.write_all(concat!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+                r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">"#,
+                r#"<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>"#,
+                r#"<Default Extension="xml" ContentType="application/xml"/>"#,
+                r#"<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>"#,
+                r#"<Override PartName="/xl/worksheets/sheet_v2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>"#,
+                r#"</Types>"#,
+            ).as_bytes()).unwrap();
+
+            w.start_file("_rels/.rels", opts).unwrap();
+            w.write_all(concat!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+                r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
+                r#"<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>"#,
+                r#"</Relationships>"#,
+            ).as_bytes()).unwrap();
+
+            w.start_file("xl/workbook.xml", opts).unwrap();
+            w.write_all(
+                concat!(
+                    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+                    r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main""#,
+                    r#" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
+                    r#"<sheets><sheet name="AbsTarget" sheetId="1" r:id="rId1"/></sheets>"#,
+                    r#"</workbook>"#,
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+
+            w.start_file("xl/_rels/workbook.xml.rels", opts).unwrap();
+            w.write_all(concat!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+                r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
+                r#"<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet""#,
+                r#" Target="/xl/worksheets/sheet_v2.xml"/>"#,
+                r#"</Relationships>"#,
+            ).as_bytes()).unwrap();
+
+            w.start_file("xl/worksheets/sheet_v2.xml", opts).unwrap();
+            w.write_all(
+                concat!(
+                    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+                    r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"#,
+                    r#"<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>AbsoluteCustom</t></is></c></row></sheetData>"#,
+                    r#"</worksheet>"#,
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+
+            w.finish().unwrap();
+        }
+
+        let sheets = stream_read(&buf).expect("read");
+        assert_eq!(sheets.len(), 1);
+        assert_eq!(sheets[0].name, "AbsTarget");
+        assert_eq!(sheets[0].rows.len(), 1);
+        assert_eq!(
+            sheets[0].rows[0].cells[0].value,
+            StreamValue::Text("AbsoluteCustom".to_string())
+        );
+    }
+
+    #[test]
+    fn stream_read_legit_oversized_is_rejected() {
+        // A sheet whose *declared* uncompressed size genuinely exceeds the cap.
+        let big = vec![b'A'; 17 * 1024 * 1024];
+        let mut buf = Vec::new();
+        {
+            let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let opts = zip::write::SimpleFileOptions::default();
+            w.start_file("xl/worksheets/sheet1.xml", opts).unwrap();
+            w.write_all(&big).unwrap();
+            w.finish().unwrap();
+        }
+        let err = stream_read(&buf).unwrap_err();
+        assert!(
+            err.to_string().contains("exceeds streaming size limit"),
+            "expected size-limit error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn stream_read_hostile_declared_size_is_bounded() {
+        // Declared uncompressed size is patched tiny while the entry still
+        // decompresses past the cap. The real-byte `.take` guard must bound the
+        // read (≤ MAX_ENTRY_BYTES) so it parses instead of allocating the full
+        // decompressed size.
+        let row = br#"<row r="1"><c r="A1"><v>1</v></c></row>"#;
+        let mut content = Vec::with_capacity(40 * 1024 * 1024);
+        while content.len() < 40 * 1024 * 1024 {
+            content.extend_from_slice(row);
+        }
+        let mut buf = Vec::new();
+        {
+            let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let opts = zip::write::SimpleFileOptions::default();
+            w.start_file("xl/worksheets/sheet1.xml", opts).unwrap();
+            w.write_all(&content).unwrap();
+            w.finish().unwrap();
+        }
+        // Patch the central-directory uncompressed size down to 1 (lie).
+        let eocd = buf.len() - 22;
+        let cd_offset = u32::from_le_bytes([buf[eocd + 16], buf[eocd + 17], buf[eocd + 18], buf[eocd + 19]]) as usize;
+        let off = cd_offset + 24;
+        buf[off..off + 4].copy_from_slice(&1u32.to_le_bytes());
+
+        // With the `.take` guard the read is capped at 16 MiB; the truncated sheet
+        // then fails to parse (fail-safe per design.md). Regression: without the guard
+        // the full ~40 MiB would be read and parsed successfully → Ok (OOM risk).
+        let read = stream_read(&buf);
+        assert!(
+            read.is_err(),
+            "hostile declared-size zip must be bounded, got: {read:?}"
+        );
+    }
+
+    #[test]
+    fn stream_write_read_empty_vs_empty_string() {
+        let sheets = vec![StreamSheet {
+            name: "Sheet1".into(),
+            rows: vec![StreamRow {
+                r: 1,
+                cells: vec![
+                    StreamCell {
+                        col: 1,
+                        value: StreamValue::Empty,
+                        style: None,
+                    },
+                    StreamCell {
+                        col: 2,
+                        value: StreamValue::Text(String::new()),
+                        style: None,
+                    },
+                ],
+                style: None,
+            }],
+        }];
+        let bytes = stream_write(&sheets).expect("write");
+        let read = stream_read(&bytes).expect("read");
+        let cells = &read[0].rows[0].cells;
+        assert_eq!(
+            cells[0].value,
+            StreamValue::Empty,
+            "empty cell must round-trip as Empty"
+        );
+        assert_eq!(
+            cells[1].value,
+            StreamValue::Text(String::new()),
+            "empty-string cell must round-trip as Text(\"\")"
+        );
+    }
+
+    #[test]
+    fn stream_read_missing_f_close_is_fail_safe() {
+        // A1 opens <f> but never closes it before </c> (a corrupt/truncated formula
+        // cell). With strict XML parsing the sheet fails to parse rather than leaking
+        // A1's formula text into B1's value — the parser must not panic or corrupt a
+        // sibling cell. This locks the v2.0.0 in_f-reset fix: a malformed formula cell
+        // is fail-safe, never corrupts another cell.
+        let xml = concat!(
+            r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"#,
+            r#"<sheetData><row r="1">"#,
+            r#"<c r="A1" t="str"><f>SUM(B1)<v>1</v></c>"#,
+            r#"<c r="B1"><v>10</v></c>"#,
+            r#"</row></sheetData></worksheet>"#,
+        );
+        // Must not panic / abort on corrupt formula markup.
+        let rows = parse_sheet_rows(xml, &reader_styles::StyleTableRead::empty(), &[]);
+        assert!(rows.is_ok(), "malformed formula cell must not panic: {:?}", rows.err());
+
+        // The well-formed counterpart must keep B1's own value (not the prior formula).
+        let ok = concat!(
+            r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"#,
+            r#"<sheetData><row r="1">"#,
+            r#"<c r="A1" t="str"><f>SUM(B1)</f><v>1</v></c>"#,
+            r#"<c r="B1"><v>10</v></c>"#,
+            r#"</row></sheetData></worksheet>"#,
+        );
+        let rows = parse_sheet_rows(ok, &reader_styles::StyleTableRead::empty(), &[]).expect("parse");
+        assert_eq!(rows.len(), 1);
+        let cells = &rows[0].cells;
+        assert_eq!(cells.len(), 2, "both cells must parse");
+        // B1 keeps its own value, not appended to A1's formula.
+        assert_eq!(cells[1].value, StreamValue::Number(10.0));
+        // A1 is still recognized as a formula.
+        assert!(
+            matches!(cells[0].value, StreamValue::Formula(_)),
+            "A1 should be a formula, got {:?}",
+            cells[0].value
+        );
     }
 }

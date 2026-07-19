@@ -25,6 +25,8 @@ pub struct JsStreamValue {
     pub text: Option<String>,
     pub boolean: Option<bool>,
     pub formula: Option<String>,
+    /// Set `true` for an empty cell (no value). Distinct from `text: ""`.
+    pub empty: Option<bool>,
 }
 
 #[napi(object)]
@@ -52,24 +54,35 @@ fn to_js_value(v: &StreamValue) -> JsStreamValue {
             text: None,
             boolean: None,
             formula: None,
+            empty: None,
         },
         StreamValue::Text(s) => JsStreamValue {
             number: None,
             text: Some(s.clone()),
             boolean: None,
             formula: None,
+            empty: None,
         },
         StreamValue::Bool(b) => JsStreamValue {
             number: None,
             text: None,
             boolean: Some(*b),
             formula: None,
+            empty: None,
         },
         StreamValue::Formula(f) => JsStreamValue {
             number: None,
             text: None,
             boolean: None,
             formula: Some(f.clone()),
+            empty: None,
+        },
+        StreamValue::Empty => JsStreamValue {
+            number: None,
+            text: None,
+            boolean: None,
+            formula: None,
+            empty: Some(true),
         },
     }
 }
@@ -83,7 +96,11 @@ fn from_js_value(v: &JsStreamValue) -> StreamValue {
         StreamValue::Bool(b)
     } else if let Some(f) = &v.formula {
         StreamValue::Formula(f.clone())
+    } else if v.empty == Some(true) {
+        StreamValue::Empty
     } else {
+        // A JS cell with no populated field defaults to an empty-string cell,
+        // matching v2.0.0. Use `empty: true` to emit an empty cell.
         StreamValue::Text(String::new())
     }
 }
