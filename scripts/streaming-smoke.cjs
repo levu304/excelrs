@@ -5,7 +5,7 @@
 // streaming reader with cell values preserved.
 'use strict';
 
-const ex = require('./index.js');
+const ex = require('../index.js');
 
 async function main() {
   const wb = new ex.Workbook();
