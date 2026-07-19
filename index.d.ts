@@ -299,6 +299,8 @@ export interface StreamValue {
   text?: string | null
   boolean?: boolean | null
   formula?: string | null
+  /** Set `true` to emit an empty cell. Absent/other values fall back to an empty-string cell. */
+  empty?: boolean | null
 }
 /** A single streamed cell. `col` is 1-indexed. */
 export interface StreamCell {

@@ -99,8 +99,9 @@ fn from_js_value(v: &JsStreamValue) -> StreamValue {
     } else if v.empty == Some(true) {
         StreamValue::Empty
     } else {
-        // ponytail: a JS cell with no populated field is an empty cell, not Text("")
-        StreamValue::Empty
+        // A JS cell with no populated field defaults to an empty-string cell,
+        // matching v2.0.0. Use `empty: true` to emit an empty cell.
+        StreamValue::Text(String::new())
     }
 }
 
