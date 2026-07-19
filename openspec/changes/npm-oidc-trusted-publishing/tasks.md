@@ -1,11 +1,11 @@
 ## 1. Register trusted publishers on npmjs.com (manual, off-repo)
 
-- [ ] 1.1 For `@levu304/excelrs`: add trusted publisher — owner `levu304`,
+- [x] 1.1 For `@levu304/excelrs`: add trusted publisher — owner `levu304`,
   repository `excelrs`, workflow `release.yml`, allowed action `npm publish`.
-- [ ] 1.2 Repeat for `@levu304/excelrs-darwin-arm64`,
+- [x] 1.2 Repeat for `@levu304/excelrs-darwin-arm64`,
   `@levu304/excelrs-linux-x64-gnu`, `@levu304/excelrs-win32-x64-msvc` (same
   workflow file, each package authorizes itself).
-- [ ] 1.3 For **all four** packages, set the package publish-access requirement
+- [x] 1.3 For **all four** packages, set the package publish-access requirement
   to **“Require two-factor authentication and disallow tokens”** (strictest
   setting). OIDC publish is unaffected (it is not a long-lived token); this
   removes the token-publish attack surface. Do **not** use the

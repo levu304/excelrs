@@ -115,7 +115,8 @@ jobs:
             "version": "$VERSION",
             "os": ["darwin"],
             "cpu": ["arm64"],
-            "main": "excelrs.darwin-arm64.node"
+            "main": "excelrs.darwin-arm64.node",
+            "repository": "https://github.com/levu304/excelrs"
           }
           EOF
           cat > npm/linux-x64-gnu/package.json <<EOF
@@ -124,7 +125,8 @@ jobs:
             "version": "$VERSION",
             "os": ["linux"],
             "cpu": ["x64"],
-            "main": "excelrs.linux-x64-gnu.node"
+            "main": "excelrs.linux-x64-gnu.node",
+            "repository": "https://github.com/levu304/excelrs"
           }
           EOF
           cat > npm/win32-x64-msvc/package.json <<EOF
@@ -133,7 +135,8 @@ jobs:
             "version": "$VERSION",
             "os": ["win32"],
             "cpu": ["x64"],
-            "main": "excelrs.win32-x64-msvc.node"
+            "main": "excelrs.win32-x64-msvc.node",
+            "repository": "https://github.com/levu304/excelrs"
           }
           EOF
           echo "Platform package.json files created"

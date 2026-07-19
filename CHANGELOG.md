@@ -6,7 +6,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.0.4] — 2026-07-19
+## [2.0.5] — 2026-07-19
+
+### Fixed
+
+- **Platform packages missing `repository` field.** The generated
+  `package.json` files for platform-specific packages
+  (`@levu304/excelrs-darwin-arm64`, `-linux-x64-gnu`, `-win32-x64-msvc`) lacked
+  the `repository` field required by npm 11's auto-attached Sigstore provenance
+  attestation. Added `"repository": "https://github.com/levu304/excelrs"` to
+  each generated platform manifest.
+
+## [2.0.4] — 2026-07-19 (aborted — platform provenance missing)
 
 ### Fixed
 
