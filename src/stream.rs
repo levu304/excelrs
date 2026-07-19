@@ -335,9 +335,7 @@ fn parse_sheet_rows(
         buf.clear();
         events += 1;
         if events > MAX_EVENTS as u64 {
-            return Err(ExcelrsError::Read(format!(
-                "sheet exceeds event limit ({MAX_EVENTS})"
-            )));
+            return Err(ExcelrsError::Read(format!("sheet exceeds event limit ({MAX_EVENTS})")));
         }
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) if e.name().as_ref() == b"sheetData" => in_sheet_data = true,
@@ -949,7 +947,11 @@ mod tests {
                 name: "First".into(),
                 rows: vec![StreamRow {
                     r: 1,
-                    cells: vec![StreamCell { col: 1, value: num(11.0), style: None }],
+                    cells: vec![StreamCell {
+                        col: 1,
+                        value: num(11.0),
+                        style: None,
+                    }],
                     style: None,
                 }],
             },
@@ -957,7 +959,11 @@ mod tests {
                 name: "Second".into(),
                 rows: vec![StreamRow {
                     r: 1,
-                    cells: vec![StreamCell { col: 1, value: num(22.0), style: None }],
+                    cells: vec![StreamCell {
+                        col: 1,
+                        value: num(22.0),
+                        style: None,
+                    }],
                     style: None,
                 }],
             },
@@ -965,7 +971,11 @@ mod tests {
                 name: "Third".into(),
                 rows: vec![StreamRow {
                     r: 1,
-                    cells: vec![StreamCell { col: 1, value: num(33.0), style: None }],
+                    cells: vec![StreamCell {
+                        col: 1,
+                        value: num(33.0),
+                        style: None,
+                    }],
                     style: None,
                 }],
             },
