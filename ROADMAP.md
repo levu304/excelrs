@@ -2,7 +2,7 @@
 
 **Generated:** 2026-07-14 | **ExcelJS version pinned:** [4.4.0](https://www.npmjs.com/package/exceljs/v/4.4.0) | **excelrs version:** 1.1.0 (released 2026-07-16)
 
-> **Next:** v2.0.0 is the planned capstone (see *Post-v1 Roadmap* below). The v1.1.0 → v2.0.0 scope is **provisional**, gated on an ExcelJS 4.4.0 API audit (Step 0) before each feature's design.
+> **Next:** v2.0.0 is the planned capstone (see *Post-v1 Roadmap* below). The v1.1.0 → v2.0.0 scope **provisional**, gated on an ExcelJS 4.4.0 API audit (Step 0) before each feature's design. *Audit complete: streaming surface is non-breaking (new `stream` namespace only); v2.0.0 is now in implementation.*
 
 ---
 
@@ -15,7 +15,7 @@
 | XLSX write | shipped | v0.1.0 | Zip + quick-xml |
 | CSV read | shipped | v0.9.0 | Manual RFC 4180 parser |
 | CSV write | shipped | v0.9.0 | Manual RFC 4180 serializer |
-| Streaming XLSX | targeted | v2.0.0 | Large-file streaming reader/writer (SAX-based) |
+| Streaming XLSX | shipped | v2.0.0 | Large-file streaming reader/writer (SAX-based) |
 | **Worksheet structure** | | | |
 | Rows / columns CRUD | partial | v0.1.0 | `getRow`/`addRow`/`getRows`/`columns()`; no `getColumn`/`splice`/`insertRow` |
 | Merge cells | shipped | v0.5.0 | mergeCells, unMergeCells |
@@ -126,7 +126,7 @@ The v1.0.0 drop-in compatibility milestone is complete. Post-v1 work ships as a 
 | **v1.1.0** | **Tables** | high | shipped | `ws.addTable` / `ws.getTable(s)` / `ws.removeTable`; `Table` / `TableColumn` / `TableRow` model; `xl/tables/tableN.xml` + relationship; `autoFilter` integration; header/totals rows; header styling |
 | **v1.2.0** | **Conditional formatting** | high | targeted | read/write `<conditionalFormatting>` + `dxfs`; rule types `cellIs`, `expression`/formula, `colorScale`, `dataBar`, `iconSet`, `top10`, `unique`/`duplicate`, `containsText`, `timePeriod`, blanks/errors/nonBlanks; priority ordering |
 | **v1.3.0** | **Worksheet-structure parity finish** | medium | targeted | `insertRow(s)` / `spliceRows` / `duplicateRow`; row/col `outlineLevel` (grouping); `rowBreaks` / `colBreaks` page breaks — closes the remaining "planned" v1.x parity-matrix rows |
-| **v2.0.0** | **Streaming XLSX + parity capstone** | high | targeted | streaming reader/writer architecture for large files (SAX-based); **declare the ExcelJS-4.4.0 parity program complete**; reserve for any breaking API cleanup required by the above |
+| **v2.0.0** | **Streaming XLSX + parity capstone** | high | in progress | streaming reader/writer architecture for large files (SAX-based); **declares the ExcelJS-4.4.0 v1.x drop-in parity program complete** (exclusions: charts, pivot tables, formula evaluation, themes-write, sheet state, tab color, default properties); streaming surface is non-breaking (new `stream` namespace only) |
 
 **Deferred to v3+ (distant, unchanged):**
 

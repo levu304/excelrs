@@ -62,6 +62,8 @@ jobs:
 
       - name: Run JS tests
         run: pnpm test
+      - name: Streaming smoke test
+        run: node scripts/streaming-smoke.cjs
 
       - name: Upload native artifact
         uses: >-
