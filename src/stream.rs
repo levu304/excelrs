@@ -95,9 +95,9 @@ struct RowEmit {
 /// Max bytes read from a single zip entry on the streaming path. Bounds the
 /// *actual* decompressed bytes (via `take`), not just the declared size, so a
 /// part that declares a small size but decompresses large cannot exhaust memory.
-const MAX_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
+pub const MAX_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
 /// Max SAX events per sheet (anti-billion-row / entity-expansion guard).
-const MAX_EVENTS: usize = 5_000_000;
+pub const MAX_EVENTS: usize = 5_000_000;
 
 // ---------------------------------------------------------------------------
 // Streaming reader
@@ -143,7 +143,7 @@ pub fn stream_read(data: &[u8]) -> Result<Vec<StreamSheet>, ExcelrsError> {
 
 /// Parse `xl/workbook.xml` + its rels, returning `(sheet_name, sheet_number)`
 /// in document order.
-fn parse_workbook_sheet_targets(
+pub fn parse_workbook_sheet_targets(
     archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
 ) -> Result<Vec<(String, String)>, ExcelrsError> {
     // r:id → target (e.g. "worksheets/sheet3.xml")
@@ -239,7 +239,7 @@ fn parse_workbook_sheet_targets(
 }
 
 /// Parse `xl/sharedStrings.xml` into an index-ordered vector of strings.
-fn parse_shared_strings(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> Result<Vec<String>, ExcelrsError> {
+pub fn parse_shared_strings(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> Result<Vec<String>, ExcelrsError> {
     let entry = match archive.by_name("xl/sharedStrings.xml") {
         Ok(e) => e,
         Err(_) => return Ok(Vec::new()),
@@ -305,7 +305,7 @@ fn parse_shared_strings(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> Result<
 }
 
 /// SAX-parse `<sheetData>` into ordered `StreamRow`s.
-fn parse_sheet_rows(
+pub fn parse_sheet_rows(
     xml: &str,
     style_table: &reader_styles::StyleTableRead,
     shared: &[String],
