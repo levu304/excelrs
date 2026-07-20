@@ -10,4 +10,4 @@
 
 ## 3. Land
 
-- [ ] 3.1 Stack the implementation branch on `feat/streaming-shared-formula-resolution` (PR #35) so the `offset_ref_token` history composes, push, and update the review comment discussion_r3613652786 to note the fix.
+- [x] 3.1 Stack the implementation branch on `feat/streaming-shared-formula-resolution` (PR #35) so the `offset_ref_token` history composes, push, and update the review comment discussion_r3613652786 to note the fix.
