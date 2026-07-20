@@ -1,6 +1,8 @@
 import { test, expect } from 'vitest'
 import ExcelJS from 'exceljs'
 import { StreamReader, StreamWriter, JsStreamSheet } from '../index'
+import { PassThrough } from 'node:stream'
+import { read, write, readAsReadable, writeToWritable } from '../src/stream-bridge'
 
 // ---------------------------------------------------------------------------
 // 5.1 Round-trip: write → read via AsyncIterable, assert cell values match
@@ -129,4 +131,61 @@ test('5.5 empty workbook round-trips through streaming', async () => {
   expect(sheets[0].name).toBe('Empty')
   // Empty sheet has no rows
   expect(sheets[0].rows.length).toBe(0)
+})
+
+// ---------------------------------------------------------------------------
+// 4.1 Bridge functions (TS wrapper) — round-trip + stream termination
+// ---------------------------------------------------------------------------
+
+test('4.1 read/write bridge round-trips cell values', async () => {
+  const wbjs = new ExcelJS.Workbook()
+  const ws = wbjs.addWorksheet('Data')
+  ws.getCell('A1').value = 'bridge'
+  ws.getCell('B1').value = 7
+  const buf = Buffer.from(await wbjs.xlsx.writeBuffer())
+
+  const out = await write(read(buf))
+  expect(out).toBeInstanceOf(Buffer)
+
+  const reader = new StreamReader(out)
+  const sheets: JsStreamSheet[] = []
+  for await (const s of reader as unknown as AsyncIterable<JsStreamSheet>) sheets.push(s)
+  expect(sheets).toHaveLength(1)
+  expect(sheets[0].rows[0].cells[0].value.text).toBe('bridge')
+  expect(sheets[0].rows[0].cells[1].value.number).toBe(7)
+})
+
+test('4.1 readAsReadable emits sheets', async () => {
+  const wbjs = new ExcelJS.Workbook()
+  wbjs.addWorksheet('Data').getCell('A1').value = 'r'
+  const buf = Buffer.from(await wbjs.xlsx.writeBuffer())
+
+  const readable = readAsReadable(buf)
+  const sheets: JsStreamSheet[] = []
+  for await (const s of readable as unknown as AsyncIterable<JsStreamSheet>) sheets.push(s)
+  expect(sheets).toHaveLength(1)
+  expect(sheets[0].name).toBe('Data')
+})
+
+test('4.1 writeToWritable ends the destination stream', async () => {
+  const wbjs = new ExcelJS.Workbook()
+  wbjs.addWorksheet('Data').getCell('A1').value = 'hi'
+  const buf = Buffer.from(await wbjs.xlsx.writeBuffer())
+
+  const pass = new PassThrough()
+  const chunks: Buffer[] = []
+  let finished = false
+  pass.on('data', (c: Buffer) => chunks.push(c))
+  pass.on('finish', () => { finished = true })
+
+  await writeToWritable(read(buf), pass)
+
+  expect(finished).toBe(true)
+  const out = Buffer.concat(chunks)
+  expect(out.length).toBeGreaterThan(0)
+  const reader = new StreamReader(out)
+  const sheets: JsStreamSheet[] = []
+  for await (const s of reader as unknown as AsyncIterable<JsStreamSheet>) sheets.push(s)
+  expect(sheets).toHaveLength(1)
+  expect(sheets[0].name).toBe('Data')
 })

@@ -23,7 +23,7 @@ import type { JsStreamSheet } from '../index'
  * ```ts
  * import { read } from '@levu304/excelrs/stream-bridge'
  * for await (const sheet of read(buffer)) {
- *   console.log(sheet.name, sheet.rowCount)
+ *   console.log(sheet.name, sheet.rows.length)
  * }
  * ```
  */
@@ -41,8 +41,9 @@ export function read(buffer: Buffer): AsyncIterable<JsStreamSheet> {
 /**
  * Write an async iterable of sheets to an .xlsx buffer.
  *
- * The caller can produce sheets incrementally — they are consumed one at a
- * time and do not all need to reside in memory simultaneously.
+ * The caller can produce sheets incrementally. Note: every sheet is buffered
+ * in memory until `finalize()` builds the full archive, so the write path is
+ * **not** constant-memory.
  *
  * @example
  * ```ts
@@ -84,9 +85,8 @@ export async function writeToWritable(
 ): Promise<void> {
   const buf = await write(sheets)
   return new Promise((resolve, reject) => {
-    writable.write(buf, (err) => {
-      if (err) reject(err)
-      else resolve()
-    })
+    writable.once('error', reject)
+    writable.once('finish', resolve)
+    writable.end(buf)
   })
 }

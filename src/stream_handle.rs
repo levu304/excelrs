@@ -20,7 +20,7 @@ use crate::model::workbook_inner::WorkbookInner;
 use crate::reader::styles::{self as reader_styles, StyleTableRead};
 use crate::stream::{
     parse_shared_strings, parse_sheet_rows, parse_workbook_sheet_targets, stream_read, stream_write, StreamCell,
-    StreamRow, StreamSheet, StreamValue, MAX_ENTRY_BYTES,
+    StreamRow, StreamSheet, StreamValue, MAX_ARCHIVE_BYTES, MAX_ARCHIVE_ENTRIES, MAX_ENTRY_BYTES,
 };
 
 /// Cross-FFI cell value. Exactly one variant is populated per cell.
@@ -223,14 +223,15 @@ impl WorkbookStreamXlsx {
 
 /// Pre-parsed workbook metadata held across `next()` calls.
 struct StreamParseState {
-    /// Raw zip bytes (re-opened per `next()`).
-    data: Vec<u8>,
+    /// Zip archive opened once in the constructor and reused per sheet
+    /// (no central-directory re-parse on each `next()`).
+    archive: zip::ZipArchive<Cursor<Arc<[u8]>>>,
     /// Sheet targets in document order.
     sheets: Vec<(String, String)>,
-    /// Shared strings table.
-    shared: Vec<String>,
-    /// Style table (value formatting), if available.
-    style_table: Option<StyleTableRead>,
+    /// Shared strings table (shared cheaply across sheets).
+    shared: Arc<Vec<String>>,
+    /// Style table (value formatting), if available (shared cheaply).
+    style_table: Option<Arc<StyleTableRead>>,
     /// Current sheet index.
     index: usize,
 }
@@ -260,9 +261,24 @@ impl StreamReader {
     /// eagerly so that each `next()` call only needs to parse one sheet.
     #[napi(constructor)]
     pub fn constructor(buffer: Buffer) -> Result<Self> {
-        let data = buffer.to_vec();
-        let cursor = Cursor::new(data.as_slice());
+        let data: Arc<[u8]> = buffer.to_vec().into();
+        let cursor = Cursor::new(Arc::clone(&data));
         let mut archive = zip::ZipArchive::new(cursor).map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+        if archive.len() > MAX_ARCHIVE_ENTRIES {
+            return Err(napi::Error::from_reason(format!(
+                "streaming reader rejected input: too many entries ({} > limit {})",
+                archive.len(),
+                MAX_ARCHIVE_ENTRIES
+            )));
+        }
+        if buffer.len() as u64 > MAX_ARCHIVE_BYTES {
+            return Err(napi::Error::from_reason(format!(
+                "streaming reader rejected input: file too large ({} bytes > limit {} bytes)",
+                buffer.len(),
+                MAX_ARCHIVE_BYTES
+            )));
+        }
 
         let sheets = parse_workbook_sheet_targets(&mut archive).map_err(|e| napi::Error::from_reason(e.to_string()))?;
         let shared = parse_shared_strings(&mut archive).map_err(|e| napi::Error::from_reason(e.to_string()))?;
@@ -272,10 +288,10 @@ impl StreamReader {
 
         Ok(Self {
             state: Mutex::new(Some(StreamParseState {
-                data,
+                archive,
                 sheets,
-                shared,
-                style_table,
+                shared: Arc::new(shared),
+                style_table: style_table.map(Arc::new),
                 index: 0,
             })),
         })
@@ -312,35 +328,32 @@ impl napi::bindgen_prelude::AsyncGenerator for StreamReader {
             }
 
             let (name, path) = state.sheets[state.index].clone();
-            let extracted = (
-                name,
-                path,
-                state.shared.clone(),
-                state.style_table.clone(),
-                state.data.clone(),
-                state.index,
-            );
+            let entry = match state.archive.by_name(&path) {
+                Ok(e) => e,
+                Err(err) => {
+                    let msg = err.to_string();
+                    return Box::pin(async move { Err(napi::Error::from_reason(msg)) });
+                }
+            };
+            let mut raw = Vec::new();
+            if let Err(err) = entry.take(MAX_ENTRY_BYTES).read_to_end(&mut raw) {
+                let msg = err.to_string();
+                return Box::pin(async move { Err(napi::Error::from_reason(msg)) });
+            }
+            let xml = String::from_utf8_lossy(&raw).to_string();
+            let shared = Arc::clone(&state.shared);
+            let style_table = state.style_table.clone();
             state.index += 1;
-            extracted
+            (name, xml, shared, style_table)
         };
 
         // All data is owned — future is 'static, no borrow of self.
         Box::pin(async move {
-            let (name, path, shared, style_table, data, _idx) = extracted;
-            let cursor = Cursor::new(data.as_slice());
-            let mut archive = zip::ZipArchive::new(cursor).map_err(|e| napi::Error::from_reason(e.to_string()))?;
-            let entry = archive
-                .by_name(&path)
-                .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-            let mut xml = String::new();
-            entry
-                .take(MAX_ENTRY_BYTES)
-                .read_to_string(&mut xml)
-                .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+            let (name, xml, shared, style_table) = extracted;
 
             let rows = match style_table {
-                Some(ref st) => parse_sheet_rows(&xml, st, &shared),
-                None => parse_sheet_rows(&xml, &reader_styles::StyleTableRead::empty(), &shared),
+                Some(ref st) => parse_sheet_rows(&xml, st.as_ref(), shared.as_slice()),
+                None => parse_sheet_rows(&xml, &reader_styles::StyleTableRead::empty(), shared.as_slice()),
             }
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
 

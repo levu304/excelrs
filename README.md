@@ -120,7 +120,10 @@ styling for Font, Fill, Border, Alignment, and number formats (write only).
 
 ## Streaming XLSX (v2.1.0+)
 
-Constant-memory streaming read/write for large `.xlsx` files. Only one sheet is materialized at a time — the entire workbook is never held in memory.
+Streaming XLSX for large `.xlsx` files.
+
+- **Read** is constant-memory: `StreamReader` materializes one sheet at a time, so peak memory stays bounded by a single sheet regardless of workbook size.
+- **Write** buffers every sheet in memory and builds the full archive at `finalize()` — it is **not** constant-memory. Use it when the whole output fits in RAM; for very large outputs prefer writing to disk or generating in parts.
 
 ```ts
 import { StreamReader, StreamWriter } from '@levu304/excelrs'
@@ -128,7 +131,7 @@ import { StreamReader, StreamWriter } from '@levu304/excelrs'
 // Read: yields sheets one at a time via for-await-of
 const reader = new StreamReader(buffer)
 for await (const sheet of reader) {
-  console.log(sheet.name, sheet.rowCount)
+  console.log(sheet.name, sheet.rows.length)
   // Each sheet's rows are yielded here — only one in memory at a time
 }
 
