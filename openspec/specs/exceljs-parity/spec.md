@@ -3,9 +3,7 @@
 ## Purpose
 
 Tracks `excelrs`'s feature parity with [ExcelJS](https://github.com/exceljs/exceljs) and governs how the porting roadmap is derived, prioritized, and consumed by releases. This is the contract that future releases MODIFY to record newly shipped/partial areas. Introduced by change `v0-10-0-exceljs-roadmap-align`.
-
 ## Requirements
-
 ### Requirement: excelrs maintains an ExcelJS feature-parity matrix
 
 `excelrs` SHALL maintain a feature-parity matrix that maps each ExcelJS feature area to exactly one status: `shipped`, `partial`, `planned`, or `n-a` (explicitly out of scope). The matrix SHALL be derived by comparing `excelrs`'s actually-implemented behavior (verified against `openspec/specs/*`, `CHANGELOG.md`, and source) against the ExcelJS documented API surface.
@@ -104,31 +102,3 @@ properties (post-v2.0.0 triage).
 - **WHEN** the v2.0.0 release is recorded
 - **THEN** the ROADMAP records the v1.x drop-in ExcelJS-4.4.0 parity program as complete, and charts, pivot tables, formula evaluation, themes-write, sheet state, tab color, and default properties are listed as out of scope (`planned` / `n-a`)
 
-### Requirement: excelrs preserves ExcelJS-compat getCell overloads
-
-`excelrs` SHALL expose ExcelJS-compatible `getCell` overloads on `Worksheet` and `Row` that delegate to the native `getCellBy*` Rust APIs. The overloads SHALL survive `napi build` — they SHALL be re-injected through a build-time hook, never hand-patched into the generated `index.js` / `index.d.ts`.
-
-#### Scenario: Worksheet.getCell resolves by A1 address
-
-- **WHEN** a consumer calls `worksheet.getCell("A1")`
-- **THEN** it returns the cell via the native `getCellByAddress` API
-
-#### Scenario: Worksheet.getCell resolves by row and column
-
-- **WHEN** a consumer calls `worksheet.getCell(2, 3)`
-- **THEN** it returns the cell via the native `getCellByRc` API
-
-#### Scenario: Row.getCell resolves by column number
-
-- **WHEN** a consumer calls `row.getCell(5)`
-- **THEN** it returns the cell via the native `getCellByColNum` API
-
-#### Scenario: Row.getCell resolves by column letter
-
-- **WHEN** a consumer calls `row.getCell("E")`
-- **THEN** it returns the cell via the native `getCellByColLetter` API
-
-#### Scenario: Glue survives napi build
-
-- **WHEN** `napi build` regenerates `index.js` / `index.d.ts`
-- **THEN** the `getCell` overloads are re-injected automatically and no manual re-patch is required
