@@ -48,7 +48,7 @@ export declare class Cell {
    * - `null | undefined | {}` → resets to Normal (None).
    * - Throws `ExcelrsError::InvalidStyle` on validation failure.
    */
-  set style(val: Style | null)
+  set style(val: any)
 }
 
 /**
@@ -73,7 +73,11 @@ export declare class Column {
   get hidden(): boolean
   set hidden(val: boolean)
   get style(): Style | null
-  set style(val: Style | null)
+  set style(val: any)
+  /** Outline/grouping level for this column, `0`–`7` (Excel's cap). `0` means no grouping. */
+  get outlineLevel(): number
+  /** Set the outline/grouping level. Values are clamped to `0`–`7`. */
+  set outlineLevel(val: number)
   get colNum(): number
 }
 
@@ -92,8 +96,12 @@ export declare class Row {
   set height(val: number | undefined | null)
   get hidden(): boolean
   set hidden(val: boolean)
+  /** Outline/grouping level for this row, `0`–`7` (Excel's cap). `0` means no grouping. */
+  get outlineLevel(): number
+  /** Set the outline/grouping level. Values are clamped to `0`–`7`. */
+  set outlineLevel(val: number)
   get style(): Style | null
-  set style(val: Style | null)
+  set style(val: any)
   /**
    * Get cell by 1-indexed column number. Creates an empty cell if none exists.
    * This is the Rust backing for `Row.getCell(col: number)`.
@@ -104,10 +112,67 @@ export declare class Row {
    * This is the Rust backing for `Row.getCell(col: string)`.
    */
   getCellByColLetter(colLetter: string): Cell
-  /** Get cell by 1-indexed column number (JS glue → getCellByColNum). */
-  getCell(col: number): Cell
-  /** Get cell by column letter (JS glue → getCellByColLetter). */
-  getCell(col: string): Cell
+}
+
+/**
+ * Constant-memory streaming reader for .xlsx files.
+ *
+ * Yields one `JsStreamSheet` at a time via `for await...of`.
+ * Only the current sheet is materialized in memory.
+ *
+ * @example
+ * ```js
+ * const reader = new StreamReader(buffer);
+ * for await (const sheet of reader) {
+ *   console.log(sheet.name, sheet.rowCount);
+ * }
+ * ```
+ *
+ * This type implements JavaScript's async iterable protocol.
+ * It can be used with `for await...of` loops.
+ *
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Iteration_protocols#the_async_iterator_and_async_iterable_protocols
+ */
+export declare class StreamReader {
+  /**
+   * Create a new streaming reader from an .xlsx buffer.
+   *
+   * Parses the workbook metadata (sheet names, shared strings, styles)
+   * eagerly so that each `next()` call only needs to parse one sheet.
+   */
+  constructor(buffer: Buffer)
+}
+
+/**
+ * Streaming writer that accepts sheets one at a time and produces an .xlsx buffer.
+ *
+ * The caller pushes sheets via `write_sheet()` and then calls `finalize()`
+ * to get the complete .xlsx bytes. The caller does not need to hold all
+ * sheets in memory at once.
+ *
+ * @example
+ * ```js
+ * const writer = new StreamWriter();
+ * writer.write_sheet(sheet1);
+ * writer.write_sheet(sheet2);
+ * const buf = writer.finalize();
+ * ```
+ */
+export declare class StreamWriter {
+  /** Create a new empty streaming writer. */
+  constructor()
+  /**
+   * Append a sheet to the output buffer.
+   *
+   * The sheet is stored internally and written to the .xlsx on `finalize()`.
+   */
+  writeSheet(sheet: JsStreamSheet): void
+  /**
+   * Finalize the streaming writer and produce the .xlsx buffer.
+   *
+   * Consumes the internal sheet list and returns the complete .xlsx bytes.
+   */
+  finalize(): Buffer
 }
 
 /**
@@ -132,7 +197,7 @@ export declare class Workbook {
    * Get a worksheet by name (string) or 1-indexed position (number).
    * Returns `None` if not found.
    */
-  getWorksheet(nameOrIndex: string | number): Worksheet | null
+  getWorksheet(nameOrIndex: any): Worksheet | null
   get worksheets(): Array<Worksheet>
   get worksheetCount(): number
   /** ISO-8601 timestamp of workbook creation. */
@@ -148,8 +213,11 @@ export declare class Workbook {
   get xlsx(): WorkbookXlsx
   /**
    * Returns a `WorkbookStream` handle for streaming XLSX I/O
-   * (ExcelJS `workbook.stream`).  Yields/accepts sheet/row/cell structures
-   * without materializing the full in-memory model.
+   * (ExcelJS `workbook.stream`).
+   *
+   * The handle shares the same underlying `Arc<Mutex<WorkbookInner>>`.
+   * Streaming read/write yield/accept sheet/row/cell structures without
+   * materializing the full in-memory model.
    */
   get stream(): WorkbookStream
   /**
@@ -219,6 +287,31 @@ export declare class WorkbookCsv {
   writeFile(path: string, delimiter?: string | undefined | null, withBom?: boolean | undefined | null): Promise<void>
 }
 
+/** Streaming I/O namespace handle (ExcelJS `workbook.stream`). */
+export declare class WorkbookStream {
+  /** Returns the streaming `xlsx` handle. */
+  get xlsx(): WorkbookStreamXlsx
+}
+
+/** Streaming `xlsx` read/write handle (ExcelJS `workbook.stream.xlsx`). */
+export declare class WorkbookStreamXlsx {
+  /**
+   * Stream-read an .xlsx `Buffer` into sheet/row/cell structures without
+   * materializing the full in-memory model. Async.
+   *
+   * @remarks Must be awaited. Returns one entry per worksheet, each holding
+   * its rows and cells (numbers / strings / booleans / formulas).
+   */
+  read(buffer: Buffer): Promise<Array<JsStreamSheet>>
+  /**
+   * Stream-write sheet/row/cell structures to an .xlsx `Buffer` without
+   * materializing the full in-memory model. Async.
+   *
+   * @remarks Must be awaited. Returns the `.xlsx` bytes.
+   */
+  write(sheets: Array<JsStreamSheet>): Promise<Buffer>
+}
+
 /**
  * Async XLSX read/write handle.
  *
@@ -265,60 +358,6 @@ export declare class WorkbookXlsx {
 }
 
 /**
- * Streaming XLSX I/O namespace (ExcelJS `workbook.stream`).
- *
- * Obtained via `Workbook.stream` getter.  Exposes the streaming `xlsx`
- * read/write handle.  v2.0.0 scope: cell *values* (numbers, strings,
- * booleans, formulas) cross the FFI boundary; per-cell styles remain
- * available through the in-memory `xlsx` path.
- */
-export declare class WorkbookStream {
-  /** Returns the streaming `xlsx` handle. */
-  get xlsx(): WorkbookStreamXlsx
-}
-
-/**
- * Streaming `xlsx` read/write handle (ExcelJS `workbook.stream.xlsx`).
- */
-export declare class WorkbookStreamXlsx {
-  /**
-   * Stream-read an .xlsx `Buffer` into sheet/row/cell structures without
-   * materializing the full in-memory model.
-   */
-  read(buffer: Buffer): Promise<Array<StreamSheet>>
-  /**
-   * Stream-write sheet/row/cell structures to an .xlsx `Buffer` without
-   * materializing the full in-memory model.
-   */
-  write(sheets: Array<StreamSheet>): Promise<Buffer>
-}
-
-/** A cross-FFI cell value. Exactly one field is populated per cell. */
-export interface StreamValue {
-  number?: number | null
-  text?: string | null
-  boolean?: boolean | null
-  formula?: string | null
-  /** Set `true` to emit an empty cell. Absent/other values fall back to an empty-string cell. */
-  empty?: boolean | null
-}
-/** A single streamed cell. `col` is 1-indexed. */
-export interface StreamCell {
-  col: number
-  value: StreamValue
-}
-/** A streamed row. `r` is 1-indexed. */
-export interface StreamRow {
-  r: number
-  cells: Array<StreamCell>
-}
-/** A streamed worksheet. */
-export interface StreamSheet {
-  name: string
-  rows: Array<StreamRow>
-}
-
-/**
  * A single worksheet (sheet) in a workbook.
  *
  * Rows are stored behind `Arc<Mutex<>>` so that any clone of a Worksheet
@@ -346,14 +385,10 @@ export declare class Worksheet {
    * Creates the row (and cell) if absent.
    */
   getCellByRc(row: number, col: number): Cell
-  /** Get cell by A1-style address string (JS glue → getCellByAddress). */
-  getCell(address: string): Cell
-  /** Get cell by 1-indexed row and column numbers (JS glue → getCellByRc). */
-  getCell(row: number, col: number): Cell
   /** Get row by 1-indexed row number. Creates the row if it doesn't exist. */
   getRow(rowNumber: number): Row
   /** Add a row of cell values. Returns the created Row. */
-  addRow(values: Array<CellValue | number | string | boolean | null>): Row
+  addRow(values: Array<any>): Row
   /**
    * Get a contiguous range of rows starting at `start` (1-indexed).
    * Returns up to `count` rows.
@@ -361,6 +396,32 @@ export declare class Worksheet {
   getRows(start: number, count: number): Array<Row>
   /** Remove a row by number. No-op if the row doesn't exist. */
   removeRow(rowNumber: number): void
+  /** All row page breaks (1-indexed row numbers), sorted. */
+  get rowBreaks(): Array<number>
+  /** Replace the row page breaks with the given 1-indexed row numbers. */
+  set rowBreaks(breaks: Array<number>)
+  /** All column page breaks (1-indexed column numbers), sorted. */
+  get colBreaks(): Array<number>
+  /** Replace the column page breaks with the given 1-indexed column numbers. */
+  set colBreaks(breaks: Array<number>)
+  /**
+   * Insert a new row at `row_number`, shifting existing rows at and below
+   * `row_number` down by one. Optionally fills the new row from `values`.
+   * Renumbers every affected row + cell (D1).
+   */
+  insertRow(rowNumber: number, values?: Array<any> | undefined | null): Row
+  /**
+   * Remove `count` rows starting at `start`, then insert the provided `rows`
+   * value-arrays in their place. Renumbers everything below (D1). Returns the
+   * removed rows.
+   */
+  spliceRows(start: number, count: number, rows?: Array<Array<any>> | undefined | null): Array<Row>
+  /**
+   * Insert `count` copies of the row at `row_number` immediately below it,
+   * copying values and (when `include_style`) the row/cell styles. Renumbers
+   * everything below (D1). Returns the duplicated rows.
+   */
+  duplicateRow(rowNumber: number, count: number, includeStyle: boolean): Array<Row>
   /** All rows with content, sorted by row number. */
   get rows(): Array<Row>
   get columns(): Array<Column>
@@ -368,7 +429,7 @@ export declare class Worksheet {
    * Set the style of a cell at (row, col).  Bypasses clone-on-read:
    * the cell is mutated inside the locked row map.
    */
-  setCellStyle(row: number, col: number, style: Style | null): void
+  setCellStyle(row: number, col: number, style: any): void
   /**
    * Replace the worksheet's column definitions.
    *
@@ -386,7 +447,7 @@ export declare class Worksheet {
    * numbers starting from `max(existing col_nums) + 1` (or 1 if none
    * exist).  Duplicate `colNum` values across the same call are rejected.
    */
-  setColumns(cols: Array<ColumnInput>): void
+  setColumns(cols: any): void
   /**
    * Merge a range of cells (e.g. "A1:C3"). Accepts an A1-style range string.
    * Validates that the range parses to a rectangular area; stores it for
@@ -395,12 +456,12 @@ export declare class Worksheet {
   mergeCells(range: string): void
   /**
    * Get all merged ranges for this worksheet (e.g. `["B2:D4"]`).
-   * Read companion to `mergeCells` — populated by the reader on read.
+   * Read companion to `mergeCells`; exercised by the read-path round-trip.
    */
   get mergedRanges(): Array<string>
   /**
-   * Query whether a 1-indexed (row, col) lies inside any merged range.
-   * Returns the enclosing range string (e.g. "B2:D4") if so, else `null`.
+   * Query whether the 1-indexed (row, col) lies inside any merged range.
+   * Returns the enclosing range string (e.g. `"B2:D4"`) if so, else `None`.
    * Read companion to `mergedRanges`; closes the ExcelJS per-cell merged-state
    * parity gap without duplicating range state.
    */
@@ -411,6 +472,10 @@ export declare class Worksheet {
   addDataValidation(dv: DataValidation): void
   /** Get data validation for a specific cell reference (sqref). */
   getDataValidation(sqref: string): DataValidation | null
+  /** Add or update a conditional format. Upserts by sqref. */
+  addConditionalFormatting(cf: ConditionalFormat): void
+  /** Get all conditional formats for this worksheet, grouped by range. */
+  getConditionalFormatting(): Array<ConditionalFormat>
   /** Get the worksheet's auto-filter range (e.g. "A1:C1"). Returns `None` if unset. */
   get autoFilter(): string | null
   /** Set the worksheet's auto-filter range. Pass `null` or `""` to clear. */
@@ -437,10 +502,6 @@ export declare class Worksheet {
   addImage(opts: AddImageOptions): number
   /** Return all embedded images on the worksheet. */
   getImages(): Array<ImageInfo>
-  /** Add or update a conditional format (ExcelJS `ws.addConditionalFormatting`). Upserts by sqref. */
-  addConditionalFormatting(cf: ConditionalFormat): void
-  /** Return all conditional formats on the worksheet, grouped by range. */
-  getConditionalFormatting(): Array<ConditionalFormat>
   /**
    * Add a structured table to the worksheet (ExcelJS `ws.addTable`).
    *
@@ -463,6 +524,24 @@ export interface AddImageOptions {
   imageType?: string
   positioning?: string
   anchor: ImageAnchor
+}
+
+/** Options for `Worksheet.addTable`. */
+export interface AddTableOptions {
+  name: string
+  displayName?: string
+  /** A1 range covering header + data (+ optional totals), e.g. "A1:C4". */
+  ref: string
+  headerRow?: boolean
+  totalsRow?: boolean
+  columns: Array<TableColumn>
+  /** Data rows as raw value arrays (ExcelJS-compatible: `[[v1, v2], ...]`). */
+  rows: Array<Array<any>>
+  style?: TableStyle
+  /** Optional autoFilter range for the table part. Defaults to the table ref. */
+  autoFilter?: string
+  /** When `false`, no `<autoFilter>` element is emitted (default `true`). */
+  autoFilterEnabled?: boolean
 }
 
 /** Cell content alignment and text wrapping. */
@@ -548,6 +627,104 @@ export interface CellValue {
   dateSerial?: number
 }
 
+/** A single color used by `colorScale` / `dataBar` / `iconSet` rules. */
+export interface CfColor {
+  /** ARGB hex (8 chars) or RGB hex (6 chars). */
+  argb?: string
+  /** Theme color index (`theme="N"`). */
+  theme?: number
+  /** Indexed palette color (`indexed="N"`). */
+  indexed?: number
+  /** Tint applied to the color. */
+  tint?: number
+}
+
+/** One conditional-format rule. */
+export interface CfRule {
+  /**
+   * Rule type: `cellIs` | `expression` | `colorScale` | `dataBar` | `iconSet`
+   * | `top10` | `unique` | `duplicate` | `containsText` | `timePeriod`
+   * | `containsBlanks` | `notContainsBlanks` | `containsErrors` | `notContainsErrors`.
+   */
+  type: string
+  /**
+   * Worksheet-global unique 1-based priority. `0` = auto-assign on write
+   * (document order; never collides with an explicit priority). Any other
+   * value is honored as-is AND must be worksheet-global unique —
+   * `Worksheet.addConditionalFormatting` rejects duplicate explicit priorities.
+   */
+  priority: number
+  /**
+   * Index into the workbook `dxfs` collection (rules with a `style` only).
+   * `None` for `colorScale` / `dataBar` / `iconSet`.
+   */
+  dxfId?: number
+  /**
+   * `cellIs` operator: `lessThan` | `greaterThan` | `equal` | `notEqual`
+   * | `greaterThanOrEqual` | `lessThanOrEqual` | `between` | `notBetween`.
+   * `containsText` operator: `containsText` | `beginsWith` | `endsWith`
+   * | `notContainsText`.
+   */
+  operator?: string
+  /** Formula(s): `cellIs` / `expression` / `containsText` use one or two. */
+  formula?: Array<string>
+  /** `containsText` text (the substring/pattern to match). */
+  text?: string
+  /**
+   * `timePeriod` value: `today` | `yesterday` | `tomorrow` | `last7Days`
+   * | `lastWeek` | `thisWeek` | `nextWeek` | `lastMonth` | `thisMonth` | `nextMonth`.
+   */
+  timePeriod?: string
+  /** `top10` rank (count of top/bottom items or percent). */
+  rank?: number
+  /** `top10` percent flag. */
+  percent?: boolean
+  /** `top10` bottom flag (select bottom instead of top). */
+  bottom?: boolean
+  /**
+   * Differential style applied to matching cells (all rule types except
+   * `colorScale` / `dataBar` / `iconSet`).
+   */
+  style?: Style
+  /** `colorScale` / `dataBar` / `iconSet` value objects (stops). */
+  cfvo?: Array<Cfvo>
+  /** `colorScale` colors (one per `cfvo`). */
+  color?: Array<CfColor>
+  /** `dataBar` color (single). */
+  dataBarColor?: CfColor
+  /** `iconSet` name (e.g. `3TrafficLights`). */
+  iconSet?: string
+  /** `iconSet` reverse flag. */
+  reverse?: boolean
+  /** `dataBar` / `iconSet` show-value flag. */
+  showValue?: boolean
+}
+
+/**
+ * A conditional-format value object (`cfvo`): a stop on a `colorScale`,
+ * `dataBar`, or `iconSet` rule.
+ */
+export interface Cfvo {
+  /**
+   * Value type: `num` | `percent` | `percentile` | `formula` | `min` | `max`
+   * | `autoMin` | `autoMax`.
+   */
+  type: string
+  /**
+   * Value (for `num` / `percent` / `percentile` / `formula`); absent for
+   * `min` / `max` / `autoMin` / `autoMax`.
+   */
+  value?: string
+}
+
+/** A conditional format: a cell range plus its rules. */
+export interface ConditionalFormat {
+  /** Cell range reference (e.g. `"A1:A10"` or `"A1:A10 C1:C10"`). */
+  sqref: string
+  /** Rules applied to `sqref`. */
+  rules: Array<CfRule>
+}
+
 /** Data validation constraint on a cell range. */
 export interface DataValidation {
   /** Cell range reference (e.g. "A1", "A1:B10", "A1 C1:D5"). */
@@ -580,72 +757,6 @@ export interface DataValidation {
   errorTitle?: string
   /** Error message type: "information", "warning", "stop". */
   errorStyle?: string
-}
-
-/** A color used by `colorScale` / `dataBar` / `iconSet` rules. */
-export interface CfColor {
-  /** ARGB/RGB hex. */
-  argb?: string
-  /** Theme color index. */
-  theme?: number
-  /** Indexed palette color. */
-  indexed?: number
-  /** Tint applied to the color. */
-  tint?: number
-}
-
-/** A conditional-format value object (`cfvo`): a stop on `colorScale` / `dataBar` / `iconSet`. */
-export interface Cfvo {
-  /** Value type: `num` | `percent` | `percentile` | `formula` | `min` | `max` | `autoMin` | `autoMax`. */
-  type: string
-  /** Value (absent for `min` / `max` / `autoMin` / `autoMax`). */
-  value?: string
-}
-
-/** One conditional-format rule. */
-export interface CfRule {
-  /** Rule type. */
-  type: string
-  /** Worksheet-global unique 1-based priority. */
-  priority: number
-  /** Index into the workbook `dxfs` collection (rules with a `style` only). */
-  dxfId?: number
-  /** `cellIs` / `containsText` operator. */
-  operator?: string
-  /** Formula(s). */
-  formula?: Array<string>
-  /** `containsText` text. */
-  text?: string
-  /** `timePeriod` value. */
-  timePeriod?: string
-  /** `top10` rank. */
-  rank?: number
-  /** `top10` percent flag. */
-  percent?: boolean
-  /** `top10` bottom flag. */
-  bottom?: boolean
-  /** Differential style applied to matching cells. */
-  style?: Style
-  /** `colorScale` / `dataBar` / `iconSet` value objects. */
-  cfvo?: Array<Cfvo>
-  /** `colorScale` colors. */
-  color?: Array<CfColor>
-  /** `dataBar` color. */
-  dataBarColor?: CfColor
-  /** `iconSet` name. */
-  iconSet?: string
-  /** `iconSet` reverse flag. */
-  reverse?: boolean
-  /** `dataBar` / `iconSet` show-value flag. */
-  showValue?: boolean
-}
-
-/** A conditional format: a cell range plus its rules. */
-export interface ConditionalFormat {
-  /** Cell range reference (e.g. `"A1:A10"` or `"A1:A10 C1:C10"`). */
-  sqref: string
-  /** Rules applied to `sqref`. */
-  rules: Array<CfRule>
 }
 
 /**
@@ -758,6 +869,31 @@ export interface ImageInfo {
   buffer: Array<number>
   positioning: string
   anchor: ImageAnchor
+}
+
+export interface JsStreamCell {
+  col: number
+  value: JsStreamValue
+}
+
+export interface JsStreamRow {
+  r: number
+  cells: Array<JsStreamCell>
+}
+
+export interface JsStreamSheet {
+  name: string
+  rows: Array<JsStreamRow>
+}
+
+/** Cross-FFI cell value. Exactly one variant is populated per cell. */
+export interface JsStreamValue {
+  number?: number
+  text?: string
+  boolean?: boolean
+  formula?: string
+  /** Set `true` for an empty cell (no value). Distinct from `text: ""`. */
+  empty?: boolean
 }
 
 /** Page margins in inches (Excel `CT_PageMargins`). */
@@ -879,39 +1015,6 @@ export interface Style {
   numFmt?: string
 }
 
-/** A single workbook view descriptor (`CT_WorkbookView`). */
-export interface WorkbookView {
-  xWindow?: number
-  yWindow?: number
-  windowWidth?: number
-  windowHeight?: number
-  activeTab?: number
-  firstSheet?: number
-  minimized?: boolean
-  showHorizontalScroll?: boolean
-  showVerticalScroll?: boolean
-  tabRatio?: number
-  visibility?: string
-}
-
-/** Options for `Worksheet.addTable`. */
-export interface AddTableOptions {
-  name: string
-  displayName?: string
-  /** A1 range covering header + data (+ optional totals), e.g. "A1:C4". */
-  ref: string
-  headerRow?: boolean
-  totalsRow?: boolean
-  columns: Array<TableColumn>
-  /** Data rows as raw value arrays (ExcelJS-compatible: `[[v1, v2], ...]`). */
-  rows: Array<Array<number | string | boolean | null>>
-  style?: TableStyle
-  /** Optional autoFilter range for the table part. Defaults to the table ref. */
-  autoFilter?: string
-  /** Whether to emit a table <autoFilter> element. Defaults to true. Set false to omit it. */
-  autoFilterEnabled?: boolean
-}
-
 /** A worksheet table — returned by `getTable` / `getTables`. */
 export interface Table {
   name: string
@@ -949,4 +1052,19 @@ export interface TableStyle {
   showLastColumn?: boolean
   showRowStripes?: boolean
   showColumnStripes?: boolean
+}
+
+/** A single workbook view descriptor (`CT_WorkbookView`). */
+export interface WorkbookView {
+  xWindow?: number
+  yWindow?: number
+  windowWidth?: number
+  windowHeight?: number
+  activeTab?: number
+  firstSheet?: number
+  minimized?: boolean
+  showHorizontalScroll?: boolean
+  showVerticalScroll?: boolean
+  tabRatio?: number
+  visibility?: string
 }

@@ -7,7 +7,12 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-napi = { version = "3", features = ["async", "serde-json", "napi5"] }
+napi = { version = "3", features = [
+  "async",
+  "serde-json",
+  "napi5",
+  "tokio_rt",
+] }
 napi-derive = "3"
 calamine = { version = "0.35", features = ["dates"] }
 serde = { version = "1", features = ["derive"] }
