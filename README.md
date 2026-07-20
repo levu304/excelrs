@@ -170,3 +170,17 @@ cargo fmt -- --check
 ## License
 
 Dual-licensed under MIT or Apache-2.0 — see [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE).
+
+## Bridging Features
+
+This repo includes two streaming XLSX capabilities:
+
+### streaming-node-bridge (archived)
+
+Previously delivered: async iterable `wb.stream.xlsx.read()` and `write(sheets)` that preserve values only (no styles). Original constant-memory intent for Node.
+
+### streaming-safety (active)
+
+Newly delivered via `streaming-hardening`: zip‑bomb rejection, stream termination, and per‑sheet constant‑memory reading. Read path is now constant‑memory; write path remains buffered.
+
+Both are additive; the legacy v2.0.0 streaming APIs remain available.
