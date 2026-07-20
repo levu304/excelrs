@@ -25,7 +25,7 @@ use std::io::{Cursor, Read, Seek, Write};
 use std::sync::Arc;
 
 use quick_xml::escape::escape;
-use quick_xml::events::Event;
+use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader as XmlReader;
 
 use crate::error::ExcelrsError;
@@ -338,6 +338,12 @@ pub fn parse_sheet_rows(
     let mut buf = Vec::new();
     let mut rows: Vec<StreamRow> = Vec::new();
 
+    // Per-sheet shared-formula table: si -> SharedFormula. `si` is per-sheet scoped
+    // because this function runs once per worksheet.
+    let mut shared_formulas: SharedFormulaTable = HashMap::new();
+    // Pending master being captured (text arrives in following Text events).
+    let mut pending_master: Option<PendingMaster> = None;
+
     let mut in_sheet_data = false;
     let mut in_row = false;
     let mut row_num: u32 = 0;
@@ -402,6 +408,7 @@ pub fn parse_sheet_rows(
                 value_buf.clear();
                 in_inline = false;
                 inline_buf.clear();
+                pending_master = None;
                 for attr in e.attributes().flatten() {
                     match attr.key.as_ref() {
                         b"r" => cell_ref = String::from_utf8_lossy(&attr.value).into_owned(),
@@ -421,10 +428,33 @@ pub fn parse_sheet_rows(
                 has_formula = true;
                 in_f = true;
                 formula_buf.clear();
+                let (f_t, f_si, f_ref) = read_f_attrs(e);
+                if f_t.as_deref() == Some("shared") {
+                    if let (Some(si), Some(r)) = (f_si, f_ref) {
+                        // Master cell: formula text arrives in following Text events;
+                        // store it (with position + ref range) when </f> closes.
+                        pending_master = Some(PendingMaster {
+                            si,
+                            pos: (row_num, cell_col),
+                            range: parse_ref_range(&r),
+                        });
+                    }
+                }
             }
             Ok(Event::Empty(ref e)) if in_cell && e.name().as_ref() == b"f" => {
                 has_formula = true;
                 formula_buf.clear();
+                let (f_t, f_si, f_ref) = read_f_attrs(e);
+                if let (Some("shared"), Some(si)) = (f_t.as_deref(), f_si) {
+                    if f_ref.is_none() {
+                        // Member cell (self-closing <f/>, no inline text): resolve now
+                        // and write the translated formula into formula_buf.
+                        if let Some(translated) = resolve_shared_member(&shared_formulas, si, (row_num, cell_col)) {
+                            formula_buf = translated;
+                        }
+                    }
+                    // shared + ref on an empty tag is a degenerate master; left unstored.
+                }
             }
             Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) if in_cell && e.name().as_ref() == b"is" => {
                 in_inline = true;
@@ -458,6 +488,17 @@ pub fn parse_sheet_rows(
                 in_inline = false;
             }
             Ok(Event::End(ref e)) if in_cell && e.name().as_ref() == b"f" => {
+                if let Some(pm) = pending_master.take() {
+                    // Master formula text is now fully captured in formula_buf.
+                    shared_formulas.insert(
+                        pm.si,
+                        SharedFormula {
+                            text: formula_buf.clone(),
+                            pos: pm.pos,
+                            range: pm.range,
+                        },
+                    );
+                }
                 in_f = false;
             }
             Ok(Event::Eof) => break,
@@ -512,6 +553,326 @@ fn col_from_ref(ref_: &str) -> u32 {
         }
     }
     col
+}
+
+// ---------------------------------------------------------------------------
+// Shared-formula reference translation (ported from calamine 0.35.0)
+//
+// A shared formula (`<f t="shared">`) stores its text only on the *master* cell;
+// *member* cells carry no text and must have their relative references shifted by
+// the offset between the member cell and the master cell. This mirrors the
+// whole-workbook reader so the streaming path returns the same formula text.
+// Unlike calamine, we store only `si -> (master text, master pos, ref range)` and
+// compute the per-member offset on the fly, so memory is bounded by the number of
+// distinct shared formulas rather than by the `ref` range size.
+// ---------------------------------------------------------------------------
+
+const SF_MAX_COLUMNS: u32 = 16_384;
+const SF_MAX_ROWS: u32 = 1_048_576;
+
+/// A captured shared-formula master: its formula text, the master cell position,
+/// and the optional `ref` range bounding which member cells it applies to.
+struct SharedFormula {
+    text: String,
+    pos: (u32, u32),
+    range: Option<((u32, u32), (u32, u32))>,
+}
+
+/// Per-sheet table of shared formulas, keyed by `si`. Scoped to one worksheet
+/// because `parse_sheet_rows` runs once per sheet.
+type SharedFormulaTable = HashMap<u32, SharedFormula>;
+
+/// A master `<f>` whose inline text is still being captured.
+struct PendingMaster {
+    si: u32,
+    pos: (u32, u32),
+    range: Option<((u32, u32), (u32, u32))>,
+}
+
+/// A cell/row/column A1-style reference.
+enum Ref {
+    Cell {
+        row: u32,
+        col: u32,
+        abs_row: bool,
+        abs_col: bool,
+    },
+    Row {
+        row: u32,
+        abs: bool,
+    },
+    Column {
+        col: u32,
+        abs: bool,
+    },
+}
+
+impl Ref {
+    /// Parse a reference token (e.g. `A1`, `$A$1`, `A$1`, `E`, `$E`, `5`, `$5`).
+    /// Returns `None` on any unparseable character (caller copies verbatim).
+    fn parse(name: &[u8]) -> Option<Self> {
+        let mut iter = name.iter().peekable();
+        let mut col: u32 = 0;
+        let mut row: u32 = 0;
+        let mut abs_col = false;
+        let mut abs_row = false;
+        while let Some(&c) = iter.next() {
+            match (c, iter.peek()) {
+                (b'$', Some(b'A'..=b'Z' | b'a'..=b'z')) => {
+                    if row > 0 || col > 0 {
+                        return None;
+                    }
+                    abs_col = true;
+                }
+                (b'$', Some(b'0'..=b'9')) => {
+                    if row > 0 {
+                        return None;
+                    }
+                    abs_row = true;
+                }
+                (b'$', _) => return None,
+                (c @ (b'A'..=b'Z' | b'a'..=b'z'), _) => {
+                    if row > 0 {
+                        return None;
+                    }
+                    col = col
+                        .wrapping_mul(26)
+                        .wrapping_add((c.to_ascii_uppercase() - b'A') as u32 + 1);
+                }
+                (c @ b'0'..=b'9', _) => {
+                    row = row.wrapping_mul(10).wrapping_add((c - b'0') as u32);
+                }
+                _ => return None,
+            }
+        }
+        match (col.checked_sub(1), row.checked_sub(1)) {
+            (Some(_), Some(r)) => Some(Ref::Cell {
+                row: r,
+                col: col - 1,
+                abs_row,
+                abs_col,
+            }),
+            (Some(_), None) => Some(Ref::Column {
+                col: col - 1,
+                abs: abs_col,
+            }),
+            (None, Some(r)) => Some(Ref::Row { row: r, abs: abs_row }),
+            (None, None) => None,
+        }
+    }
+
+    /// Shift by `offset` (row, col), preserving absolute references. Returns
+    /// `None` if the result is out of bounds (caller copies verbatim).
+    fn offset(self, offset: (i64, i64)) -> Option<Self> {
+        let r = match self {
+            Ref::Cell {
+                row,
+                col,
+                abs_row,
+                abs_col,
+            } => Ref::Cell {
+                row: if abs_row { row } else { (row as i64 + offset.0) as u32 },
+                col: if abs_col { col } else { (col as i64 + offset.1) as u32 },
+                abs_row,
+                abs_col,
+            },
+            Ref::Column { col, abs } => Ref::Column {
+                col: if abs { col } else { (col as i64 + offset.1) as u32 },
+                abs,
+            },
+            Ref::Row { row, abs } => Ref::Row {
+                row: if abs { row } else { (row as i64 + offset.0) as u32 },
+                abs,
+            },
+        };
+        r.validate()
+    }
+
+    /// Validate row/column bounds.
+    fn validate(self) -> Option<Self> {
+        match self {
+            Ref::Cell { row, col, .. } => {
+                if col >= SF_MAX_COLUMNS || row >= SF_MAX_ROWS {
+                    return None;
+                }
+            }
+            Ref::Column { col, .. } => {
+                if col >= SF_MAX_COLUMNS {
+                    return None;
+                }
+            }
+            Ref::Row { row, .. } => {
+                if row >= SF_MAX_ROWS {
+                    return None;
+                }
+            }
+        }
+        Some(self)
+    }
+
+    /// Append this reference to `buf`.
+    fn format(&self, buf: &mut Vec<u8>) {
+        match self {
+            Ref::Cell {
+                row,
+                col,
+                abs_row,
+                abs_col,
+            } => {
+                if *abs_col {
+                    buf.push(b'$');
+                }
+                column_number_to_name(*col, buf);
+                if *abs_row {
+                    buf.push(b'$');
+                }
+                buf.extend_from_slice((row + 1).to_string().as_bytes());
+            }
+            Ref::Column { col, abs } => {
+                if *abs {
+                    buf.push(b'$');
+                }
+                column_number_to_name(*col, buf);
+            }
+            Ref::Row { row, abs } => {
+                if *abs {
+                    buf.push(b'$');
+                }
+                buf.extend_from_slice((row + 1).to_string().as_bytes());
+            }
+        }
+    }
+}
+
+/// Convert a 1-indexed column number to Excel letters (1 -> "A").
+fn column_number_to_name(num: u32, buf: &mut Vec<u8>) {
+    if num >= SF_MAX_COLUMNS {
+        return;
+    }
+    let start = buf.len();
+    let mut n = num + 1;
+    while n > 0 {
+        let ch = ((n - 1) % 26 + 65) as u8;
+        buf.push(ch);
+        n = (n - 1) / 26;
+    }
+    buf[start..].reverse();
+}
+
+/// Advance a single reference (or range) by `offset`, appending to `buf`.
+/// Returns `None` if the token is not a translatable reference.
+fn offset_ref_token(token: &[u8], offset: (i64, i64), buf: &mut Vec<u8>) -> Option<()> {
+    match token.iter().position(|&b| b == b':') {
+        None => {
+            let r = Ref::parse(token)?;
+            r.offset(offset)?.format(buf);
+            Some(())
+        }
+        Some(idx) => {
+            let start = Ref::parse(&token[..idx])?;
+            let end = Ref::parse(&token[idx + 1..])?;
+            if std::mem::discriminant(&start) != std::mem::discriminant(&end) {
+                return None;
+            }
+            start.offset(offset)?.format(buf);
+            buf.push(b':');
+            end.offset(offset)?.format(buf);
+            Some(())
+        }
+    }
+}
+
+/// Shift every relative cell reference in a formula string by `offset`, leaving
+/// function names, quoted strings, and anything unparseable verbatim. Mirrors
+/// calamine's `replace_cell_names` exactly (so the result matches the
+/// whole-workbook reader).
+pub(crate) fn replace_cell_names(s: &str, offset: (i64, i64)) -> String {
+    let bytes = s.as_bytes();
+    let mut res: Vec<u8> = Vec::new();
+    let mut in_quote = false;
+    let mut token_start = 0;
+    let mut token_end = 0;
+    for (i, &c) in bytes.iter().enumerate() {
+        if !in_quote && (c.is_ascii_alphanumeric() || c == b'$' || c == b':') {
+            token_end = i + 1;
+        } else {
+            if token_start < token_end {
+                let next_is_paren = c == b'(';
+                if next_is_paren || offset_ref_token(&bytes[token_start..token_end], offset, &mut res).is_none() {
+                    res.extend_from_slice(&bytes[token_start..token_end]);
+                }
+            }
+            res.push(c);
+            token_start = i + 1;
+            token_end = i + 1;
+            if c == b'"' {
+                in_quote = !in_quote;
+            }
+        }
+    }
+    if token_start < token_end && offset_ref_token(&bytes[token_start..token_end], offset, &mut res).is_none() {
+        res.extend_from_slice(&bytes[token_start..token_end]);
+    }
+    String::from_utf8(res).unwrap_or_else(|_| s.to_string())
+}
+
+/// Read the `t` / `si` / `ref` attributes of a `<f>` element.
+fn read_f_attrs(e: &BytesStart) -> (Option<String>, Option<u32>, Option<String>) {
+    let mut f_t = None;
+    let mut f_si = None;
+    let mut f_ref = None;
+    for attr in e.attributes().flatten() {
+        match attr.key.as_ref() {
+            b"t" => f_t = Some(String::from_utf8_lossy(&attr.value).into_owned()),
+            b"si" => f_si = String::from_utf8_lossy(&attr.value).trim().parse().ok(),
+            b"ref" => f_ref = Some(String::from_utf8_lossy(&attr.value).into_owned()),
+            _ => {}
+        }
+    }
+    (f_t, f_si, f_ref)
+}
+
+/// Parse a shared-formula `ref` (`"B2:B10"` or `"B2"`) into
+/// `((start_row, start_col), (end_row, end_col))`; `None` if unparseable.
+fn parse_ref_range(s: &str) -> Option<((u32, u32), (u32, u32))> {
+    let parse_cell = |c: &str| -> Option<(u32, u32)> {
+        let bytes = c.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
+            i += 1;
+        }
+        if i == 0 || i == c.len() {
+            return None;
+        }
+        let col = col_from_ref(&c[..i]);
+        let row: u32 = c[i..].parse().ok()?;
+        if col == 0 || row == 0 {
+            return None;
+        }
+        Some((row, col))
+    };
+    match s.split_once(':') {
+        Some((a, b)) => Some((parse_cell(a)?, parse_cell(b)?)),
+        None => {
+            let single = parse_cell(s)?;
+            Some((single, single))
+        }
+    }
+}
+
+/// Resolve a shared-formula member cell: look up `si`, and if `pos` lies within
+/// the master's `ref` range, return the master text with references shifted by
+/// the member's offset from the master. `None` means "emit no formula" (matches
+/// calamine when the member is outside the range or the master was never seen).
+fn resolve_shared_member(table: &SharedFormulaTable, si: u32, pos: (u32, u32)) -> Option<String> {
+    let sf = table.get(&si)?;
+    if let Some(((sr, sc), (er, ec))) = sf.range {
+        if pos.0 < sr || pos.0 > er || pos.1 < sc || pos.1 > ec {
+            return None;
+        }
+    }
+    let offset = (pos.0 as i64 - sf.pos.0 as i64, pos.1 as i64 - sf.pos.1 as i64);
+    Some(replace_cell_names(&sf.text, offset))
 }
 
 // ---------------------------------------------------------------------------
@@ -1368,5 +1729,220 @@ mod streaming_safety_tests {
         assert!(result.is_err(), "reader must reject a too-many-entries archive");
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("too many entries"), "unexpected error: {msg}");
+    }
+}
+
+#[cfg(test)]
+mod shared_formula_tests {
+    use super::*;
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
+
+    // Minimal valid .xlsx with shared formulas (no styles/sharedStrings needed).
+    const CT: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>"#;
+
+    const ROOT_RELS: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"#;
+
+    const WORKBOOK: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>"#;
+
+    const WORKBOOK_RELS: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>"#;
+
+    // Shared formulas:
+    //   si=0  master B2 "=A1+B1"        ref B2:B10  (relative refs, shift by member offset)
+    //   si=1  master D2 "=$A$1+B1"      ref D2:D4   (absolute A, relative B)
+    //   si=2  master E2 "=Sheet1!A1+B1" ref E2:E3   (sheet-qualified)
+    //   C1    inline non-shared "=A1*B1"
+    //   F1    member si=99 (never defined) -> no formula
+    const SHEET: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1"><c r="A1"><v>1</v></c><c r="B1"><v>2</v></c><c r="C1"><f>=A1*B1</f><v>2</v></c></row>
+    <row r="2"><c r="A2"><v>10</v></c><c r="B2"><f t="shared" si="0" ref="B2:B10">=A1+B1</f><v>12</v></c><c r="D2"><f t="shared" si="1" ref="D2:D4">=$A$1+B1</f><v>12</v></c><c r="E2"><f t="shared" si="2" ref="E2:E3">=Sheet1!A1+B1</f><v>12</v></c></row>
+    <row r="3"><c r="A3"><v>20</v></c><c r="B3"><f t="shared" si="0"/><v>22</v></c><c r="D3"><f t="shared" si="1"/><v>22</v></c><c r="E3"><f t="shared" si="2"/><v>22</v></c></row>
+    <row r="4"><c r="A4"><v>30</v></c><c r="B4"><f t="shared" si="0"/><v>32</v></c><c r="D4"><f t="shared" si="1"/><v>32</v></c></row>
+    <row r="5"><c r="A5"><v>40</v></c><c r="B5"><f t="shared" si="0"/><v>42</v></c></row>
+    <row r="10"><c r="A10"><v>90</v></c><c r="B10"><f t="shared" si="0"/><v>102</v></c></row>
+    <row r="100"><c r="F1"><f t="shared" si="99"/><v>5</v></c></row>
+  </sheetData>
+</worksheet>"#;
+
+    fn make_shared_xlsx(sheet: &str) -> Vec<u8> {
+        let mut buf = Vec::new();
+        {
+            let mut zw = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let opts = SimpleFileOptions::default();
+            for (name, content) in [
+                ("[Content_Types].xml", CT),
+                ("_rels/.rels", ROOT_RELS),
+                ("xl/workbook.xml", WORKBOOK),
+                ("xl/_rels/workbook.xml.rels", WORKBOOK_RELS),
+                ("xl/worksheets/sheet1.xml", sheet),
+            ] {
+                zw.start_file(name, opts).expect("start_file");
+                zw.write_all(content.as_bytes()).expect("write");
+            }
+            zw.finish().expect("finish");
+        }
+        buf
+    }
+
+    /// Find a streamed cell's `StreamValue` by 1-indexed (row, col).
+    fn cell_at<'a>(sheets: &'a [StreamSheet], r: u32, col: u32) -> Option<&'a StreamValue> {
+        let sheet = sheets.first()?;
+        let row = sheet.rows.iter().find(|row| row.r == r)?;
+        let cell = row.cells.iter().find(|c| c.col == col)?;
+        Some(&cell.value)
+    }
+
+    fn stream_formula(bytes: &[u8], r: u32, col: u32) -> Option<String> {
+        match cell_at(&stream_read(bytes).expect("stream_read"), r, col) {
+            Some(StreamValue::Formula(f)) => Some(f.clone()),
+            _ => None,
+        }
+    }
+
+    /// Oracle: the whole-workbook (calamine-based) reader's resolved formula.
+    fn inmem_formula(bytes: &[u8], r: u32, col: u32) -> Option<String> {
+        let inner = crate::reader::xlsx::workbook_inner_from_bytes(bytes).expect("in-mem read");
+        let ws = &inner.worksheets()[0];
+        ws.get_cell_by_rc(r, col).formula()
+    }
+
+    #[test]
+    fn shared_formula_members_resolve() {
+        let bytes = make_shared_xlsx(SHEET);
+        // Master returns its own formula (offset 0).
+        assert_eq!(stream_formula(&bytes, 2, 2).as_deref(), Some("=A1+B1"));
+        // Members shifted by offset from master (B2 -> +row).
+        assert_eq!(stream_formula(&bytes, 3, 2).as_deref(), Some("=A2+B2"));
+        assert_eq!(stream_formula(&bytes, 4, 2).as_deref(), Some("=A3+B3"));
+        assert_eq!(stream_formula(&bytes, 5, 2).as_deref(), Some("=A4+B4"));
+        assert_eq!(stream_formula(&bytes, 10, 2).as_deref(), Some("=A9+B9"));
+        // Inline (non-shared) formula is unchanged.
+        assert_eq!(stream_formula(&bytes, 1, 3).as_deref(), Some("=A1*B1"));
+        // Absolute reference preserved, relative shifted (si=1).
+        assert_eq!(stream_formula(&bytes, 2, 4).as_deref(), Some("=$A$1+B1"));
+        assert_eq!(stream_formula(&bytes, 3, 4).as_deref(), Some("=$A$1+B2"));
+        assert_eq!(stream_formula(&bytes, 4, 4).as_deref(), Some("=$A$1+B3"));
+        // Sheet-qualified reference: bare refs shifted, sheet name verbatim (si=2).
+        assert_eq!(stream_formula(&bytes, 2, 5).as_deref(), Some("=Sheet1!A1+B1"));
+        assert_eq!(stream_formula(&bytes, 3, 5).as_deref(), Some("=Sheet1!A2+B2"));
+    }
+
+    #[test]
+    fn shared_formula_matches_inmemory_reader() {
+        let bytes = make_shared_xlsx(SHEET);
+        // Every shared member/master must equal the whole-workbook reader output.
+        for (r, c) in [
+            (2, 2),
+            (3, 2),
+            (4, 2),
+            (5, 2),
+            (10, 2),
+            (1, 3),
+            (2, 4),
+            (3, 4),
+            (4, 4),
+            (2, 5),
+            (3, 5),
+        ] {
+            let got = stream_formula(&bytes, r, c);
+            let want = inmem_formula(&bytes, r, c);
+            assert_eq!(got, want, "formula mismatch at r={r} c={c}");
+        }
+    }
+
+    #[test]
+    fn shared_formula_unknown_si_emits_no_formula() {
+        let bytes = make_shared_xlsx(SHEET);
+        // F1 is a member of si=99 which is never defined -> cached value, not Formula.
+        match cell_at(&stream_read(&bytes).unwrap(), 100, 6) {
+            Some(StreamValue::Formula(_)) => panic!("unknown-si member must not resolve to a formula"),
+            Some(StreamValue::Number(_)) => {} // cached value retained (matches calamine)
+            other => panic!("expected cached Number, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn shared_formula_table_stays_bounded() {
+        // One master shared across 1000 member rows must resolve all from a single
+        // per-sheet table entry (memory bounded by # distinct shared formulas).
+        let mut sheet = String::from(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><v>1</v></c><c r="B1"><v>1</v></c></row><row r="2"><c r="A2"><v>2</v></c><c r="B2"><f t="shared" si="0" ref="B2:B1001">=A1+B1</f><v>3</v></c></row>"#,
+        );
+        for r in 3..=1001u32 {
+            sheet.push_str(&format!(
+                r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c><c r="B{r}"><f t="shared" si="0"/><v>0</v></c></row>"#
+            ));
+        }
+        sheet.push_str("</sheetData></worksheet>");
+        let bytes = make_shared_xlsx(&sheet);
+        let sheets = stream_read(&bytes).expect("read");
+        for r in 3..=1001u32 {
+            let expect = format!("=A{}+B{}", r - 1, r - 1);
+            match cell_at(&sheets, r, 2) {
+                Some(StreamValue::Formula(f)) => assert_eq!(f.as_str(), expect.as_str(), "mismatch at row {r}"),
+                other => panic!("row {r}: expected Formula, got {other:?}"),
+            }
+        }
+        assert_eq!(sheets.first().unwrap().rows.len(), 1001);
+    }
+
+    // --- replace_cell_names unit tests (port of calamine) ---
+    #[test]
+    fn replace_cell_names_shifts_relative() {
+        assert_eq!(replace_cell_names("=A1+B1", (3, 0)), "=A4+B4");
+        assert_eq!(replace_cell_names("=A1+B1", (0, 1)), "=B1+C1");
+    }
+
+    #[test]
+    fn replace_cell_names_preserves_absolute() {
+        assert_eq!(replace_cell_names("=$A$1+B1", (1, 0)), "=$A$1+B2");
+        assert_eq!(replace_cell_names("=$A$1+B$1", (1, 0)), "=$A$1+B$1");
+    }
+
+    #[test]
+    fn replace_cell_names_skips_functions_and_quotes() {
+        assert_eq!(replace_cell_names("=SUM(A1:A3)", (2, 0)), "=SUM(A3:A5)");
+        assert_eq!(replace_cell_names("=\"A1\"&B1", (1, 0)), "=\"A1\"&B2");
+    }
+
+    #[test]
+    fn replace_cell_names_sheet_qualified() {
+        assert_eq!(replace_cell_names("=Sheet1!A1+B1", (1, 0)), "=Sheet1!A2+B2");
+    }
+
+    #[test]
+    fn replace_cell_names_shifts_bare_column() {
+        // Bare column reference (`A`) shifts with the column offset, matching calamine.
+        assert_eq!(replace_cell_names("=A+B", (0, 1)), "=B+C");
+        assert_eq!(replace_cell_names("=SUM(A)", (0, 1)), "=SUM(B)");
+        // Function-name token overflows the column bound (>16384) → copied verbatim.
+        assert_eq!(replace_cell_names("=COLUMN()", (1, 0)), "=COLUMN()");
+    }
+
+    #[test]
+    fn replace_cell_names_shifts_bare_row() {
+        // Bare row reference (`5`) shifts with the row offset, matching calamine.
+        assert_eq!(replace_cell_names("=A1*5", (1, 0)), "=A2*6");
+        assert_eq!(replace_cell_names("=A1*A5", (1, 0)), "=A2*A6");
     }
 }

@@ -29,7 +29,7 @@
 | **Cell values & types** | | | |
 | Number, String, Bool, Error | shipped | v0.1.0 | |
 | Formula (read/write) | shipped | v0.1.0 | Stored as string formula + cached value |
-| Shared formula | shipped | v0.1.0? | Expanded on write |
+| Shared formula | shipped | v0.1.0? | Expanded on write; streaming read resolves member cells (#25.2) |
 | Array formula | n-a | — | Rare; deferred |
 | Date/DateTime | shipped | v0.13.0 | Full round-trip; Date cell values preserved as JS Date via napi bridge (was ISO-8601 string) |
 | Hyperlink | shipped | v0.11.0 | Full read/write round-trip; r:id → URL resolution via sheet rels |
