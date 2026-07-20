@@ -11,6 +11,6 @@
 
 ## 3. Land on the streaming branch + CI
 
-- [ ] 3.1 Apply the fix as a commit on `feature/streaming-node-bridge` (or a `fix/getcell-glue` branch off it), then push.
-- [ ] 3.2 Confirm the CI Typecheck job passes on the pushed branch (PR #33 goes green).
-- [ ] 3.3 Confirm the 6 affected test files (`reader.test.ts`, `style.test.ts`, `tables.test.ts`, `theme-color.test.ts`, `workbook_xlsx.test.ts`, `worksheet.test.ts`) typecheck.
+- [x] 3.1 Apply the fix as a commit on `feature/streaming-node-bridge` (or a `fix/getcell-glue` branch off it), then push.
+- [x] 3.2 Confirm the CI Typecheck job passes on the pushed branch (PR #33 goes green).
+- [x] 3.3 Confirm the 6 affected test files (`reader.test.ts`, `style.test.ts`, `tables.test.ts`, `theme-color.test.ts`, `workbook_xlsx.test.ts`, `worksheet.test.ts`) typecheck.

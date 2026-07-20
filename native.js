@@ -591,6 +591,7 @@ module.exports.Cell = nativeBinding.Cell
 module.exports.Column = nativeBinding.Column
 module.exports.Row = nativeBinding.Row
 module.exports.StreamReader = nativeBinding.StreamReader
+module.exports.StreamWriter = nativeBinding.StreamWriter
 module.exports.Workbook = nativeBinding.Workbook
 module.exports.WorkbookCsv = nativeBinding.WorkbookCsv
 module.exports.WorkbookStream = nativeBinding.WorkbookStream
