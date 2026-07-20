@@ -6,6 +6,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.1] — 2026-07-20
+
+### Fixed
+
+- **CHANGELOG history gap.** Backfilled the missing `[2.1.0]` entry (streaming hardening) and added this `[2.1.1]` entry. No code or public-API changes; the published native artifact is identical to `2.1.0`.
+
+## [2.1.0] — 2026-07-19
+
+### Added
+
+- **Streaming hardening (#25.3, PR #27).** Follow-up to the v2.0.0 streaming capstone: closed five residual risks (A1–A5) on the `workbook.stream.xlsx` read/write path. Non-breaking — additive to the `stream` namespace; no public-API shape change.
+
+### Fixed
+
+- None.
+
+### Migration
+
+- Non-breaking: all changes additive to the `stream` namespace; `StreamValue::Formula` already existed. No public-API shape change.
+
 ## [2.0.5] — 2026-07-19
 
 ### Fixed
