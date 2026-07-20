@@ -6,6 +6,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] — 2026-07-20
+
+### Added
+
+- **Streaming Node bridge (#25.1, PR #34).** Constant-memory streaming now bridges to Node's streaming model: `StreamReader` is an async iterable yielding one `JsStreamSheet` at a time, `StreamWriter` accumulates sheets and finalizes to a buffer, and `src/stream-bridge` adapters (`readAsReadable` / `writeToWritable`) bridge to Node `Readable` / `Writable`. Only the current sheet is materialized — constant memory for large files.
+- **Shared-formula resolution on the streaming read path (#25.2 / #32).** The streaming reader now resolves shared-formula member cells (`<f t="shared">`) to translated `Formula` text, matching calamine's whole-workbook reader.
+
+### Migration
+
+- Non-breaking: both are additive to the `stream` namespace; `StreamValue::Formula` already existed. No public-API shape change beyond the new streaming bridge methods.
+
 ## [2.1.1] — 2026-07-20
 
 ### Fixed
