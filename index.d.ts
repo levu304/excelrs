@@ -1068,3 +1068,19 @@ export interface WorkbookView {
   tabRatio?: number
   visibility?: string
 }
+
+// __EXCELJS_GETCELL_GLUE__
+// ExcelJS-compat getCell overloads (TypeScript declaration merging)
+export interface Worksheet {
+  /** Get cell by A1-style address string (JS glue → getCellByAddress). */
+  getCell(address: string): Cell
+  /** Get cell by 1-indexed row and column numbers (JS glue → getCellByRc). */
+  getCell(row: number, col: number): Cell
+}
+export interface Row {
+  /** Get cell by 1-indexed column number (JS glue → getCellByColNum). */
+  getCell(col: number): Cell
+  /** Get cell by column letter (JS glue → getCellByColLetter). */
+  getCell(col: string): Cell
+}
+
