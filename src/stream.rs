@@ -765,9 +765,6 @@ fn offset_ref_token(token: &[u8], offset: (i64, i64), buf: &mut Vec<u8>) -> Opti
     match token.iter().position(|&b| b == b':') {
         None => {
             let r = Ref::parse(token)?;
-            if !matches!(r, Ref::Cell { .. }) {
-                return None;
-            }
             r.offset(offset)?.format(buf);
             Some(())
         }
@@ -1931,5 +1928,21 @@ mod shared_formula_tests {
     #[test]
     fn replace_cell_names_sheet_qualified() {
         assert_eq!(replace_cell_names("=Sheet1!A1+B1", (1, 0)), "=Sheet1!A2+B2");
+    }
+
+    #[test]
+    fn replace_cell_names_shifts_bare_column() {
+        // Bare column reference (`A`) shifts with the column offset, matching calamine.
+        assert_eq!(replace_cell_names("=A+B", (0, 1)), "=B+C");
+        assert_eq!(replace_cell_names("=SUM(A)", (0, 1)), "=SUM(B)");
+        // Function-name token overflows the column bound (>16384) → copied verbatim.
+        assert_eq!(replace_cell_names("=COLUMN()", (1, 0)), "=COLUMN()");
+    }
+
+    #[test]
+    fn replace_cell_names_shifts_bare_row() {
+        // Bare row reference (`5`) shifts with the row offset, matching calamine.
+        assert_eq!(replace_cell_names("=A1*5", (1, 0)), "=A2*6");
+        assert_eq!(replace_cell_names("=A1*A5", (1, 0)), "=A2*A6");
     }
 }
