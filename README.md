@@ -114,9 +114,48 @@ styling for Font, Fill, Border, Alignment, and number formats (write only).
 - Cell-level interior mutability shipped in v0.4.0 — `ws.getCell('A1').style = {...}` and `ws.getCell('A1').value = x` now persist into the worksheet automatically (via `Arc<Mutex<CellInner>>`)
 - Alignment emission shipped in v0.3.0 (accepted in `Style` JS object, emitted on write).
 - CSV via `wb.csv` — single-sheet only on write (CSV cannot represent multiple worksheets); numbers are inferred on read, all other CSV values are strings; no formula evaluation (cached value is emitted when available)
-- No streaming, no formula evaluation, no XLS / XLSB (merged cells, data validation, freeze panes, CSV, headers/footers, page setup, comments, images: shipped).
+- No formula evaluation, no XLS / XLSB (merged cells, data validation, freeze panes, CSV, headers/footers, page setup, comments, images: shipped).
 - Theme color references are **preserved on write** (v0.13.0): `<color theme="N"/>` (+`tint`) is emitted instead of a flattened ARGB; the public `color` value remains the resolved ARGB string
 - Date cell values are **preserved as JS `Date`** (v0.13.0): `Cell.value` returns `Date | CellValue` from Date cells; the setter accepts a JS `Date`, storing it as the Excel serial number and injecting an appropriate date `numFmt` (if none is set) so the value survives read→write round-trip as a true Date
+
+## Streaming XLSX (v2.1.0+)
+
+Streaming XLSX for large `.xlsx` files.
+
+- **Read** is constant-memory: `StreamReader` materializes one sheet at a time, so peak memory stays bounded by a single sheet regardless of workbook size.
+- **Write** buffers every sheet in memory and builds the full archive at `finalize()` — it is **not** constant-memory. Use it when the whole output fits in RAM; for very large outputs prefer writing to disk or generating in parts.
+
+```ts
+import { StreamReader, StreamWriter } from '@levu304/excelrs'
+
+// Read: yields sheets one at a time via for-await-of
+const reader = new StreamReader(buffer)
+for await (const sheet of reader) {
+  console.log(sheet.name, sheet.rows.length)
+  // Each sheet's rows are yielded here — only one in memory at a time
+}
+
+// Write: accepts sheets incrementally
+const writer = new StreamWriter()
+writer.writeSheet(sheet1)
+writer.writeSheet(sheet2)
+const output = writer.finalize() // Buffer
+```
+
+**Hand-written bridge functions** (Node `Readable` / `Writable` / `AsyncIterable` adapters):
+
+```ts
+import { read, write, readAsReadable, writeToWritable } from '@levu304/excelrs/stream-bridge'
+
+// AsyncIterable
+for await (const sheet of read(buffer)) { ... }
+
+// Node Readable
+Readable.from(read(buffer))
+
+// Node Writable
+await writeToWritable(read(buffer), writable)
+```
 
 ## Development
 
@@ -131,3 +170,17 @@ cargo fmt -- --check
 ## License
 
 Dual-licensed under MIT or Apache-2.0 — see [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE).
+
+## Bridging Features
+
+This repo includes two streaming XLSX capabilities:
+
+### streaming-node-bridge (archived)
+
+Previously delivered: async iterable `wb.stream.xlsx.read()` and `write(sheets)` that preserve values only (no styles). Original constant-memory intent for Node.
+
+### streaming-safety (active)
+
+Newly delivered via `streaming-hardening`: zip‑bomb rejection, stream termination, and per‑sheet constant‑memory reading. Read path is now constant‑memory; write path remains buffered.
+
+Both are additive; the legacy v2.0.0 streaming APIs remain available.

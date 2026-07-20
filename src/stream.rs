@@ -22,6 +22,7 @@
 
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Seek, Write};
+use std::sync::Arc;
 
 use quick_xml::escape::escape;
 use quick_xml::events::Event;
@@ -95,9 +96,16 @@ struct RowEmit {
 /// Max bytes read from a single zip entry on the streaming path. Bounds the
 /// *actual* decompressed bytes (via `take`), not just the declared size, so a
 /// part that declares a small size but decompresses large cannot exhaust memory.
-const MAX_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
+pub const MAX_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
 /// Max SAX events per sheet (anti-billion-row / entity-expansion guard).
-const MAX_EVENTS: usize = 5_000_000;
+pub const MAX_EVENTS: usize = 5_000_000;
+/// Max number of zip entries a streaming reader will accept. Bounds the
+/// central-directory parse (zip-bomb surface) before any content is read.
+pub const MAX_ARCHIVE_ENTRIES: usize = 10_000;
+/// Max raw byte size of an input `.xlsx` the streaming reader will accept.
+/// `MAX_ENTRY_BYTES` guards per-entry *decompressed* bytes; this guards the
+/// total input so a huge-but-sparse archive still cannot exhaust memory.
+pub const MAX_ARCHIVE_BYTES: u64 = 256 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Streaming reader
@@ -109,7 +117,23 @@ const MAX_EVENTS: usize = 5_000_000;
 /// Shared strings + styles are read once up front (small vs. cell data); each
 /// sheet is then SAX-parsed row-by-row.
 pub fn stream_read(data: &[u8]) -> Result<Vec<StreamSheet>, ExcelrsError> {
-    let mut archive = zip::ZipArchive::new(Cursor::new(data)).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
+    let mut archive =
+        zip::ZipArchive::new(Cursor::new(Arc::from(data))).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
+
+    if archive.len() > MAX_ARCHIVE_ENTRIES {
+        return Err(ExcelrsError::Read(format!(
+            "streaming reader rejected input: too many entries ({} > limit {})",
+            archive.len(),
+            MAX_ARCHIVE_ENTRIES
+        )));
+    }
+    if data.len() as u64 > MAX_ARCHIVE_BYTES {
+        return Err(ExcelrsError::Read(format!(
+            "streaming reader rejected input: file too large ({} bytes > limit {} bytes)",
+            data.len(),
+            MAX_ARCHIVE_BYTES
+        )));
+    }
 
     // Sheet order + names come from xl/workbook.xml, mapped to sheet numbers via
     // xl/_rels/workbook.xml.rels (r:id → worksheets/sheetN.xml).
@@ -143,8 +167,8 @@ pub fn stream_read(data: &[u8]) -> Result<Vec<StreamSheet>, ExcelrsError> {
 
 /// Parse `xl/workbook.xml` + its rels, returning `(sheet_name, sheet_number)`
 /// in document order.
-fn parse_workbook_sheet_targets(
-    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+pub fn parse_workbook_sheet_targets(
+    archive: &mut zip::ZipArchive<Cursor<Arc<[u8]>>>,
 ) -> Result<Vec<(String, String)>, ExcelrsError> {
     // r:id → target (e.g. "worksheets/sheet3.xml")
     let mut rid_to_target: HashMap<String, String> = HashMap::new();
@@ -239,7 +263,7 @@ fn parse_workbook_sheet_targets(
 }
 
 /// Parse `xl/sharedStrings.xml` into an index-ordered vector of strings.
-fn parse_shared_strings(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> Result<Vec<String>, ExcelrsError> {
+pub fn parse_shared_strings(archive: &mut zip::ZipArchive<Cursor<Arc<[u8]>>>) -> Result<Vec<String>, ExcelrsError> {
     let entry = match archive.by_name("xl/sharedStrings.xml") {
         Ok(e) => e,
         Err(_) => return Ok(Vec::new()),
@@ -305,7 +329,7 @@ fn parse_shared_strings(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> Result<
 }
 
 /// SAX-parse `<sheetData>` into ordered `StreamRow`s.
-fn parse_sheet_rows(
+pub fn parse_sheet_rows(
     xml: &str,
     style_table: &reader_styles::StyleTableRead,
     shared: &[String],
@@ -1027,7 +1051,7 @@ mod tests {
             w.write_all(sst.as_bytes()).unwrap();
             w.finish().unwrap();
         }
-        let cursor = std::io::Cursor::new(&buf[..]);
+        let cursor = std::io::Cursor::new(std::sync::Arc::from(&buf[..]));
         let mut archive = zip::ZipArchive::new(cursor).expect("archive");
         let strings = parse_shared_strings(&mut archive).expect("parse");
         assert_eq!(strings, vec!["", "alpha", "\u{6771}\u{4eac}"]);
@@ -1314,5 +1338,35 @@ mod tests {
             "A1 should be a formula, got {:?}",
             cells[0].value
         );
+    }
+}
+
+#[cfg(test)]
+mod streaming_safety_tests {
+    use super::*;
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
+
+    #[test]
+    fn stream_read_rejects_too_many_entries() {
+        // Build a zip whose central directory exceeds MAX_ARCHIVE_ENTRIES.
+        // This is the zip-bomb surface: many tiny entries can exhaust memory
+        // before any content is read. The streaming reader must reject it.
+        let mut buf = Vec::new();
+        {
+            let mut zw = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let opts = SimpleFileOptions::default();
+            for i in 0..(MAX_ARCHIVE_ENTRIES + 1) {
+                let name = format!("entry{i}.txt");
+                zw.start_file(name, opts).expect("start_file");
+                zw.write_all(b"x").expect("write");
+            }
+            zw.finish().expect("finish");
+        }
+
+        let result = stream_read(&buf);
+        assert!(result.is_err(), "reader must reject a too-many-entries archive");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("too many entries"), "unexpected error: {msg}");
     }
 }
