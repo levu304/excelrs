@@ -208,13 +208,13 @@ jobs:
             ws.addRow(['p', 'q', 'r']);
             const style = {
               font: { bold: true },
-              fill: { kind: 'solid', foreground: 'FFFF0000' }
+              fill: { kind: "Solid", foreground: 'FFFF0000' }
             };
             ws.setCellStyle(1, 2, style);
             // Row-level style (read-path gap closed by this change).
             ws.getRow(3).style = {
               font: { bold: true, color: 'FFFF0000' },
-              fill: { kind: 'solid', foreground: 'FFFFFFFF' }
+              fill: { kind: "Solid", foreground: 'FFFFFFFF' }
             };
             // Merge (writer emits <mergeCells> since v0.5.0; reader now
             // restores it — read-path gap closed by this change).
@@ -236,7 +236,7 @@ jobs:
                       'style lost on read: font.bold not preserved'
                     );
                   }
-                  if (!s.fill || s.fill.kind !== 'solid' ||
+                  if (!s.fill || s.fill.kind !== "Solid" ||
                       s.fill.foreground !== 'FFFF0000') {
                     const got = s.fill &&
                       s.fill.kind + '/' + s.fill.foreground;
