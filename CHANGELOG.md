@@ -1,6 +1,18 @@
 # Changelog
 <!-- Release process: tag-driven from main. `git tag -a vX.Y.Z -m "..."` then push the tag. -->
 
+## [2.3.0] - 2026-07-26
+
+### Added
+- Typed enum declarations for string-literal fields (FillKind, GradientType, BorderStyleStyle, AlignmentHorizontal, AlignmentVertical, AnchorType, SheetViewState, ActivePane, Orientation, CellComments)
+- TypeScript overlay types (CellValue, CfRule, DataValidation, CfvoType, CfRuleOperator, CfRuleType, CfTimePeriod, DataValidationType, DataValidationOperator, DataValidationErrorStyle, CellValueType, SheetViewState) via enums.d.ts
+- 7 missing OOXML border styles: Hair, DashDot, DashDotDot, MediumDashDot, SlantDashDot, MediumDashed, MediumDashDotDot
+
+### Fixed
+- FillKind::Pattern removed (invalid OOXML ST_PatternType). Fill.pattern now stores raw OOXML pattern type name, emitted as-is in XML
+- Fill emission: fill.pattern plumbed through reader and writer for both regular fills and DXF fills
+- AlignmentVertical::Middle Display changed from "middle" to "center" (OOXML correct)
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
