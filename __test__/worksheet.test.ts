@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest'
-import { Worksheet, Workbook } from '../index'
+import { Worksheet } from '../index'
 
 test('Worksheet constructor', () => {
   const ws = new Worksheet('Sheet1')
@@ -120,3 +120,75 @@ test('setName on worksheet', () => {
   ws.name = 'New'
   expect(ws.name).toBe('New')
 })
+
+test('getRow().getCell().value on fresh row — string', () => {
+  const ws = new Worksheet('Test')
+
+  const row = ws.getRow(1)
+
+  const cell = row.getCell('A')
+
+  cell.value = 'Hello!'
+
+  expect(ws.getCell('A1').value.string).toBe('Hello!')
+
+  expect(ws.getCell('A1').value.valueType).toBe('String')
+
+})
+
+
+  test('getRow().getCell().value on fresh row — number', () => {
+  const ws = new Worksheet('Test')
+
+  ws.getRow(2).getCell('B').value = 42
+
+  expect(ws.getCell('B2').value.number).toBe(42)
+
+  expect(ws.getCell('B2').value.valueType).toBe('Number')
+
+})
+
+
+  test('getRow().getCell().value on fresh row — boolean', () => {
+  const ws = new Worksheet('Test')
+
+  ws.getRow(3).getCell('C').value = true
+
+  expect(ws.getCell('C3').value.boolean).toBe(true)
+
+  expect(ws.getCell('C3').value.valueType).toBe('Boolean')
+
+})
+
+
+  test('getRow().getCell().style mutation on fresh row', () => {
+  const ws = new Worksheet('Test')
+
+  ws.getRow(4).getCell('A').style = { font: { bold: true } }
+
+  expect(ws.getCell('A4').style!.font!.bold).toBe(true)
+
+})
+
+
+  test('getRow().getCell().value on pre-existing cell (v0.4.0 reg guard)', () => {
+  const ws = new Worksheet('Test')
+
+  ws.addRow([10])
+
+  ws.getRow(1).getCell(1).value = 99
+
+  expect(ws.getCell('A1').value.number).toBe(99)
+
+})
+
+
+  test('getRow().getCell().value on sparse high row number persists', () => {
+  const ws = new Worksheet('Sparse')
+
+  ws.getRow(100).getCell('A').value = 'sparse'
+
+  expect(ws.getCell('A100').value.string).toBe('sparse')
+
+})
+

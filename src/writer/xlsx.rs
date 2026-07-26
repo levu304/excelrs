@@ -147,7 +147,7 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
             for row in ws.rows() {
                 let written = row.written_cells();
                 for cell in written {
-                    let mut style = effective_cell_style_with_fallback(cell, &col_style_map);
+                    let mut style = effective_cell_style_with_fallback(&cell, &col_style_map);
                     // v0.13.0: Date cells need a date number format to round-trip as
                     // dates; inject a default one unless the style already has a format.
                     let cv = cell.value_raw();
@@ -1723,7 +1723,7 @@ fn write_cells_with_styles<W: Write>(
                 .next()
                 .copied()
                 .ok_or_else(|| ExcelrsError::Write("cell_style_indices exhausted mid-sheet (writer bug)".into()))?;
-            write_cell_xml(w, cell, string_indices, style_idx)?;
+            write_cell_xml(w, &cell, string_indices, style_idx)?;
         }
         write_str(w, "</row>")?;
     }

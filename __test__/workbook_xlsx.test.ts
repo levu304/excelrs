@@ -286,3 +286,78 @@ test('wb.xlsx getter returns a new handle each time but shares state', async () 
   // The workbook itself should also reflect the change
   expect(wb.worksheetCount).toBe(1)
 })
+
+// ---------------------------------------------------------------------------
+// Regression: row.getCell() value created on fresh row (no pre-existing cell)
+// ---------------------------------------------------------------------------
+
+test('getRow().getCell().value survives write/read round-trip', async () => {
+  const wb = new Workbook()
+  const ws = wb.addWorksheet('Test')
+  const row = ws.getRow(1)
+  row.getCell('A').value = 'RoundTrip!'
+
+  const buf = await wb.xlsx.write()
+
+  const wb2 = new Workbook()
+  await wb2.xlsx.read(buf)
+  expect(wb2.getWorksheet('Test')!.getCell('A1').value.string).toBe('RoundTrip!')
+})
+
+test('getRow().getCell() multiple cells on different rows round-trip', async () => {
+  const wb = new Workbook()
+  const ws = wb.addWorksheet('Multi')
+  ws.getRow(1).getCell('A').value = 10
+  ws.getRow(1).getCell('B').value = 20
+  ws.getRow(5).getCell('A').value = 'spare'
+
+  const buf = await wb.xlsx.write()
+
+  const wb2 = new Workbook()
+  await wb2.xlsx.read(buf)
+  expect(wb2.getWorksheet('Multi')!.getCell('A1').value.number).toBe(10)
+  expect(wb2.getWorksheet('Multi')!.getCell('B1').value.number).toBe(20)
+  expect(wb2.getWorksheet('Multi')!.getCell('A5').value.string).toBe('spare')
+})
+
+test('getRow().getCell() coexists with addRow values on same row', async () => {
+  const wb = new Workbook()
+  const ws = wb.addWorksheet('Merge')
+  ws.addRow(['header'])
+  ws.getRow(1).getCell('B').value = 'computed'
+
+  const buf = await wb.xlsx.write()
+
+  const wb2 = new Workbook()
+  await wb2.xlsx.read(buf)
+  expect(wb2.getWorksheet('Merge')!.getCell('A1').value.string).toBe('header')
+  expect(wb2.getWorksheet('Merge')!.getCell('B1').value.string).toBe('computed')
+})
+
+test('getRow().getCell() write then read with ExcelJS validates output', async () => {
+  const wb = new Workbook()
+  const ws = wb.addWorksheet('X')
+  ws.getRow(1).getCell('B').value = 'CrossLib'
+
+  const buf = await wb.xlsx.write()
+
+  const wbjs = new ExcelJS.Workbook()
+  await wbjs.xlsx.load(buf as never)
+  expect(wbjs.getWorksheet('X')!.getCell('B1').value).toBe('CrossLib')
+})
+
+test('getRow().getCell().style write then ExcelJS read validates style', async () => {
+  const wb = new Workbook()
+  const ws = wb.addWorksheet('StyleX')
+  ws.getRow(2).getCell('C').style = { font: { bold: true, color: 'FFFF0000' } }
+
+  const buf = await wb.xlsx.write()
+
+  const wbjs = new ExcelJS.Workbook()
+  await wbjs.xlsx.load(buf as never)
+  const cell = wbjs.getWorksheet('StyleX')!.getCell('C2')
+  const val = cell.value
+  expect(val).toBeNull()
+  expect(cell.font!.bold).toBe(true)
+  expect(cell.font!.color!.argb).toBe('FFFF0000')
+})

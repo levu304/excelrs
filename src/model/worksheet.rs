@@ -169,8 +169,7 @@ impl Worksheet {
     pub fn get_cell_by_rc(&self, row: u32, col: u32) -> Cell {
         let mut rows = self.rows.lock().expect("Worksheet rows lock poisoned");
         let ws_row = rows.entry(row).or_insert_with(|| Row::new(row));
-        let cell = ws_row.get_or_create_cell_mut(col);
-        cell.clone()
+        ws_row.get_or_create_cell(col)
     }
 
     // -- get_row --
@@ -189,7 +188,7 @@ impl Worksheet {
     pub fn add_row(&self, values: Vec<serde_json::Value>) -> Row {
         let mut rows = self.rows.lock().expect("Worksheet rows lock poisoned");
         let next_row_num = rows.last_key_value().map(|(k, _)| *k + 1).unwrap_or(1);
-        let mut row = Row::new(next_row_num);
+        let row = Row::new(next_row_num);
 
         for (i, val) in values.iter().enumerate() {
             let col = (i + 1) as u32;
@@ -970,8 +969,8 @@ impl Worksheet {
     {
         let mut rows = self.rows.lock().expect("Worksheet rows lock poisoned");
         let ws_row = rows.entry(row).or_insert_with(|| Row::new(row));
-        let cell = ws_row.get_or_create_cell_mut(col);
-        f(cell);
+        let mut cell = ws_row.get_or_create_cell(col);
+        f(&mut cell);
     }
 
     /// Accessor for merged ranges (used by writer).
@@ -1524,5 +1523,18 @@ mod tests {
         assert_eq!(cell.value_raw().number, Some(999.0), "row 4 should contain our value");
 
         // get_row(100) is not called here — entry().or_insert_with() creates rows on access.
+    }
+
+    #[test]
+    fn test_row_getcell_via_getrow_persists_value() {
+        // Regression: getRow() clones the Row; getCell() on the clone must share
+        // the same HashMap so cell values persist into the worksheet.
+        let ws = Worksheet::new("Test".into());
+        let row = ws.get_row(5);
+        let mut cell = row.get_cell_by_col_letter("A".into());
+        cell.set_value_raw(CellValue::string("Hello!"));
+        // Re-read via worksheet's internal path — should see the mutation
+        let cell_from_ws = ws.get_cell_by_rc(5, 1);
+        assert_eq!(cell_from_ws.value_raw().string, Some("Hello!".into()));
     }
 }
