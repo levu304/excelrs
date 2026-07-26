@@ -714,7 +714,7 @@ fn write_str<W: Write>(w: &mut W, s: &str) -> Result<(), ExcelrsError> {
 mod tests {
     use super::*;
     use crate::model::style::{
-        Alignment, AlignmentHorizontal, AlignmentVertical, BorderStyle, BorderStyleStyle, Fill, FillKind, GradientStop,
+        Alignment, AlignmentHorizontal, AlignmentVertical, BorderStyle, BorderStyleStyle, Fill, GradientStop,
     };
 
     // -- 4 dedup tests (per §9.2 budget) --
