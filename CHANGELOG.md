@@ -6,6 +6,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.1] — 2026-07-26
+
+### Fixed
+
+- **Row.getCell() value lost on cloned Row.** Cell values set via
+  `row.getCell().value = x` were silently dropped when the row came from
+  `worksheet.getRow()`. Root cause: `Row::cells` used a plain `HashMap` cloned
+  by value, while other mutable fields (`height`, `style`, `hidden`) used
+  `Arc<Mutex<>>` and survived cloning correctly. Changed to `Arc<Mutex<HashMap>>`
+  for interior mutability parity.
+
+### Changed
+
+- **Style setter TypeScript type tightened from `any` to `Style | null | undefined`.**
+  `cell.style`, `row.style`, `column.style`, and `worksheet.setCellStyle()`
+  accept `Style` objects at runtime, but generated `.d.ts` said `any` — silently
+  bypassing TypeScript checking. Now napi-rs generates the correct union type.
+- **Internal code cleanup.** Removed redundant `map_err` on `s.validate()` calls,
+  extracted shared `apply_style` helper to `style.rs` for consistent
+  normalize-or-reset control flow across all four style-setter sites.
+
 ## [2.2.0] — 2026-07-20
 
 ### Added
@@ -553,6 +574,16 @@ first fully working release; v0.2.0 and v0.2.1 are superseded.
   and GitHub Release on tag push.
 - **Documentation** — complete spec (docs/spec.md), two architecture reviews.
 
+[2.2.1]: https://github.com/levu304/excelrs/compare/v2.2.0...v2.2.1
+[2.2.0]: https://github.com/levu304/excelrs/compare/v2.1.1...v2.2.0
+[2.1.1]: https://github.com/levu304/excelrs/compare/v2.1.0...v2.1.1
+[2.1.0]: https://github.com/levu304/excelrs/compare/v2.0.5...v2.1.0
+[2.0.5]: https://github.com/levu304/excelrs/compare/v2.0.4...v2.0.5
+[2.0.4]: https://github.com/levu304/excelrs/compare/v2.0.3...v2.0.4
+[2.0.3]: https://github.com/levu304/excelrs/compare/v2.0.2...v2.0.3
+[2.0.2]: https://github.com/levu304/excelrs/compare/v2.0.1...v2.0.2
+[2.0.1]: https://github.com/levu304/excelrs/compare/v2.0.0...v2.0.1
+[2.0.0]: https://github.com/levu304/excelrs/compare/v1.3.0...v2.0.0
 [0.10.0]: https://github.com/levu304/excelrs/releases/tag/v0.10.0
 [0.9.0]: https://github.com/levu304/excelrs/releases/tag/v0.9.0
 [0.8.0]: https://github.com/levu304/excelrs/releases/tag/v0.8.0
