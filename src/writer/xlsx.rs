@@ -1917,7 +1917,7 @@ fn write_str<W: Write>(w: &mut W, s: &str) -> Result<(), ExcelrsError> {
 mod tests {
     use super::*;
     use crate::model::cell::{Cell, CellValue, RichTextRun};
-    use crate::model::style::Font;
+    use crate::model::style::{Alignment, Fill, Font};
     use crate::model::workbook_inner::WorkbookInner;
     use crate::reader::xlsx::workbook_inner_from_bytes;
     use std::collections::{BTreeMap, HashMap};
@@ -2235,7 +2235,12 @@ mod tests {
 
         // Column A has its own style
         let mut col_a = Column::new("A".into(), "a".into(), 10.0);
-        col_a.set_style(serde_json::json!({ "numFmt": "0.00%" })).unwrap();
+        col_a
+            .set_style(Some(Style {
+                num_fmt: Some("0.00%".into()),
+                ..Default::default()
+            }))
+            .unwrap();
         ws.set_columns(serde_json::to_value(&[col_a]).unwrap()).unwrap();
 
         ws.add_row(vec![serde_json::json!(0.123)]); // A1, gets column style
@@ -2281,7 +2286,11 @@ mod tests {
 
         // Cell with explicit style → wins over column
         let mut cell = Cell::new("A1".into(), 1, 1);
-        cell.set_style(serde_json::json!({ "numFmt": "0.00%" })).unwrap();
+        cell.set_style(Some(Style {
+            num_fmt: Some("0.00%".into()),
+            ..Default::default()
+        }))
+        .unwrap();
         let map: BTreeMap<u32, Option<Style>> = [(1u32, Some(bold_col.clone()))].into();
         let result = effective_cell_style_with_fallback(&cell, &map);
         assert!(result.is_some());
@@ -2426,11 +2435,24 @@ mod tests {
         ws.set_cell_style(
             1,
             1,
-            serde_json::json!({
-                "font": { "bold": true, "color": "FFFF0000" },
-                "fill": { "kind": "solid", "foreground": "FFFFFF00" },
-                "alignment": { "horizontal": "center", "vertical": "middle" },
-                "numFmt": "0.00%",
+            Some(Style {
+                font: Some(Font {
+                    bold: Some(true),
+                    color: Some("FFFF0000".into()),
+                    ..Default::default()
+                }),
+                fill: Some(Fill {
+                    kind: "solid".into(),
+                    foreground: Some("FFFFFF00".into()),
+                    ..Default::default()
+                }),
+                alignment: Some(Alignment {
+                    horizontal: Some("center".into()),
+                    vertical: Some("middle".into()),
+                    ..Default::default()
+                }),
+                num_fmt: Some("0.00%".into()),
+                ..Default::default()
             }),
         )
         .unwrap();
@@ -2470,8 +2492,13 @@ mod tests {
 
         // Mutate style via getCell (simulates JS cell.style = {...})
         let mut cell = ws.get_cell_by_address("A1".into());
-        cell.set_style(serde_json::json!({
-            "font": { "bold": true, "color": "FF00FF00" },
+        cell.set_style(Some(Style {
+            font: Some(Font {
+                bold: Some(true),
+                color: Some("FF00FF00".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
         }))
         .unwrap();
 
@@ -2485,8 +2512,13 @@ mod tests {
 
         // Also style on a second cell
         let mut cell = ws.get_cell_by_address("A2".into());
-        cell.set_style(serde_json::json!({
-            "fill": { "kind": "solid", "foreground": "FFFF0000" },
+        cell.set_style(Some(Style {
+            fill: Some(Fill {
+                kind: "solid".into(),
+                foreground: Some("FFFF0000".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
         }))
         .unwrap();
 
@@ -2573,9 +2605,18 @@ mod tests {
         ws.add_row(vec![serde_json::json!("a"), serde_json::json!("b")]);
         ws.add_row(vec![serde_json::json!("c"), serde_json::json!("d")]);
         ws.get_row(2)
-            .set_style(serde_json::json!({
-                "font": { "bold": true, "color": "FFFF0000" },
-                "fill": { "kind": "solid", "foreground": "FFFFFFFF" },
+            .set_style(Some(Style {
+                font: Some(Font {
+                    bold: Some(true),
+                    color: Some("FFFF0000".into()),
+                    ..Default::default()
+                }),
+                fill: Some(Fill {
+                    kind: "solid".into(),
+                    foreground: Some("FFFFFFFF".into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
             }))
             .unwrap();
 
@@ -3002,7 +3043,10 @@ mod tests {
         ws.set_id(1);
         // Row 2 gets a style but no cells -- must still emit <row r="2" s="N">
         ws.get_row(2)
-            .set_style(serde_json::json!({ "numFmt": "0.00%" }))
+            .set_style(Some(Style {
+                num_fmt: Some("0.00%".into()),
+                ..Default::default()
+            }))
             .unwrap();
         let mut inner = WorkbookInner::new();
         inner.worksheets.push(ws);

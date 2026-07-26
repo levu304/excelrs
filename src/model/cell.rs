@@ -20,7 +20,7 @@ use napi_derive::napi;
 
 use crate::error::ExcelrsError;
 use crate::model::comment::CellComment;
-use crate::model::style::Style;
+use crate::model::style::{apply_style, Style};
 use crate::types;
 
 // ---------------------------------------------------------------------------
@@ -381,19 +381,9 @@ impl Cell {
     /// - `null | undefined | {}` → resets to Normal (None).
     /// - Throws `ExcelrsError::InvalidStyle` on validation failure.
     #[napi(setter)]
-    pub fn set_style(&mut self, val: serde_json::Value) -> napi::Result<()> {
+    pub fn set_style(&mut self, val: Option<Style>) -> napi::Result<()> {
         let mut inner = self.inner.lock().expect("Cell lock poisoned");
-        if val.is_null() {
-            inner.style = None;
-            return Ok(());
-        }
-        let style: Style = serde_json::from_value(val).map_err(|e| napi::Error::from_reason(format!("style: {e}")))?;
-        if style.is_empty() {
-            inner.style = None;
-            return Ok(());
-        }
-        inner.style = Some(style.validate().map_err(|e| napi::Error::from_reason(e.to_string()))?);
-        Ok(())
+        apply_style(&mut inner.style, val)
     }
 }
 
@@ -495,6 +485,7 @@ pub fn is_date_format(fmt: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::style::Font;
 
     #[test]
     fn test_cell_new() {
@@ -607,6 +598,64 @@ mod tests {
         assert!(!is_date_format("0.00"));
         assert!(!is_date_format("0.0%"));
         assert!(!is_date_format(""));
+    }
+
+    #[test]
+    fn test_set_style_some() {
+        let mut cell = Cell::new("A1".into(), 1, 1);
+        let style = Style {
+            font: Some(Font {
+                bold: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        cell.set_style(Some(style)).unwrap();
+        assert!(cell.style().is_some());
+        assert_eq!(cell.style().unwrap().font.unwrap().bold, Some(true));
+    }
+
+    #[test]
+    fn test_set_style_none() {
+        let mut cell = Cell::new("A1".into(), 1, 1);
+        // Pre-set a style via raw
+        cell.set_style_raw(Some(Style {
+            font: Some(Font {
+                bold: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }));
+        assert!(cell.style().is_some());
+        // Reset with None
+        cell.set_style(None).unwrap();
+        assert!(cell.style().is_none());
+    }
+
+    #[test]
+    fn test_set_style_empty_object() {
+        let mut cell = Cell::new("A1".into(), 1, 1);
+        // {} in JS all-None Style is_empty() normalizes to None
+        let empty = Style {
+            font: None,
+            fill: None,
+            border: None,
+            alignment: None,
+            num_fmt: None,
+        };
+        cell.set_style(Some(empty)).unwrap();
+        assert!(cell.style().is_none());
+    }
+
+    #[test]
+    fn test_set_style_rejects_invalid() {
+        let mut cell = Cell::new("A1".into(), 1, 1);
+        // Empty num_fmt string is invalid
+        let invalid = Style {
+            num_fmt: Some("".into()),
+            ..Default::default()
+        };
+        assert!(cell.set_style(Some(invalid)).is_err());
     }
 
     #[test]

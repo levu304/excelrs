@@ -7,7 +7,7 @@ use napi_derive::napi;
 
 use super::cell::Cell;
 use super::cell::CellValue;
-use crate::model::style::Style;
+use crate::model::style::{apply_style, Style};
 use crate::types;
 
 /// A row in a worksheet.
@@ -90,19 +90,9 @@ impl Row {
     }
 
     #[napi(setter)]
-    pub fn set_style(&mut self, val: serde_json::Value) -> napi::Result<()> {
-        if val.is_null() {
-            *self.style.lock().expect("Row style lock poisoned") = None;
-            return Ok(());
-        }
-        let style: Style = serde_json::from_value(val).map_err(|e| napi::Error::from_reason(format!("style: {e}")))?;
-        if style.is_empty() {
-            *self.style.lock().expect("Row style lock poisoned") = None;
-            return Ok(());
-        }
-        *self.style.lock().expect("Row style lock poisoned") =
-            Some(style.validate().map_err(|e| napi::Error::from_reason(e.to_string()))?);
-        Ok(())
+    pub fn set_style(&mut self, val: Option<Style>) -> napi::Result<()> {
+        let mut guard = self.style.lock().expect("Row style lock poisoned");
+        apply_style(&mut guard, val)
     }
 
     /// Get cell by 1-indexed column number. Creates an empty cell if none exists.
@@ -232,6 +222,7 @@ impl Row {
 mod tests {
     use super::*;
     use crate::model::cell::CellValue;
+    use crate::model::style::Font;
 
     #[test]
     fn test_row_new() {
@@ -267,6 +258,57 @@ mod tests {
         row.set_cell_value(1, CellValue::number(42.0));
         let cell = row.get_cell_by_col_num(1);
         assert_eq!(cell.value_raw().number, Some(42.0));
+    }
+
+    #[test]
+    fn test_row_set_style_some() {
+        let mut row = Row::new(1);
+        let style = Style {
+            font: Some(Font {
+                bold: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        row.set_style(Some(style)).unwrap();
+        assert!(row.style().is_some());
+        assert_eq!(row.style().unwrap().font.unwrap().bold, Some(true));
+    }
+
+    #[test]
+    fn test_row_set_style_none() {
+        let mut row = Row::new(1);
+        // Pre-set via raw
+        row.set_style_raw(Some(Style {
+            font: Some(Font {
+                bold: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }));
+        assert!(row.style().is_some());
+        // Reset with None
+        row.set_style(None).unwrap();
+        assert!(row.style().is_none());
+    }
+
+    #[test]
+    fn test_row_set_style_empty_object() {
+        let mut row = Row::new(1);
+        // {} in JS all-None Style is_empty() normalizes to None
+        row.set_style(Some(Style::default())).unwrap();
+        assert!(row.style().is_none());
+    }
+
+    #[test]
+    fn test_row_set_style_rejects_invalid() {
+        let mut row = Row::new(1);
+        // Empty num_fmt string is invalid
+        let invalid = Style {
+            num_fmt: Some("".into()),
+            ..Default::default()
+        };
+        assert!(row.set_style(Some(invalid)).is_err());
     }
 
     #[test]

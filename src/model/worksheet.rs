@@ -26,7 +26,7 @@ use super::sheet_protection::SheetProtection;
 use super::sheet_view::SheetView;
 use super::style::Dxf;
 use super::table::{AddTableOptions, Table, TableColumn, TableList, TableRow};
-use crate::model::style::Style;
+use crate::model::style::{apply_style, Style};
 use crate::types;
 
 /// Convert a raw JSON value (from `AddTableOptions.rows`) into a `CellValue`.
@@ -446,7 +446,7 @@ impl Worksheet {
     /// Set the style of a cell at (row, col).  Bypasses clone-on-read:
     /// the cell is mutated inside the locked row map.
     #[napi]
-    pub fn set_cell_style(&self, row: u32, col: u32, style: serde_json::Value) -> napi::Result<()> {
+    pub fn set_cell_style(&self, row: u32, col: u32, style: Option<Style>) -> napi::Result<()> {
         // Delegate to the canonical Cell::set_style (single source of truth)
         // instead of re-implementing parse/validate via set_style_raw.
         let mut result = Ok(());
@@ -502,13 +502,8 @@ impl Worksheet {
 
         // Validate styles (matching Cell.set_style behavior)
         for col in &mut parsed {
-            if let Some(style) = col.style.take() {
-                if style.is_empty() {
-                    col.style = None;
-                } else {
-                    col.style = Some(style.validate().map_err(|e| napi::Error::from_reason(e.to_string()))?);
-                }
-            }
+            let style = col.style.take();
+            apply_style(&mut col.style, style)?;
         }
 
         *columns = parsed;
@@ -589,7 +584,7 @@ impl Worksheet {
     /// Add or update a data validation. Upserts by sqref.
     #[napi]
     pub fn add_data_validation(&self, dv: DataValidation) -> napi::Result<()> {
-        dv.validate().map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        dv.validate()?;
 
         let mut validations = self
             .data_validations
@@ -1234,7 +1229,7 @@ impl Worksheet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::style::Font;
+    use crate::model::style::{Fill, Font};
 
     #[test]
     fn test_worksheet_new() {
@@ -1361,9 +1356,18 @@ mod tests {
 
         // Get cell, set style, clone worksheet
         let mut cell = ws.get_cell_by_address("A1".into());
-        cell.set_style(serde_json::json!({
-            "font": { "bold": true, "color": "FFFF0000" },
-            "fill": { "kind": "solid", "foreground": "FFFFFF00" }
+        cell.set_style(Some(Style {
+            font: Some(Font {
+                bold: Some(true),
+                color: Some("FFFF0000".into()),
+                ..Default::default()
+            }),
+            fill: Some(Fill {
+                kind: "solid".into(),
+                foreground: Some("FFFFFF00".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
         }))
         .unwrap();
 
@@ -1474,8 +1478,13 @@ mod tests {
         // If Row::Clone is fixed to deep-copy Arc contents, this passes.
         // If Row still derives Clone (shallow-copy), it fails.
         ws.get_cell_by_address("A1".into())
-            .set_style(serde_json::json!({
-                "font": { "bold": true, "color": "FF0000" }
+            .set_style(Some(Style {
+                font: Some(Font {
+                    bold: Some(true),
+                    color: Some("FF0000".into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
             }))
             .unwrap();
 

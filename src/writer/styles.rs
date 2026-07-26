@@ -712,7 +712,7 @@ fn write_str<W: Write>(w: &mut W, s: &str) -> Result<(), ExcelrsError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::style::{BorderStyle, Fill, GradientStop};
+    use crate::model::style::{Alignment, BorderStyle, Fill, GradientStop};
 
     // -- 4 dedup tests (per §9.2 budget) --
 
@@ -1060,8 +1060,13 @@ mod tests {
         ws.set_cell_style(
             1,
             1,
-            serde_json::json!({
-                "alignment": { "horizontal": "center", "vertical": "middle" }
+            Some(Style {
+                alignment: Some(Alignment {
+                    horizontal: Some("center".into()),
+                    vertical: Some("middle".into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
             }),
         )
         .unwrap();

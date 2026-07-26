@@ -48,7 +48,7 @@ export declare class Cell {
    * - `null | undefined | {}` → resets to Normal (None).
    * - Throws `ExcelrsError::InvalidStyle` on validation failure.
    */
-  set style(val: any)
+  set style(val: Style | undefined | null)
 }
 
 /**
@@ -73,7 +73,7 @@ export declare class Column {
   get hidden(): boolean
   set hidden(val: boolean)
   get style(): Style | null
-  set style(val: any)
+  set style(val: Style | undefined | null)
   /** Outline/grouping level for this column, `0`–`7` (Excel's cap). `0` means no grouping. */
   get outlineLevel(): number
   /** Set the outline/grouping level. Values are clamped to `0`–`7`. */
@@ -101,7 +101,7 @@ export declare class Row {
   /** Set the outline/grouping level. Values are clamped to `0`–`7`. */
   set outlineLevel(val: number)
   get style(): Style | null
-  set style(val: any)
+  set style(val: Style | undefined | null)
   /**
    * Get cell by 1-indexed column number. Creates an empty cell if none exists.
    * This is the Rust backing for `Row.getCell(col: number)`.
@@ -429,7 +429,7 @@ export declare class Worksheet {
    * Set the style of a cell at (row, col).  Bypasses clone-on-read:
    * the cell is mutated inside the locked row map.
    */
-  setCellStyle(row: number, col: number, style: any): void
+  setCellStyle(row: number, col: number, style?: Style | undefined | null): void
   /**
    * Replace the worksheet's column definitions.
    *

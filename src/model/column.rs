@@ -2,7 +2,7 @@
 
 use napi_derive::napi;
 
-use crate::model::style::Style;
+use crate::model::style::{apply_style, Style};
 
 /// A column definition in a worksheet.
 ///
@@ -97,18 +97,8 @@ impl Column {
     }
 
     #[napi(setter)]
-    pub fn set_style(&mut self, val: serde_json::Value) -> napi::Result<()> {
-        if val.is_null() {
-            self.style = None;
-            return Ok(());
-        }
-        let style: Style = serde_json::from_value(val).map_err(|e| napi::Error::from_reason(format!("style: {e}")))?;
-        if style.is_empty() {
-            self.style = None;
-            return Ok(());
-        }
-        self.style = Some(style.validate().map_err(|e| napi::Error::from_reason(e.to_string()))?);
-        Ok(())
+    pub fn set_style(&mut self, val: Option<Style>) -> napi::Result<()> {
+        apply_style(&mut self.style, val)
     }
 
     // -- outline level (grouping) --
@@ -130,5 +120,92 @@ impl Column {
     #[napi(getter)]
     pub fn col_num(&self) -> u32 {
         self.col_num
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::style::Font;
+
+    #[test]
+    fn test_column_set_style_some() {
+        let mut col = Column {
+            col_num: 1,
+            header: String::new(),
+            key: String::new(),
+            width: 10.0,
+            hidden: false,
+            style: None,
+            outline_level: 0,
+        };
+        let style = Style {
+            font: Some(Font {
+                bold: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        col.set_style(Some(style)).unwrap();
+        assert!(col.style().is_some());
+        assert_eq!(col.style().unwrap().font.unwrap().bold, Some(true));
+    }
+
+    #[test]
+    fn test_column_set_style_none() {
+        let mut col = Column {
+            col_num: 1,
+            header: String::new(),
+            key: String::new(),
+            width: 10.0,
+            hidden: false,
+            style: Some(Style {
+                font: Some(Font {
+                    bold: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            outline_level: 0,
+        };
+        assert!(col.style().is_some());
+        // Reset with None
+        col.set_style(None).unwrap();
+        assert!(col.style().is_none());
+    }
+
+    #[test]
+    fn test_column_set_style_empty_object() {
+        let mut col = Column {
+            col_num: 1,
+            header: String::new(),
+            key: String::new(),
+            width: 10.0,
+            hidden: false,
+            style: None,
+            outline_level: 0,
+        };
+        // {} in JS all-None Style is_empty() normalizes to None
+        col.set_style(Some(Style::default())).unwrap();
+        assert!(col.style().is_none());
+    }
+
+    #[test]
+    fn test_column_set_style_rejects_invalid() {
+        let mut col = Column {
+            col_num: 1,
+            header: String::new(),
+            key: String::new(),
+            width: 10.0,
+            hidden: false,
+            style: None,
+            outline_level: 0,
+        };
+        // Empty num_fmt string is invalid
+        let invalid = Style {
+            num_fmt: Some("".into()),
+            ..Default::default()
+        };
+        assert!(col.set_style(Some(invalid)).is_err());
     }
 }

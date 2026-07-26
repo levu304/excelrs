@@ -492,6 +492,16 @@ impl Style {
     }
 }
 
+/// Apply an `Option<Style>` to a style slot, normalizing `None`/empty → `None`.
+pub(crate) fn apply_style(dest: &mut Option<Style>, val: Option<Style>) -> napi::Result<()> {
+    match val {
+        None => *dest = None,
+        Some(ref s) if s.is_empty() => *dest = None,
+        Some(s) => *dest = Some(s.validate()?),
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
