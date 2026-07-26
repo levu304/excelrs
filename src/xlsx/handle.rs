@@ -97,6 +97,7 @@ impl WorkbookXlsx {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::page_setup::Orientation;
 
     #[test]
     fn test_workbook_xlsx_new_shares_arc() {
@@ -244,7 +245,7 @@ mod tests {
         assert_eq!(hf.odd_footer.as_deref(), Some("&P of &N"));
 
         let ps = rws.page_setup().expect("pageSetup should round-trip");
-        assert_eq!(ps.orientation.as_deref(), Some("landscape"));
+        assert_eq!(ps.orientation, Some(Orientation::Landscape));
         assert_eq!(ps.paper_size, Some(9));
         let m = ps.margins.expect("margins should round-trip");
         assert_eq!(m.top, Some(1.0));

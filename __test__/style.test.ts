@@ -1,6 +1,14 @@
 import { test, expect } from 'vitest'
 import ExcelJS from 'exceljs'
-import { Workbook, Column } from '../index'
+import {
+  Workbook,
+  Column,
+  FillKind,
+  GradientType,
+  BorderStyleStyle,
+  AlignmentHorizontal,
+  AlignmentVertical,
+} from '../index'
 
 // ---------------------------------------------------------------------------
 // Group A — Cell-level style setter (4 tests)
@@ -62,8 +70,8 @@ test('A4: Fill.kind = "gradient" is accepted and round-trips', async () => {
   expect(() => {
     ws.setCellStyle(1, 1, {
       fill: {
-        kind: 'gradient',
-        gradientType: 'linear',
+kind: FillKind.Gradient,
+        gradientType: GradientType.Linear,
         gradientDegree: 90,
         gradientStops: [
           { color: 'FFFF0000', position: 0 },
@@ -111,12 +119,12 @@ test('B6: full font + fill + border + alignment + num_fmt round-trips', async ()
   ws.addRow([100])
   ws.setCellStyle(1, 1, {
     font: { bold: true, size: 14, color: 'FF0000FF' },
-    fill: { kind: 'solid', foreground: 'FFFFFF00' },
+    fill: { kind: FillKind.Solid, foreground: 'FFFFFF00' },
     border: {
-      top: { style: 'thin', color: 'FF000000' },
-      bottom: { style: 'thin', color: 'FF000000' },
+      top: { style: BorderStyleStyle.Thin, color: 'FF000000' },
+      bottom: { style: BorderStyleStyle.Thin, color: 'FF000000' },
     },
-    alignment: { horizontal: 'center', vertical: 'middle' },
+    alignment: { horizontal: AlignmentHorizontal.Center, vertical: AlignmentVertical.Middle },
     numFmt: '0.00%',
   })
 
@@ -332,7 +340,7 @@ test('F18: vertical middle round-trips through exceljs', async () => {
   const wb = new Workbook()
   const ws = wb.addWorksheet('Vert')
   ws.addRow(['hello'])
-  ws.setCellStyle(1, 1, { alignment: { vertical: 'middle', horizontal: 'center' } })
+  ws.setCellStyle(1, 1, { alignment: { vertical: AlignmentVertical.Middle, horizontal: AlignmentHorizontal.Center } })
 
   const wbjs = await writeThenReadWithExceljs(wb)
   const wsjs = wbjs.getWorksheet('Vert')!

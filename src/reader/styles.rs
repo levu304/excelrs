@@ -36,7 +36,10 @@ use quick_xml::Reader as XmlReader;
 
 use crate::error::ExcelrsError;
 use crate::model::color::{Color, ThemeColorScheme};
-use crate::model::style::{Alignment, Border, BorderStyle, Dxf, Fill, Font, GradientStop, Style};
+use crate::model::style::{
+    Alignment, AlignmentHorizontal, AlignmentVertical, Border, BorderStyle, BorderStyleStyle, Dxf, Fill, FillKind,
+    Font, GradientStop, GradientType, Style,
+};
 use crate::types;
 
 /// Per-sheet cell-to-style-index map: (1-indexed row, col) → cellXfs index.
@@ -452,7 +455,7 @@ pub fn parse_style_table(data: &[u8], scheme: &ThemeColorScheme) -> Result<Style
                         let attrs: Vec<_> = e.attributes().filter_map(|a| a.ok()).collect();
                         if let Some(pt) = str_attr(&attrs, b"patternType") {
                             if let Some(ref mut f) = fill {
-                                f.kind = pt.to_owned();
+                                f.kind = FillKind::from(pt);
                             }
                         }
                     }
@@ -460,8 +463,8 @@ pub fn parse_style_table(data: &[u8], scheme: &ThemeColorScheme) -> Result<Style
                         in_gradient_fill = true;
                         let attrs: Vec<_> = e.attributes().filter_map(|a| a.ok()).collect();
                         if let Some(ref mut f) = fill {
-                            f.kind = "gradient".to_owned();
-                            f.gradient_type = str_attr(&attrs, b"type").map(|s| s.to_owned());
+                            f.kind = FillKind::Gradient;
+                            f.gradient_type = str_attr(&attrs, b"type").map(GradientType::from);
                             f.gradient_degree = str_attr(&attrs, b"degree").and_then(|v| v.parse::<f64>().ok());
                             f.gradient_left = str_attr(&attrs, b"left").and_then(|v| v.parse::<f64>().ok());
                             f.gradient_right = str_attr(&attrs, b"right").and_then(|v| v.parse::<f64>().ok());
@@ -521,7 +524,7 @@ pub fn parse_style_table(data: &[u8], scheme: &ThemeColorScheme) -> Result<Style
                         let attrs: Vec<_> = e.attributes().filter_map(|a| a.ok()).collect();
                         let style_val = str_attr(&attrs, b"style");
                         let bs = style_val.map(|s| BorderStyle {
-                            style: s.to_owned(),
+                            style: BorderStyleStyle::from(s),
                             color: None,
                             ..Default::default()
                         });
@@ -567,8 +570,8 @@ pub fn parse_style_table(data: &[u8], scheme: &ThemeColorScheme) -> Result<Style
                         let wrap = bool_attr(&attrs, b"wrapText");
                         let indent = u32_attr(&attrs, b"indent");
                         let alignment = Alignment {
-                            horizontal: hor,
-                            vertical: vert,
+                            horizontal: hor.map(|h| AlignmentHorizontal::from(h.as_str())),
+                            vertical: vert.map(|v| AlignmentVertical::from(v.as_str())),
                             wrap_text: wrap,
                             indent,
                         };
@@ -876,7 +879,7 @@ pub fn parse_dxfs(data: &[u8], scheme: &ThemeColorScheme) -> Vec<Dxf> {
                     // -- fill --
                     b"fill" if current.is_some() => {
                         fill = Some(Fill {
-                            kind: "none".into(),
+                            kind: FillKind::None,
                             ..Default::default()
                         });
                         in_pattern_fill = false;
@@ -886,7 +889,7 @@ pub fn parse_dxfs(data: &[u8], scheme: &ThemeColorScheme) -> Vec<Dxf> {
                         let attrs = e.attributes().filter_map(|a| a.ok()).collect::<Vec<_>>();
                         if let Some(pt) = str_attr(&attrs, b"patternType") {
                             if let Some(ref mut f) = fill {
-                                f.kind = pt.to_owned();
+                                f.kind = FillKind::from(pt);
                             }
                         }
                     }
@@ -912,7 +915,7 @@ pub fn parse_dxfs(data: &[u8], scheme: &ThemeColorScheme) -> Vec<Dxf> {
                     }
                     b"gradientFill" if fill.is_some() => {
                         if let Some(ref mut f) = fill {
-                            f.kind = "gradient".to_owned();
+                            f.kind = FillKind::Gradient;
                         }
                     }
                     // -- border --
@@ -925,7 +928,7 @@ pub fn parse_dxfs(data: &[u8], scheme: &ThemeColorScheme) -> Vec<Dxf> {
                         let style_val = str_attr(&attrs, b"style");
                         current_side = Some(side_name);
                         current_side_style = Some(BorderStyle {
-                            style: style_val.unwrap_or("").to_owned(),
+                            style: BorderStyleStyle::from(style_val.unwrap_or("")),
                             ..Default::default()
                         });
                     }
@@ -1047,8 +1050,8 @@ mod tests {
         </styleSheet>"#;
         let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
         let fill = &table.fills[2];
-        assert_eq!(fill.kind, "gradient");
-        assert_eq!(fill.gradient_type.as_deref(), Some("linear"));
+        assert_eq!(fill.kind, FillKind::Gradient);
+        assert_eq!(fill.gradient_type, Some(GradientType::Linear));
         assert_eq!(fill.gradient_degree, Some(45.0));
         assert!(fill.gradient_left.is_none());
         assert!(fill.gradient_right.is_none());
@@ -1082,8 +1085,8 @@ mod tests {
         </styleSheet>"#;
         let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
         let fill = &table.fills[2];
-        assert_eq!(fill.kind, "gradient");
-        assert_eq!(fill.gradient_type.as_deref(), Some("path"));
+        assert_eq!(fill.kind, FillKind::Gradient);
+        assert_eq!(fill.gradient_type, Some(GradientType::Path));
         assert_eq!(fill.gradient_left, Some(0.0));
         assert_eq!(fill.gradient_right, Some(1.0));
         assert_eq!(fill.gradient_top, Some(0.5));
@@ -1137,7 +1140,7 @@ mod tests {
         </styleSheet>"#;
         let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
         let fill = &table.fills[2];
-        assert_eq!(fill.kind, "gradient");
+        assert_eq!(fill.kind, FillKind::Gradient);
         let stops = fill.gradient_stops.as_ref().unwrap();
         assert_eq!(stops.len(), 2);
         // Child-element theme color resolved (was "" before fix)
@@ -1192,8 +1195,8 @@ mod tests {
         </styleSheet>"#;
         let table = parse_style_table(xml, &ThemeColorScheme::default()).unwrap();
         assert_eq!(table.fills.len(), 2);
-        assert_eq!(table.fills[0].kind, "none");
-        assert_eq!(table.fills[1].kind, "solid");
+        assert_eq!(table.fills[0].kind, FillKind::None);
+        assert_eq!(table.fills[1].kind, FillKind::Solid);
         assert_eq!(table.fills[1].foreground.as_deref(), Some("FFFFFF00"));
     }
 
@@ -1217,7 +1220,7 @@ mod tests {
         assert!(table.borders[0].left.is_none());
 
         assert!(table.borders[1].left.is_some());
-        assert_eq!(table.borders[1].left.as_ref().unwrap().style, "thin");
+        assert_eq!(table.borders[1].left.as_ref().unwrap().style, BorderStyleStyle::Thin);
         assert_eq!(
             table.borders[1].left.as_ref().unwrap().color.as_deref(),
             Some("FF000000")
@@ -1250,7 +1253,10 @@ mod tests {
         assert!(table.borders[0].diagonal_down.is_none());
         // Second border: diagonal side + diagonalUp/down
         assert!(table.borders[1].diagonal.is_some());
-        assert_eq!(table.borders[1].diagonal.as_ref().unwrap().style, "thin");
+        assert_eq!(
+            table.borders[1].diagonal.as_ref().unwrap().style,
+            BorderStyleStyle::Thin
+        );
         assert_eq!(
             table.borders[1].diagonal.as_ref().unwrap().color.as_deref(),
             Some("FF000000")
@@ -1294,8 +1300,8 @@ mod tests {
         assert!(table.cell_xfs[0].alignment.is_none());
         assert!(table.cell_xfs[1].alignment.is_none());
         let a = table.cell_xfs[2].alignment.as_ref().unwrap();
-        assert_eq!(a.horizontal.as_deref(), Some("center"));
-        assert_eq!(a.vertical.as_deref(), Some("middle")); // OOXML "center" → "middle"
+        assert_eq!(a.horizontal, Some(AlignmentHorizontal::Center));
+        assert_eq!(a.vertical, Some(AlignmentVertical::Middle)); // OOXML "center" → "middle"
         assert_eq!(a.wrap_text, Some(true));
         assert_eq!(a.indent, Some(2));
     }
@@ -1334,7 +1340,7 @@ mod tests {
         assert_eq!(table.borders.len(), 2);
         assert!(table.borders[0].left.is_none());
         let left = table.borders[1].left.as_ref().unwrap();
-        assert_eq!(left.style, "thin");
+        assert_eq!(left.style, BorderStyleStyle::Thin);
         assert_eq!(left.color.as_deref(), Some("FFFFFFFF"));
     }
 
@@ -1525,7 +1531,7 @@ mod tests {
                 ParsedCellXf::default(),
                 ParsedCellXf {
                     alignment: Some(Alignment {
-                        horizontal: Some("center".into()),
+                        horizontal: Some(AlignmentHorizontal::Center),
                         vertical: None,
                         wrap_text: None,
                         indent: None,
@@ -1536,7 +1542,10 @@ mod tests {
             ..StyleTableRead::empty()
         };
         let style = table.resolve_style(1).unwrap();
-        assert_eq!(style.alignment.as_ref().unwrap().horizontal.as_deref(), Some("center"));
+        assert_eq!(
+            style.alignment.as_ref().unwrap().horizontal,
+            Some(AlignmentHorizontal::Center)
+        );
     }
 
     // -- parse_sheet_cell_styles tests --
