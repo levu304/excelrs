@@ -1918,7 +1918,7 @@ mod tests {
     use super::*;
     use crate::model::cell::{Cell, CellValue, RichTextRun};
     use crate::model::sheet_view::SheetViewState;
-    use crate::model::style::{Alignment, AlignmentHorizontal, AlignmentVertical, Fill, FillKind, Font};
+    use crate::model::style::{Alignment, AlignmentHorizontal, AlignmentVertical, Fill, Font};
     use crate::model::workbook_inner::WorkbookInner;
     use crate::reader::xlsx::workbook_inner_from_bytes;
     use std::collections::{BTreeMap, HashMap};

@@ -2414,9 +2414,8 @@ fn parse_inline_str_rich_text_with(xml: &str, max_events: usize) -> Vec<(u32, u3
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::page_setup::Orientation;
     use crate::model::sheet_view::SheetViewState;
-    use crate::model::style::{AlignmentHorizontal, AlignmentVertical, BorderStyleStyle, FillKind, GradientType};
+    use crate::model::style::{BorderStyleStyle, FillKind, GradientType};
 
     // -- map_data unit tests (no file I/O) --
 
