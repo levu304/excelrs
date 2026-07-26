@@ -65,6 +65,30 @@ jobs:
       - name: Streaming smoke test
         run: node scripts/streaming-smoke.cjs
 
+      - name: Validate napi enum bindings
+        run: |
+          node -e "
+            const e = require('./index.js');
+            const { FillKind, BorderStyleStyle, AlignmentHorizontal,
+              AlignmentVertical } = e;
+            function check(v, exp) {
+              if (v !== exp) throw new Error(
+                'got ' + v + ' expected ' + exp);
+            }
+            check(FillKind.Solid, 'Solid');
+            check(FillKind.None, 'None');
+            check(BorderStyleStyle.Double, 'Double');
+            check(AlignmentHorizontal.Center, 'Center');
+            check(AlignmentVertical.Middle, 'Middle');
+            // Ensure object literal with PascalCase FillKind works
+            const s = {
+              fill: { kind: FillKind.Solid, foreground: 'FFFF0000' } };
+            if (s.fill.kind !== 'Solid') {
+              throw new Error('fill.kind expected Solid');
+            }
+            console.log('✓ napi enum bindings valid');
+          "
+
       - name: Upload native artifact
         uses: >-
           actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

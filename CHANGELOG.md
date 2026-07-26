@@ -13,6 +13,12 @@
 - Fill emission: fill.pattern plumbed through reader and writer for both regular fills and DXF fills
 - AlignmentVertical::Middle Display changed from "middle" to "center" (OOXML correct)
 
+## [2.3.1] - 2026-07-26
+
+### Fixed
+- Release CI: napi enum smoke test uses PascalCase FillKind values
+- Release CI: napi enum validation step added to build jobs (catches binding issues before publish)
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
