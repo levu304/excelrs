@@ -456,6 +456,7 @@ pub fn parse_style_table(data: &[u8], scheme: &ThemeColorScheme) -> Result<Style
                         if let Some(pt) = str_attr(&attrs, b"patternType") {
                             if let Some(ref mut f) = fill {
                                 f.kind = FillKind::from(pt);
+                                f.pattern = Some(pt.to_owned());
                             }
                         }
                     }
@@ -890,6 +891,7 @@ pub fn parse_dxfs(data: &[u8], scheme: &ThemeColorScheme) -> Vec<Dxf> {
                         if let Some(pt) = str_attr(&attrs, b"patternType") {
                             if let Some(ref mut f) = fill {
                                 f.kind = FillKind::from(pt);
+                                f.pattern = Some(pt.to_owned());
                             }
                         }
                     }

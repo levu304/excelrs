@@ -28,7 +28,6 @@ pub enum FillKind {
     #[default]
     None,
     Solid,
-    Pattern,
     Gradient,
 }
 
@@ -37,7 +36,6 @@ impl std::fmt::Display for FillKind {
         match self {
             FillKind::None => write!(f, "none"),
             FillKind::Solid => write!(f, "solid"),
-            FillKind::Pattern => write!(f, "pattern"),
             FillKind::Gradient => write!(f, "gradient"),
         }
     }
@@ -48,7 +46,6 @@ impl From<&str> for FillKind {
         match s.to_lowercase().as_str() {
             "none" => FillKind::None,
             "solid" => FillKind::Solid,
-            "pattern" => FillKind::Pattern,
             "gradient" => FillKind::Gradient,
             _ => FillKind::None,
         }
@@ -95,6 +92,13 @@ pub enum BorderStyleStyle {
     Dashed,
     Dotted,
     Double,
+    Hair,
+    DashDot,
+    DashDotDot,
+    MediumDashDot,
+    SlantDashDot,
+    MediumDashed,
+    MediumDashDotDot,
 }
 
 impl std::fmt::Display for BorderStyleStyle {
@@ -106,6 +110,13 @@ impl std::fmt::Display for BorderStyleStyle {
             BorderStyleStyle::Dashed => write!(f, "dashed"),
             BorderStyleStyle::Dotted => write!(f, "dotted"),
             BorderStyleStyle::Double => write!(f, "double"),
+            BorderStyleStyle::Hair => write!(f, "hair"),
+            BorderStyleStyle::DashDot => write!(f, "dashDot"),
+            BorderStyleStyle::DashDotDot => write!(f, "dashDotDot"),
+            BorderStyleStyle::MediumDashDot => write!(f, "mediumDashDot"),
+            BorderStyleStyle::SlantDashDot => write!(f, "slantDashDot"),
+            BorderStyleStyle::MediumDashed => write!(f, "mediumDashed"),
+            BorderStyleStyle::MediumDashDotDot => write!(f, "mediumDashDotDot"),
         }
     }
 }
@@ -118,6 +129,14 @@ impl From<&str> for BorderStyleStyle {
             "dashed" => BorderStyleStyle::Dashed,
             "dotted" => BorderStyleStyle::Dotted,
             "double" => BorderStyleStyle::Double,
+            "thin" => BorderStyleStyle::Thin,
+            "hair" => BorderStyleStyle::Hair,
+            "dashdot" => BorderStyleStyle::DashDot,
+            "dashdotdot" => BorderStyleStyle::DashDotDot,
+            "mediumdashdot" => BorderStyleStyle::MediumDashDot,
+            "slantdashdot" => BorderStyleStyle::SlantDashDot,
+            "mediumdashed" => BorderStyleStyle::MediumDashed,
+            "mediumdashdotdot" => BorderStyleStyle::MediumDashDotDot,
             _ => BorderStyleStyle::Thin,
         }
     }
@@ -175,7 +194,7 @@ impl std::fmt::Display for AlignmentVertical {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             AlignmentVertical::Top => write!(f, "top"),
-            AlignmentVertical::Middle => write!(f, "middle"),
+            AlignmentVertical::Middle => write!(f, "center"),
             AlignmentVertical::Bottom => write!(f, "bottom"),
         }
     }
@@ -506,10 +525,10 @@ fn validate_float_range(val: Option<f64>, field: &str, min: f64, max: f64) -> Re
     Ok(())
 }
 
-/// Validate Fill.kind. Must be one of: "none", "solid", "pattern", "gradient".
+/// Validate Fill.kind. Must be one of: "none", "solid", "gradient".
 fn validate_fill_kind(kind: &FillKind) -> Result<(), ExcelrsError> {
     match kind {
-        FillKind::None | FillKind::Solid | FillKind::Pattern | FillKind::Gradient => Ok(()),
+        FillKind::None | FillKind::Solid | FillKind::Gradient => Ok(()),
     }
 }
 
@@ -522,7 +541,14 @@ fn validate_border_style(style: &BorderStyleStyle) -> Result<(), ExcelrsError> {
         | BorderStyleStyle::Thick
         | BorderStyleStyle::Dashed
         | BorderStyleStyle::Dotted
-        | BorderStyleStyle::Double => Ok(()),
+        | BorderStyleStyle::Double
+        | BorderStyleStyle::Hair
+        | BorderStyleStyle::DashDot
+        | BorderStyleStyle::DashDotDot
+        | BorderStyleStyle::MediumDashDot
+        | BorderStyleStyle::SlantDashDot
+        | BorderStyleStyle::MediumDashed
+        | BorderStyleStyle::MediumDashDotDot => Ok(()),
     }
 }
 
@@ -990,7 +1016,7 @@ mod tests {
     /// Fill.kind: non-gradient variants pass validation with defaults.
     #[test]
     fn test_validate_fill_kind_non_gradient() {
-        for kind in [FillKind::None, FillKind::Solid, FillKind::Pattern] {
+        for kind in [FillKind::None, FillKind::Solid] {
             let fill = Fill {
                 kind,
                 ..Default::default()
