@@ -13,7 +13,7 @@ use std::io::Write;
 use quick_xml::escape::escape;
 
 use crate::error::ExcelrsError;
-use crate::model::style::{Alignment, AlignmentVertical, Border, Dxf, Fill, FillKind, Font, GradientType, Style};
+use crate::model::style::{Alignment, Border, Dxf, Fill, FillKind, Font, GradientType, Style};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -338,7 +338,8 @@ fn emit_dxf<W: Write>(w: &mut W, dxf: &Dxf) -> Result<(), ExcelrsError> {
             }
             write_str(w, "</gradientFill>")?;
         } else if fill.foreground.is_some() || fill.background.is_some() {
-            write_str(w, &format!(r#"<patternFill patternType=\"{}\">"#, fill.kind))?;
+            let pt = fill.pattern.as_deref().unwrap_or("solid");
+            write_str(w, &format!(r#"<patternFill patternType=\"{}\">"#, pt))?;
             write_str(
                 w,
                 &emit_color_attrs(
@@ -522,7 +523,8 @@ fn emit_fills<W: Write>(w: &mut W, fills: &[Fill]) -> Result<(), ExcelrsError> {
             let has_fg = f.foreground.is_some();
             let has_bg = f.background.is_some();
             if has_fg || has_bg {
-                write_str(w, &format!(r#"<patternFill patternType="{}">"#, f.kind))?;
+                let pt = f.pattern.as_deref().unwrap_or("solid");
+                write_str(w, &format!(r#"<patternFill patternType="{}">"#, pt))?;
                 write_str(
                     w,
                     &emit_color_attrs("fgColor", &f.foreground, &f.foreground_theme, &f.foreground_tint),
@@ -533,7 +535,8 @@ fn emit_fills<W: Write>(w: &mut W, fills: &[Fill]) -> Result<(), ExcelrsError> {
                 )?;
                 write_str(w, "</patternFill>")?;
             } else {
-                write_str(w, &format!(r#"<patternFill patternType="{}"/>"#, f.kind))?;
+                let pt = f.pattern.as_deref().unwrap_or("solid");
+                write_str(w, &format!(r#"<patternFill patternType="{}"/>"#, pt))?;
             }
         }
         write_str(w, "</fill>")?;
@@ -669,13 +672,7 @@ fn emit_alignment_child<W: Write>(w: &mut W, xf: &CellXf, alignments: &[Alignmen
         parts.push(format!(r##"horizontal="{}""##, h));
     }
     if let Some(ref v) = alignment.vertical {
-        // OOXML uses "center"; excelrs API uses "middle"
-        let ooxml = if *v == AlignmentVertical::Middle {
-            "center"
-        } else {
-            &v.to_string()
-        };
-        parts.push(format!(r##"vertical="{}""##, escape(ooxml)));
+        parts.push(format!(r##"vertical="{}""##, v));
     }
     if let Some(wt) = alignment.wrap_text {
         if wt {

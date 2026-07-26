@@ -1,28 +1,41 @@
-## 1. Add missing edge-case tests (Red phase)
+## 1. Pattern fill — fix OOXML emission
 
-- [x] 1.1 Add `test_row_set_style_empty_object` to Row test module: `Style::default()` → cleared via `is_empty()` guard
-- [x] 1.2 Add `test_column_set_style_empty_object` to Column test module: `Style::default()` → cleared via `is_empty()` guard
-- [x] 1.3 Add `test_cell_set_style_rejects_invalid` to Cell test module: invalid style (e.g., empty `num_fmt` string) → `is_err()`
-- [x] 1.4 Add `test_row_set_style_rejects_invalid` to Row test module: same pattern
-- [x] 1.5 Add `test_column_set_style_rejects_invalid` to Column test module: same pattern
-- [x] 1.6 Run `cargo test --lib` — all tests pass (these tests target existing `Option<Style>` API, so they pass from the start)
+- [x] 1.1 Write failing test: parse `patternType="gray125"` → `fill.pattern == Some("gray125")`
+- [x] 1.2 Write failing test: parse `patternType="lightHorizontal"` → `fill.pattern == Some("lightHorizontal")`
+- [x] 1.3 Write failing test: emit with `fill.pattern = Some("gray125")` → output has `patternType="gray125"`
+- [x] 1.4 Write failing test: emit with `fill.pattern = None` + has foreground → output has `patternType="solid"`
+- [x] 1.5 Write failing test: DXF emit with `fill.pattern` → preserves pattern name
+- [x] 1.6 Update `FillKind` — remove `Pattern` variant, update `Display`, `From<&str>`, `Default`, serde
+- [x] 1.7 Update reader (`styles.rs`): store raw `patternType` into `fill.pattern`
+- [x] 1.8 Update writer (`styles.rs`): use `f.pattern.as_deref().unwrap_or("solid")` for `patternType` in `emit_fills`
+- [x] 1.9 Update writer (`styles.rs`): same fix for DXF `emit_dxf` patternFill path
+- [x] 1.10 Update writer validation tests for removed `Pattern` variant
+- [x] 1.11 Verify `cargo test` passes all tests (new + existing)
 
-## 2. Extract `apply_style` helper
+## 2. BorderStyleStyle — add missing OOXML variants
 
-- [x] 2.1 Add `pub(crate) fn apply_style(dest: &mut Option<Style>, val: Option<Style>) -> napi::Result<()>` to `src/model/style.rs` with the combined match pattern (`None | Some(ref s) if s.is_empty()`) and bare `s.validate()?` (no `map_err`)
-- [x] 2.2 Update `Cell::set_style` body to `apply_style(&mut inner.style, val)`
-- [x] 2.3 Update `Row::set_style` body to `apply_style(&mut *guard, val)`
-- [x] 2.4 Update `Column::set_style` body to `apply_style(&mut self.style, val)`
-- [x] 2.5 Update `Worksheet::set_columns` style-validation loop (lines 503-511) to use `apply_style(&mut col.style, style)?`
-- [x] 2.6 Run `cargo test --lib` — 375+ tests pass, confirming refactor preserved behavior
+- [x] 2.1 Write failing test: parse `style="hair"` → `BorderStyleStyle::Hair`
+- [x] 2.2 Write failing test: parse `style="dashDot"` → `BorderStyleStyle::DashDot`
+- [x] 2.3 Write failing test: parse `style="dashDotDot"` → `BorderStyleStyle::DashDotDot`
+- [x] 2.4 Write failing test: parse `style="mediumDashDot"` → `BorderStyleStyle::MediumDashDot`
+- [x] 2.5 Write failing test: parse `style="slantDashDot"` → `BorderStyleStyle::SlantDashDot`
+- [x] 2.6 Write failing test: parse `style="mediumDashed"` → `BorderStyleStyle::MediumDashed`
+- [x] 2.7 Write failing test: parse `style="mediumDashDotDot"` → `BorderStyleStyle::MediumDashDotDot`
+- [x] 2.8 Write failing test: case-insensitive parse `"HAIR"` → `BorderStyleStyle::Hair`
+- [x] 2.9 Add 7 new variants to `BorderStyleStyle` enum, `Display`, `From<&str>`, serde
+- [x] 2.10 Verify `cargo test` passes all tests
 
-## 3. Fix `add_data_validation` `map_err`
+## 3. AlignmentVertical::Middle — fix Display to "center"
 
-- [x] 3.1 Replace `dv.validate().map_err(|e| napi::Error::from_reason(e.to_string()))?` with `dv.validate()?` in `src/model/worksheet.rs:592`
-- [x] 3.2 Run `cargo test --lib` — all pass
+- [x] 3.1 Write failing test: `AlignmentVertical::Middle.to_string()` → `"center"`
+- [x] 3.2 Write failing test: emit alignment with `vertical: Middle` → xml has `vertical="center"`
+- [x] 3.3 Update `AlignmentVertical::Middle` Display from `"middle"` to `"center"`
+- [x] 3.4 Remove writer special-case override in `emit_alignment_child` (`writer/styles.rs:670-677`)
+- [x] 3.5 Verify `cargo test` passes all tests
 
-## 4. Verify and finalize
+## 4. Final verification
 
-- [x] 4.1 Run `cargo test --lib` — all tests pass
-- [x] 4.2 Run `cargo clippy -- -D warnings` — no new warnings
-- [x] 4.3 Confirm no `map_err(|e| napi::Error::from_reason(e.to_string()))` remains in `src/model/` for `ExcelrsError` types (5 occurrences should be eliminated)
+- [x] 4.1 `cargo test` — all Rust tests pass (new + existing)
+- [x] 4.2 `cargo clippy -- -D warnings` — no warnings
+- [x] 4.3 `pnpm test` — all JS integration tests pass
+- [x] 4.4 `npx tsc --noEmit` — TypeScript clean
