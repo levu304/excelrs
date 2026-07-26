@@ -1,0 +1,60 @@
+## 1. Rust — Define simple `string_enum` types
+
+- [x] 1.1 Add `FillKind` enum (`None`, `Solid`, `Pattern`, `Gradient`) in `src/model/style.rs` with `#[napi(string_enum)]`
+- [x] 1.2 Add `GradientType` enum (`Linear`, `Path`) in `src/model/style.rs`
+- [x] 1.3 Add `BorderStyleStyle` enum (`Thin`, `Medium`, `Thick`, `Dashed`, `Dotted`, `Double`) in `src/model/style.rs`
+- [x] 1.4 Add `AlignmentHorizontal` enum (`Left`, `Center`, `Right`, `Fill`, `Justify`) in `src/model/style.rs`
+- [x] 1.5 Add `AlignmentVertical` enum (`Top`, `Middle`, `Bottom`) in `src/model/style.rs`
+- [x] 1.6 Add `AnchorType` enum (`OneCell`, `TwoCell`) in `src/model/image.rs`
+- [x] 1.7 Add `SheetViewState` enum (`Frozen`, `Split`) in `src/model/sheet_view.rs` (handle `""` via TS overlay)
+- [x] 1.8 Add `ActivePane` enum (`BottomLeft`, `BottomRight`, `TopLeft`, `TopRight`) in `src/model/sheet_view.rs`
+- [x] 1.9 Add `Orientation` enum (`Portrait`, `Landscape`) in `src/model/page_setup.rs`
+- [x] 1.10 Add `CellComments` enum (`None`, `AsDisplayed`, `AtEnd`) in `src/model/page_setup.rs`
+
+## 2. Rust — Wire enums into existing structs
+
+- [x] 2.1 Replace `Fill.kind: String` → `FillKind` in `Fill` struct; update `Default` impl (`Kind::None`); update `validate_fill_kind()` (replace string check with exhaustive match)
+- [x] 2.2 Replace `Fill.gradient_type: Option<String>` → `Option<GradientType>` in `Fill` struct
+- [x] 2.3 Replace `BorderStyle.style: String` → `BorderStyleStyle` in `BorderStyle` struct; update `Default` impl; update `validate_border_style()` (exhaustive match)
+- [x] 2.4 Replace `Alignment.horizontal: Option<String>` → `Option<AlignmentHorizontal>` in `Alignment` struct
+- [x] 2.5 Replace `Alignment.vertical: Option<String>` → `Option<AlignmentVertical>` in `Alignment` struct
+- [x] 2.6 Replace `ImageAnchor.anchor_type: String` → `AnchorType` in `ImageAnchor` struct
+- [x] 2.7 Replace `SheetView.state: Option<String>` → `Option<SheetViewState>` in `SheetView` struct
+- [x] 2.8 Replace `SheetView.active_pane: Option<String>` → `Option<ActivePane>` in `SheetView` struct
+- [x] 2.9 Replace `PageSetup.orientation: Option<String>` → `Option<Orientation>` in `PageSetup` struct
+- [x] 2.10 Replace `PageSetup.cell_comments: Option<String>` → `Option<CellComments>` in `PageSetup` struct
+
+## 3. Rust — Update all string-comparison code to use enums
+
+- [x] 3.1 Update `style.rs`: `validate()`, `is_empty()`, `apply_style()`, `Fill::default()` — use enum variants not string literals
+- [x] 3.2 Update `reader/xlsx.rs`: `Fill.kind` assignments use `FillKind` variants; `Alignment.*` assignments use enum variants; `BorderStyle.style` use `BorderStyleStyle` variants; `SheetView.*` use enum variants; `PageSetup.*` use enum variants; `ImageAnchor.*` use enum variants
+- [x] 3.3 Update `writer/xlsx.rs`: pattern-match on enum variants for XML emission instead of `.as_str()` on strings
+- [x] 3.4 Update `error.rs` / any validation tests that construct these types with string literals
+- [x] 3.5 Fix all Rust compilation errors from conversion; `cargo clippy -- -D warnings` clean
+
+## 4. Regenerate TypeScript declarations
+
+- [x] 4.1 Run `pnpm build` (or `napi build --cargo-cwd . --js index.js --dts index.d.ts`) to regenerate `index.d.ts` and `native.d.ts`
+- [x] 4.2 Verify generated type output: check that `Fill.kind` shows `"none" | "solid" | "pattern" | "gradient"` (not `string`), `BorderStyle.style` shows the 6 variants, etc.
+
+## 5. Create TS overlay file (`enums.d.ts`)
+
+- [x] 5.1 Create `enums.d.ts` at repo root with type alias `CellValueType` = `"Null" | "Number" | "String" | "Boolean" | "Formula" | "Error" | "Hyperlink" | "RichText" | "Merge" | "Date"`
+- [x] 5.2 Add type alias `CfRuleType` = all 14 rule type variants; `CfRuleOperator` = all operator variants; `CfTimePeriod` = all time period variants; `CfvoType` = all 8 cfvo variants
+- [x] 5.3 Add type alias `DataValidationType` = 7 variants; `DataValidationOperator` = 8 operator variants; `DataValidationErrorStyle` = 3 variants
+- [x] 5.4 Add module augmentation for `SheetViewState` to include `""` (empty string variant not expressible in Rust `string_enum`)
+- [x] 5.5 Add `/// <reference path="./enums.d.ts" />` reference directive at top of `index.d.ts` to guarantee discovery
+- [x] 5.6 Verify `tsc --noEmit` passes on a consumer test file that exercises all typed fields
+
+## 6. Add drift-detection test
+
+- [ ] 6.1 Create a simple JS/TS test that reads runtime values from the exported types and compares against the expected string literal sets defined in `enums.d.ts`
+- [ ] 6.2 Wire the test into the existing test suite (`pnpm test`)
+
+## 7. Final verification
+
+- [x] 7.1 `cargo test` — all Rust tests pass
+- [x] 7.2 `cargo clippy -- -D warnings` — no warnings
+- [x] 7.3 `pnpm test` — all JS integration tests pass
+- [x] 7.4 `tsc --noEmit` on a consumer project using the built package — no type errors
+- [x] 7.5 Verify `index.d.ts` still carries `/* auto-generated by NAPI-RS */` header (no manual breakage)

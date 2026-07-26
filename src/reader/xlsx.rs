@@ -21,18 +21,19 @@ use calamine::{open_workbook_auto_from_rs, Data, Reader, Sheets};
 use crate::error::ExcelrsError;
 use crate::model::cell::{CellValue, RichTextRun};
 use crate::model::header_footer::HeaderFooter;
-use crate::model::page_setup::{PageMargins, PageSetup};
+use crate::model::page_setup::{CellComments, Orientation, PageMargins, PageSetup};
 use crate::model::style::{Font, Style};
 use crate::model::workbook::Workbook;
 use crate::model::workbook_inner::WorkbookInner;
 
 use crate::model::comment::CellComment;
-use crate::model::image::{ImageAnchor, WorksheetImage};
+use crate::model::image::{AnchorType, ImageAnchor, WorksheetImage};
 use crate::model::table::{Table, TableColumn, TableRow, TableStyle};
 use crate::model::worksheet::Worksheet;
 
 use super::styles::{self, SheetStyleMap, StyleTableRead};
 use super::workbook;
+use crate::model::sheet_view::{ActivePane, SheetViewState};
 
 // ---------------------------------------------------------------------------
 
@@ -757,7 +758,14 @@ fn parse_views_from_xml(xml: &str) -> Vec<crate::model::sheet_view::SheetView> {
                 let mut sv = crate::model::sheet_view::SheetView::default();
                 for attr in e.attributes().flatten() {
                     match attr.key.as_ref() {
-                        b"state" => sv.state = Some(String::from_utf8_lossy(&attr.value).into_owned()),
+                        b"state" => {
+                            let s = String::from_utf8_lossy(&attr.value);
+                            if s.is_empty() {
+                                sv.state = None;
+                            } else {
+                                sv.state = Some(SheetViewState::from(s.as_ref()));
+                            }
+                        }
                         b"topLeftCell" => sv.top_left_cell = Some(String::from_utf8_lossy(&attr.value).into_owned()),
                         _ => {}
                     }
@@ -777,7 +785,9 @@ fn parse_views_from_xml(xml: &str) -> Vec<crate::model::sheet_view::SheetView> {
                             b"topLeftCell" => {
                                 sv.top_left_cell = Some(String::from_utf8_lossy(&attr.value).into_owned())
                             }
-                            b"activePane" => sv.active_pane = Some(String::from_utf8_lossy(&attr.value).into_owned()),
+                            b"activePane" => {
+                                sv.active_pane = Some(ActivePane::from(String::from_utf8_lossy(&attr.value).as_ref()));
+                            }
                             _ => {}
                         }
                     }
@@ -1400,7 +1410,9 @@ fn parse_page_setup_from_xml(xml: &str) -> Option<PageSetup> {
                 found = true;
                 for attr in e.attributes().flatten() {
                     match attr.key.as_ref() {
-                        b"orientation" => ps.orientation = Some(String::from_utf8_lossy(&attr.value).into_owned()),
+                        b"orientation" => {
+                            ps.orientation = Some(Orientation::from(String::from_utf8_lossy(&attr.value).as_ref()));
+                        }
                         b"paperSize" => ps.paper_size = num_attr(&attr.value),
                         b"fitToPage" => ps.fit_to_page = parse_boolean_flag(&attr.value),
                         b"fitToWidth" => ps.fit_to_width = num_attr(&attr.value),
@@ -1409,7 +1421,9 @@ fn parse_page_setup_from_xml(xml: &str) -> Option<PageSetup> {
                         b"verticalDpi" => ps.vertical_dpi = num_attr(&attr.value),
                         b"blackAndWhite" => ps.black_and_white = parse_boolean_flag(&attr.value),
                         b"drawingPrinted" => ps.drawing_printed = parse_boolean_flag(&attr.value),
-                        b"cellComments" => ps.cell_comments = Some(String::from_utf8_lossy(&attr.value).into_owned()),
+                        b"cellComments" => {
+                            ps.cell_comments = Some(CellComments::from(String::from_utf8_lossy(&attr.value).as_ref()));
+                        }
                         b"copies" => ps.copies = num_attr(&attr.value),
                         _ => {}
                     }
@@ -1970,7 +1984,7 @@ fn parse_drawing_xml(xml: &str) -> Vec<(String, ImageAnchor)> {
     let mut buf = Vec::new();
     let mut out: Vec<(String, ImageAnchor)> = Vec::new();
     let mut cur = ImageAnchor {
-        anchor_type: "oneCell".to_string(),
+        anchor_type: AnchorType::OneCell,
         col: 0,
         row: 0,
         x: 0,
@@ -1994,7 +2008,7 @@ fn parse_drawing_xml(xml: &str) -> Vec<(String, ImageAnchor)> {
             Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => match e.name().as_ref() {
                 b"xdr:oneCellAnchor" => {
                     cur = ImageAnchor {
-                        anchor_type: "oneCell".to_string(),
+                        anchor_type: AnchorType::OneCell,
                         col: 0,
                         row: 0,
                         x: 0,
@@ -2008,7 +2022,7 @@ fn parse_drawing_xml(xml: &str) -> Vec<(String, ImageAnchor)> {
                 }
                 b"xdr:twoCellAnchor" => {
                     cur = ImageAnchor {
-                        anchor_type: "twoCell".to_string(),
+                        anchor_type: AnchorType::TwoCell,
                         col: 0,
                         row: 0,
                         x: 0,
@@ -2400,6 +2414,9 @@ fn parse_inline_str_rich_text_with(xml: &str, max_events: usize) -> Vec<(u32, u3
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::page_setup::Orientation;
+    use crate::model::sheet_view::SheetViewState;
+    use crate::model::style::{AlignmentHorizontal, AlignmentVertical, BorderStyleStyle, FillKind, GradientType};
 
     // -- map_data unit tests (no file I/O) --
 
@@ -2861,11 +2878,11 @@ mod tests {
         let xml = r##"<worksheet><sheetViews><sheetView state="frozen"><pane xSplit="2" ySplit="1" topLeftCell="C2" activePane="bottomRight"/></sheetView></sheetViews></worksheet>"##;
         let views = parse_views_from_xml(xml);
         assert_eq!(views.len(), 1);
-        assert_eq!(views[0].state.as_deref(), Some("frozen"));
+        assert_eq!(views[0].state, Some(SheetViewState::Frozen));
         assert_eq!(views[0].x_split, Some(2));
         assert_eq!(views[0].y_split, Some(1));
         assert_eq!(views[0].top_left_cell.as_deref(), Some("C2"));
-        assert_eq!(views[0].active_pane.as_deref(), Some("bottomRight"));
+        assert_eq!(views[0].active_pane, Some(ActivePane::BottomRight));
     }
 
     #[test]
@@ -3096,8 +3113,8 @@ mod tests {
         let cell = read.worksheets[0].get_cell_by_rc(1, 1);
         let s = cell.style();
         let f = s.unwrap().fill.unwrap();
-        assert_eq!(f.kind, "gradient");
-        assert_eq!(f.gradient_type.as_deref(), Some("linear"));
+        assert_eq!(f.kind, FillKind::Gradient);
+        assert_eq!(f.gradient_type, Some(GradientType::Linear));
         assert_eq!(f.gradient_degree, Some(45.0));
         let stops = f.gradient_stops.unwrap();
         assert_eq!(stops.len(), 2);
@@ -3135,7 +3152,7 @@ mod tests {
         let s = cell.style();
         let b = s.unwrap().border.unwrap();
         assert!(b.diagonal.is_some());
-        assert_eq!(b.diagonal.as_ref().unwrap().style, "thin");
+        assert_eq!(b.diagonal.as_ref().unwrap().style, BorderStyleStyle::Thin);
         assert_eq!(b.diagonal.as_ref().unwrap().color.as_deref(), Some("FF000000"));
         assert_eq!(b.diagonal_up, Some(true));
         assert_eq!(b.diagonal_down, Some(true));
@@ -3210,7 +3227,7 @@ mod tests {
                         ..Default::default()
                     }),
                     fill: Some(Fill {
-                        kind: "solid".into(),
+                        kind: FillKind::Solid,
                         foreground: Some("FFFF0000".into()),
                         ..Default::default()
                     }),
@@ -3259,7 +3276,7 @@ mod tests {
         });
         inner.dxfs.push(Dxf {
             fill: Some(Fill {
-                kind: "solid".into(),
+                kind: FillKind::Solid,
                 foreground: Some("FF00FF00".into()),
                 ..Default::default()
             }),

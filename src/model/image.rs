@@ -2,6 +2,33 @@
 
 use napi_derive::napi;
 
+/// Anchor type for embedded images.
+#[napi(string_enum)]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum AnchorType {
+    #[default]
+    OneCell,
+    TwoCell,
+}
+
+impl std::fmt::Display for AnchorType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AnchorType::OneCell => write!(f, "oneCell"),
+            AnchorType::TwoCell => write!(f, "twoCell"),
+        }
+    }
+}
+
+impl From<&str> for AnchorType {
+    fn from(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "twocell" => AnchorType::TwoCell,
+            _ => AnchorType::OneCell,
+        }
+    }
+}
+
 /// Anchor descriptor for an embedded image.
 ///
 /// `anchor_type` is `"oneCell"` (image pinned to a single cell + offset) or
@@ -11,7 +38,7 @@ use napi_derive::napi;
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct ImageAnchor {
-    pub anchor_type: String,
+    pub anchor_type: AnchorType,
     pub col: u32,
     pub row: u32,
     pub x: u32,

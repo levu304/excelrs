@@ -13,7 +13,7 @@ use std::io::Write;
 use quick_xml::escape::escape;
 
 use crate::error::ExcelrsError;
-use crate::model::style::{Alignment, Border, Dxf, Fill, Font, Style};
+use crate::model::style::{Alignment, AlignmentVertical, Border, Dxf, Fill, FillKind, Font, GradientType, Style};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -300,8 +300,8 @@ fn emit_dxf<W: Write>(w: &mut W, dxf: &Dxf) -> Result<(), ExcelrsError> {
     // fill
     if let Some(ref fill) = dxf.fill {
         write_str(w, "<fill>")?;
-        if fill.kind == "gradient" {
-            let (el, attrs) = if fill.gradient_type.as_deref() == Some("path") {
+        if fill.kind == FillKind::Gradient {
+            let (el, attrs) = if fill.gradient_type == Some(GradientType::Path) {
                 let mut a = String::from(r#"type=\"path\""#);
                 if let Some(v) = fill.gradient_left {
                     a.push_str(&format!(r#" left=\"{}\""#, v));
@@ -338,7 +338,7 @@ fn emit_dxf<W: Write>(w: &mut W, dxf: &Dxf) -> Result<(), ExcelrsError> {
             }
             write_str(w, "</gradientFill>")?;
         } else if fill.foreground.is_some() || fill.background.is_some() {
-            write_str(w, &format!(r#"<patternFill patternType=\"{}\">"#, escape(&fill.kind)))?;
+            write_str(w, &format!(r#"<patternFill patternType=\"{}\">"#, fill.kind))?;
             write_str(
                 w,
                 &emit_color_attrs(
@@ -374,16 +374,13 @@ fn emit_dxf<W: Write>(w: &mut W, dxf: &Dxf) -> Result<(), ExcelrsError> {
         ] {
             match side {
                 Some(bs) => {
-                    if bs.style.is_empty() {
-                        write_str(w, &format!("<{}/>", el))?;
-                    } else {
-                        write_str(w, &format!(r#"<{} style=\"{}\">"#, el, escape(&bs.style)))?;
-                        write_str(
-                            w,
-                            &emit_color_attrs("color", &bs.color, &bs.color_theme, &bs.color_tint),
-                        )?;
-                        write_str(w, &format!("</{}>", el))?;
-                    }
+                    // ponytail: all BorderStyleStyle variants are non-empty, always emit
+                    write_str(w, &format!(r#"<{} style=\"{}\">"#, el, bs.style))?;
+                    write_str(
+                        w,
+                        &emit_color_attrs("color", &bs.color, &bs.color_theme, &bs.color_tint),
+                    )?;
+                    write_str(w, &format!("</{}>", el))?;
                 }
                 None => {
                     write_str(w, &format!("<{}/>", el))?;
@@ -482,8 +479,8 @@ fn emit_fills<W: Write>(w: &mut W, fills: &[Fill]) -> Result<(), ExcelrsError> {
 
     for f in fills {
         write_str(w, "<fill>")?;
-        if f.kind == "gradient" {
-            let (tag, attrs) = if f.gradient_type.as_deref() == Some("path") {
+        if f.kind == FillKind::Gradient {
+            let (tag, attrs) = if f.gradient_type == Some(GradientType::Path) {
                 // Path gradient: left/right/top/bottom geometry
                 let mut a = String::from(r#"type="path""#);
                 if let Some(v) = f.gradient_left {
@@ -583,7 +580,7 @@ fn emit_border_side<W: Write>(
     match bs {
         None => write_str(w, &format!("<{side}/>")),
         Some(b) => {
-            let style_attr = escape(&b.style);
+            let style_attr = b.style.to_string();
             let color = emit_color_attrs("color", &b.color, &b.color_theme, &b.color_tint);
             write_str(w, &format!("<{side} style=\"{style_attr}\">{color}</{side}>"))
         }
@@ -669,11 +666,15 @@ fn emit_alignment_child<W: Write>(w: &mut W, xf: &CellXf, alignments: &[Alignmen
 
     let mut parts: Vec<String> = Vec::new();
     if let Some(ref h) = alignment.horizontal {
-        parts.push(format!(r##"horizontal="{}""##, escape(h)));
+        parts.push(format!(r##"horizontal="{}""##, h));
     }
     if let Some(ref v) = alignment.vertical {
         // OOXML uses "center"; excelrs API uses "middle"
-        let ooxml = if v == "middle" { "center" } else { v.as_str() };
+        let ooxml = if *v == AlignmentVertical::Middle {
+            "center"
+        } else {
+            &v.to_string()
+        };
         parts.push(format!(r##"vertical="{}""##, escape(ooxml)));
     }
     if let Some(wt) = alignment.wrap_text {
@@ -712,7 +713,9 @@ fn write_str<W: Write>(w: &mut W, s: &str) -> Result<(), ExcelrsError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::style::{Alignment, BorderStyle, Fill, GradientStop};
+    use crate::model::style::{
+        Alignment, AlignmentHorizontal, AlignmentVertical, BorderStyle, BorderStyleStyle, Fill, FillKind, GradientStop,
+    };
 
     // -- 4 dedup tests (per §9.2 budget) --
 
@@ -1404,11 +1407,11 @@ mod tests {
 
     /// W1: border side `style` attribute is XML-escaped on emit.
     #[test]
-    fn test_emit_border_style_escaped() {
+    fn test_emit_border_style() {
         let styles = vec![Some(Style {
             border: Some(crate::model::style::Border {
                 top: Some(BorderStyle {
-                    style: "<&>\"'".into(),
+                    style: BorderStyleStyle::Thin,
                     color: None,
                     ..Default::default()
                 }),
@@ -1421,19 +1424,18 @@ mod tests {
         emit_styles_xml(&mut buf, &table).unwrap();
         let xml = String::from_utf8(buf).unwrap();
         assert!(
-            xml.contains(r##"style="&lt;&amp;&gt;&quot;&apos;""##),
-            "border style must be XML-escaped: {xml}"
+            xml.contains("style=\"thin\""),
+            "border style must be present in output: {xml}"
         );
-        assert!(!xml.contains(r##"style="<&>""##), "unescaped border style: {xml}");
     }
 
-    /// W2: alignment `horizontal` is escaped; `middle`→`center` mapping intact.
+    /// W2: alignment horizontal and vertical rendered correctly.
     #[test]
-    fn test_emit_alignment_escaped() {
+    fn test_emit_alignment() {
         let styles = vec![Some(Style {
             alignment: Some(Alignment {
-                horizontal: Some("<&>\"'".into()),
-                vertical: Some("middle".into()),
+                horizontal: Some(AlignmentHorizontal::Center),
+                vertical: Some(AlignmentVertical::Middle),
                 ..Default::default()
             }),
             ..Default::default()
@@ -1443,17 +1445,10 @@ mod tests {
         emit_styles_xml(&mut buf, &table).unwrap();
         let xml = String::from_utf8(buf).unwrap();
         assert!(
-            xml.contains(r##"horizontal="&lt;&amp;&gt;&quot;&apos;""##),
-            "alignment horizontal must be XML-escaped: {xml}"
+            xml.contains("horizontal=\"center\""),
+            "alignment horizontal must be in output: {xml}"
         );
-        assert!(!xml.contains(r##"horizontal="<&>""##), "unescaped horizontal: {xml}");
-        assert!(
-            xml.contains(r##"vertical="center""##),
-            "middle must map to center: {xml}"
-        );
-        assert!(
-            !xml.contains(r##"vertical="middle""##),
-            "must not emit raw middle: {xml}"
-        );
+        assert!(xml.contains("vertical=\"center\""), "middle must map to center: {xml}");
+        assert!(!xml.contains("vertical=\"middle\""), "must not emit raw middle: {xml}");
     }
 }

@@ -29,7 +29,7 @@ use crate::error::ExcelrsError;
 use crate::model::cell::Cell;
 use crate::model::comment::CellComment;
 use crate::model::defined_name::DefinedName;
-use crate::model::image::WorksheetImage;
+use crate::model::image::{AnchorType, WorksheetImage};
 use crate::model::style::{Dxf, Style};
 use crate::model::table::Table;
 use crate::model::workbook_inner::WorkbookInner;
@@ -570,7 +570,7 @@ fn write_drawing_xml<W: Write>(w: &mut W, images: &[WorksheetImage]) -> Result<(
             "<xdr:from><xdr:col>{}</xdr:col><xdr:colOff>{}</xdr:colOff><xdr:row>{}</xdr:row><xdr:rowOff>{}</xdr:rowOff></xdr:from>",
             a.col, a.x, a.row, a.y
         );
-        let (open, close) = if a.anchor_type == "twoCell" {
+        let (open, close) = if a.anchor_type == AnchorType::TwoCell {
             ("<xdr:twoCellAnchor>", "</xdr:twoCellAnchor>")
         } else {
             ("<xdr:oneCellAnchor>", "</xdr:oneCellAnchor>")
@@ -578,7 +578,7 @@ fn write_drawing_xml<W: Write>(w: &mut W, images: &[WorksheetImage]) -> Result<(
         let mut body = String::new();
         body.push_str(open);
         body.push_str(&from);
-        if a.anchor_type == "twoCell" {
+        if a.anchor_type == AnchorType::TwoCell {
             body.push_str(&format!(
                 "<xdr:to><xdr:col>{}</xdr:col><xdr:colOff>{}</xdr:colOff><xdr:row>{}</xdr:row><xdr:rowOff>{}</xdr:rowOff></xdr:to>",
                 a.col2, a.x2, a.row2, a.y2
@@ -1097,13 +1097,13 @@ fn emit_sheet_views<W: Write>(w: &mut W, ws: &Worksheet) -> Result<(), ExcelrsEr
     }
     write_str(w, "<sheetViews>")?;
     for sv in &views {
-        let state_attr = sv.state.as_deref().unwrap_or("");
+        let state_str = sv.state.as_ref().map(|s| s.to_string());
         write_str(
             w,
             &format!(
                 "<sheetView{}>",
-                if !state_attr.is_empty() {
-                    format!(" state=\"{}\"", escape(state_attr))
+                if let Some(ref s) = state_str {
+                    format!(" state=\"{}\"", escape(s))
                 } else {
                     String::new()
                 }
@@ -1123,7 +1123,7 @@ fn emit_sheet_views<W: Write>(w: &mut W, ws: &Worksheet) -> Result<(), ExcelrsEr
                 pane_attrs.push_str(&format!(" topLeftCell=\"{}\"", escape(t)));
             }
             if let Some(a) = &sv.active_pane {
-                pane_attrs.push_str(&format!(" activePane=\"{}\"", escape(a)));
+                pane_attrs.push_str(&format!(" activePane=\"{}\"", a));
             }
             write_str(w, &format!("<pane{}/>", pane_attrs))?;
         }
@@ -1298,7 +1298,7 @@ fn emit_page_setup<W: Write>(w: &mut W, ws: &Worksheet) -> Result<(), ExcelrsErr
     // <pageSetup>
     let mut attrs = String::new();
     if let Some(v) = &ps.orientation {
-        attrs.push_str(&format!(" orientation=\"{}\"", escape(v)));
+        attrs.push_str(&format!(" orientation=\"{}\"", v));
     }
     if let Some(v) = ps.paper_size {
         attrs.push_str(&format!(" paperSize=\"{}\"", v));
@@ -1333,7 +1333,7 @@ fn emit_page_setup<W: Write>(w: &mut W, ws: &Worksheet) -> Result<(), ExcelrsErr
         });
     }
     if let Some(v) = &ps.cell_comments {
-        attrs.push_str(&format!(" cellComments=\"{}\"", escape(v)));
+        attrs.push_str(&format!(" cellComments=\"{}\"", v));
     }
     if let Some(v) = ps.copies {
         attrs.push_str(&format!(" copies=\"{}\"", v));
@@ -1917,7 +1917,8 @@ fn write_str<W: Write>(w: &mut W, s: &str) -> Result<(), ExcelrsError> {
 mod tests {
     use super::*;
     use crate::model::cell::{Cell, CellValue, RichTextRun};
-    use crate::model::style::{Alignment, Fill, Font};
+    use crate::model::sheet_view::SheetViewState;
+    use crate::model::style::{Alignment, AlignmentHorizontal, AlignmentVertical, Fill, FillKind, Font};
     use crate::model::workbook_inner::WorkbookInner;
     use crate::reader::xlsx::workbook_inner_from_bytes;
     use std::collections::{BTreeMap, HashMap};
@@ -2469,8 +2470,14 @@ mod tests {
         assert_eq!(style.font.as_ref().unwrap().bold, Some(true));
         assert_eq!(style.font.as_ref().unwrap().color.as_deref(), Some("FFFF0000"));
         assert_eq!(style.fill.as_ref().unwrap().foreground.as_deref(), Some("FFFFFF00"));
-        assert_eq!(style.alignment.as_ref().unwrap().horizontal.as_deref(), Some("center"));
-        assert_eq!(style.alignment.as_ref().unwrap().vertical.as_deref(), Some("middle"));
+        assert_eq!(
+            style.alignment.as_ref().unwrap().horizontal,
+            Some(AlignmentHorizontal::Center)
+        );
+        assert_eq!(
+            style.alignment.as_ref().unwrap().vertical,
+            Some(AlignmentVertical::Middle)
+        );
         assert_eq!(style.num_fmt.as_deref(), Some("0.00%"));
     }
 
@@ -2544,7 +2551,10 @@ mod tests {
             style.fill.as_ref().and_then(|f| f.foreground.as_deref()),
             Some("FFFF0000")
         );
-        assert_eq!(style.fill.as_ref().map(|f| f.kind.as_str()), Some("solid"));
+        assert_eq!(
+            style.fill.as_ref().map(|f| f.kind.to_string()),
+            Some("solid".to_string())
+        );
     }
 
     /// Merged cell ranges survive a write → read round-trip (v0.5.0 writer,
@@ -3346,7 +3356,7 @@ mod tests {
 
         // Assert views survived
         assert_eq!(ws2.views().len(), 1, "views should round-trip");
-        assert_eq!(ws2.views()[0].state.as_deref(), Some("frozen"));
+        assert_eq!(ws2.views()[0].state, Some(SheetViewState::Frozen));
         assert_eq!(ws2.views()[0].x_split, Some(2));
         assert_eq!(ws2.views()[0].y_split, Some(1));
 

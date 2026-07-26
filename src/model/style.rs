@@ -17,6 +17,181 @@ use napi_derive::napi;
 use crate::error::ExcelrsError;
 
 // ---------------------------------------------------------------------------
+// Enum types for string-literal fields
+// ---------------------------------------------------------------------------
+
+/// Fill kind variants matching OOXML pattern fill types.
+#[napi(string_enum)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FillKind {
+    #[default]
+    None,
+    Solid,
+    Pattern,
+    Gradient,
+}
+
+impl std::fmt::Display for FillKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FillKind::None => write!(f, "none"),
+            FillKind::Solid => write!(f, "solid"),
+            FillKind::Pattern => write!(f, "pattern"),
+            FillKind::Gradient => write!(f, "gradient"),
+        }
+    }
+}
+
+impl From<&str> for FillKind {
+    fn from(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "none" => FillKind::None,
+            "solid" => FillKind::Solid,
+            "pattern" => FillKind::Pattern,
+            "gradient" => FillKind::Gradient,
+            _ => FillKind::None,
+        }
+    }
+}
+
+/// Gradient type: linear or path.
+#[napi(string_enum)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GradientType {
+    #[default]
+    Linear,
+    Path,
+}
+
+impl std::fmt::Display for GradientType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GradientType::Linear => write!(f, "linear"),
+            GradientType::Path => write!(f, "path"),
+        }
+    }
+}
+
+impl From<&str> for GradientType {
+    fn from(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "path" => GradientType::Path,
+            _ => GradientType::Linear,
+        }
+    }
+}
+
+/// Border line style per OOXML §18.18.3.
+#[napi(string_enum)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BorderStyleStyle {
+    #[default]
+    Thin,
+    Medium,
+    Thick,
+    Dashed,
+    Dotted,
+    Double,
+}
+
+impl std::fmt::Display for BorderStyleStyle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BorderStyleStyle::Thin => write!(f, "thin"),
+            BorderStyleStyle::Medium => write!(f, "medium"),
+            BorderStyleStyle::Thick => write!(f, "thick"),
+            BorderStyleStyle::Dashed => write!(f, "dashed"),
+            BorderStyleStyle::Dotted => write!(f, "dotted"),
+            BorderStyleStyle::Double => write!(f, "double"),
+        }
+    }
+}
+
+impl From<&str> for BorderStyleStyle {
+    fn from(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "medium" => BorderStyleStyle::Medium,
+            "thick" => BorderStyleStyle::Thick,
+            "dashed" => BorderStyleStyle::Dashed,
+            "dotted" => BorderStyleStyle::Dotted,
+            "double" => BorderStyleStyle::Double,
+            _ => BorderStyleStyle::Thin,
+        }
+    }
+}
+
+/// Horizontal alignment.
+#[napi(string_enum)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AlignmentHorizontal {
+    #[default]
+    Left,
+    Center,
+    Right,
+    Fill,
+    Justify,
+}
+
+impl std::fmt::Display for AlignmentHorizontal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AlignmentHorizontal::Left => write!(f, "left"),
+            AlignmentHorizontal::Center => write!(f, "center"),
+            AlignmentHorizontal::Right => write!(f, "right"),
+            AlignmentHorizontal::Fill => write!(f, "fill"),
+            AlignmentHorizontal::Justify => write!(f, "justify"),
+        }
+    }
+}
+
+impl From<&str> for AlignmentHorizontal {
+    fn from(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "center" => AlignmentHorizontal::Center,
+            "right" => AlignmentHorizontal::Right,
+            "fill" => AlignmentHorizontal::Fill,
+            "justify" => AlignmentHorizontal::Justify,
+            _ => AlignmentHorizontal::Left,
+        }
+    }
+}
+
+/// Vertical alignment.
+#[napi(string_enum)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AlignmentVertical {
+    #[default]
+    Top,
+    Middle,
+    Bottom,
+}
+
+impl std::fmt::Display for AlignmentVertical {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AlignmentVertical::Top => write!(f, "top"),
+            AlignmentVertical::Middle => write!(f, "middle"),
+            AlignmentVertical::Bottom => write!(f, "bottom"),
+        }
+    }
+}
+
+impl From<&str> for AlignmentVertical {
+    fn from(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "middle" => AlignmentVertical::Middle,
+            "bottom" => AlignmentVertical::Bottom,
+            _ => AlignmentVertical::Top,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Font
 // ---------------------------------------------------------------------------
 
@@ -92,7 +267,7 @@ pub struct GradientStop {
 #[serde(default, rename_all = "camelCase")]
 pub struct Fill {
     /// Fill kind: `"none"` | `"solid"` | `"pattern"` | `"gradient"`.
-    pub kind: String,
+    pub kind: FillKind,
     /// Foreground color (ARGB hex). Default: None.
     pub foreground: Option<String>,
     /// Background color (ARGB hex). Default: None.
@@ -117,7 +292,7 @@ pub struct Fill {
     pub pattern: Option<String>,
     // -- gradient fields (v0.5.0) --
     /// Gradient type: `"linear"` or `"path"`. Only used when `kind="gradient"`.
-    pub gradient_type: Option<String>,
+    pub gradient_type: Option<GradientType>,
     /// Gradient angle in degrees (linear). Only used when `kind="gradient"`.
     pub gradient_degree: Option<f64>,
     /// Gradient angle as left/right angle (for path gradients). Only used when `kind="gradient"`.
@@ -138,7 +313,7 @@ pub struct Fill {
 impl Default for Fill {
     fn default() -> Self {
         Fill {
-            kind: "none".into(),
+            kind: FillKind::None,
             foreground: None,
             background: None,
             foreground_theme: None,
@@ -170,7 +345,7 @@ pub struct BorderStyle {
     /// Border style: `"thin"` | `"medium"` | `"thick"` | `"dashed"` |
     /// `"dotted"` | `"double"`. `"none"` is rejected; use `None` for
     /// the border side (e.g. `Border.top = None`) to express no border.
-    pub style: String,
+    pub style: BorderStyleStyle,
     /// Line color (ARGB hex). Default: black (`"FF000000"` in exceljs).
     pub color: Option<String>,
     /// Internal: originating theme index (0–11) for theme colors. Not exposed.
@@ -217,9 +392,9 @@ pub struct Border {
 #[serde(default, rename_all = "camelCase")]
 pub struct Alignment {
     /// Horizontal: `"left"` | `"center"` | `"right"` | `"fill"` | `"justify"`.
-    pub horizontal: Option<String>,
+    pub horizontal: Option<AlignmentHorizontal>,
     /// Vertical: `"top"` | `"middle"` | `"bottom"`.
-    pub vertical: Option<String>,
+    pub vertical: Option<AlignmentVertical>,
     pub wrap_text: Option<bool>,
     pub indent: Option<u32>,
 }
@@ -332,29 +507,22 @@ fn validate_float_range(val: Option<f64>, field: &str, min: f64, max: f64) -> Re
 }
 
 /// Validate Fill.kind. Must be one of: "none", "solid", "pattern", "gradient".
-fn validate_fill_kind(kind: &str) -> Result<(), ExcelrsError> {
+fn validate_fill_kind(kind: &FillKind) -> Result<(), ExcelrsError> {
     match kind {
-        "none" | "solid" | "pattern" | "gradient" => Ok(()),
-        other => Err(ExcelrsError::InvalidStyle(format!(
-            "fill.kind: '{other}' is not valid; use 'none', 'solid', 'pattern', or 'gradient'"
-        ))),
+        FillKind::None | FillKind::Solid | FillKind::Pattern | FillKind::Gradient => Ok(()),
     }
 }
 
 /// Validate BorderStyle.style. Must be one of the OOXML line styles.
 /// "none" is rejected; use `None` for the border side.
-fn validate_border_style(style: &str) -> Result<(), ExcelrsError> {
+fn validate_border_style(style: &BorderStyleStyle) -> Result<(), ExcelrsError> {
     match style {
-        "thin" | "medium" | "thick" | "dashed" | "dotted" | "double" => Ok(()),
-        "none" => Err(ExcelrsError::InvalidStyle(
-            "border.style: 'none' is not a valid border style; use null for the border side \
-             (e.g. Border.top = null) to express 'no border'"
-                .into(),
-        )),
-        other => Err(ExcelrsError::InvalidStyle(format!(
-            "border.style: '{other}' is not a valid border style; \
-             use 'thin', 'medium', 'thick', 'dashed', 'dotted', or 'double'"
-        ))),
+        BorderStyleStyle::Thin
+        | BorderStyleStyle::Medium
+        | BorderStyleStyle::Thick
+        | BorderStyleStyle::Dashed
+        | BorderStyleStyle::Dotted
+        | BorderStyleStyle::Double => Ok(()),
     }
 }
 
@@ -397,10 +565,9 @@ impl Style {
             validate_color(&mut fill.foreground, "fill.foreground")?;
             validate_color(&mut fill.background, "fill.background")?;
             // Gradient validation
-            if fill.kind == "gradient" {
-                let gt = fill.gradient_type.as_deref();
-                match gt {
-                    Some("path") => {
+            if fill.kind == FillKind::Gradient {
+                match fill.gradient_type {
+                    Some(GradientType::Path) => {
                         // Path gradient: require left/right/top/bottom geometry
                         for (field, val) in [
                             ("fill.gradient_left", fill.gradient_left),
@@ -420,14 +587,9 @@ impl Style {
                             ));
                         }
                     }
-                    Some("linear") | None => {
+                    Some(GradientType::Linear) | None => {
                         // Linear gradient: degree is optional
                         validate_float(fill.gradient_degree, "fill.gradient_degree")?;
-                    }
-                    Some(other) => {
-                        return Err(ExcelrsError::InvalidStyle(format!(
-                            "fill.gradient_type: '{other}' is not valid; use 'linear' or 'path'"
-                        )));
                     }
                 }
                 // gradient_angle is deprecated and never emitted — intentionally not validated.
@@ -526,7 +688,7 @@ mod tests {
     #[test]
     fn test_fill_default() {
         let f = Fill::default();
-        assert_eq!(f.kind, "none");
+        assert_eq!(f.kind, FillKind::None);
         assert!(f.foreground.is_none());
         assert!(f.background.is_none());
         assert!(f.pattern.is_none());
@@ -535,7 +697,7 @@ mod tests {
     #[test]
     fn test_border_style_default() {
         let bs = BorderStyle::default();
-        assert_eq!(bs.style, "");
+        assert_eq!(bs.style, BorderStyleStyle::Thin);
         assert!(bs.color.is_none());
     }
 
@@ -825,59 +987,47 @@ mod tests {
         );
     }
 
-    /// Fill.kind: random string rejected.
+    /// Fill.kind: non-gradient variants pass validation with defaults.
     #[test]
-    fn test_validate_fill_kind_bogus() {
-        let fill = Fill {
-            kind: "stripe".into(),
-            ..Default::default()
-        };
-        let style = Style {
-            fill: Some(fill),
-            ..Default::default()
-        };
-        assert!(style.validate().is_err());
+    fn test_validate_fill_kind_non_gradient() {
+        for kind in [FillKind::None, FillKind::Solid, FillKind::Pattern] {
+            let fill = Fill {
+                kind,
+                ..Default::default()
+            };
+            let style = Style {
+                fill: Some(fill),
+                ..Default::default()
+            };
+            assert!(style.validate().is_ok());
+        }
     }
 
-    /// BorderStyle.style: "none" rejected.
+    /// BorderStyle.style: all valid enum variants pass validation.
     #[test]
-    fn test_validate_border_style_none() {
-        let bs = BorderStyle {
-            style: "none".into(),
-            color: None,
-            ..Default::default()
-        };
-        let border = Border {
-            top: Some(bs),
-            ..Default::default()
-        };
-        let style = Style {
-            border: Some(border),
-            ..Default::default()
-        };
-        let result = style.validate();
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("none"));
-    }
-
-    /// BorderStyle.style: "bogus" rejected.
-    #[test]
-    fn test_validate_border_style_bogus() {
-        let bs = BorderStyle {
-            style: "xtrathick".into(),
-            color: None,
-            ..Default::default()
-        };
-        let border = Border {
-            top: Some(bs),
-            ..Default::default()
-        };
-        let style = Style {
-            border: Some(border),
-            ..Default::default()
-        };
-        assert!(style.validate().is_err());
+    fn test_validate_border_style_valid_variants() {
+        for style in [
+            BorderStyleStyle::Thin,
+            BorderStyleStyle::Medium,
+            BorderStyleStyle::Thick,
+            BorderStyleStyle::Dashed,
+            BorderStyleStyle::Dotted,
+            BorderStyleStyle::Double,
+        ] {
+            let bs = BorderStyle {
+                style,
+                color: None,
+                ..Default::default()
+            };
+            let style = Style {
+                border: Some(Border {
+                    top: Some(bs),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            assert!(style.validate().is_ok());
+        }
     }
 
     /// Border side = None: no validation needed (style field unreachable).
