@@ -94,8 +94,8 @@ const buf = await wb.xlsx.write();
 Workbook → Worksheet → Row → Cell — mirrors exceljs exactly.
 
 - **Workbook:** `constructor()`, `addWorksheet()`, `getWorksheet()`, `views`, `calcProperties`, `.xlsx` I/O handle
-- **Worksheet:** `getCell()`, `getRow()`, `addRow()`, `removeRow()`, `setColumns()`,
-  `setCellStyle()`, `headerFooter`, `pageSetup`, `addImage()`, `rowCount`, `columnCount`, `columns`, `rows`
+- **Worksheet:** `getCell()`, `getRow()`, `addRow()`, `removeRow()`, `setColumns()` (use this to set columns),
+  `setCellStyle()`, `headerFooter`, `pageSetup`, `addImage()`, `rowCount`, `columnCount`, `columns` (getter-only), `rows`
 - **Row:** `getCell()`, `values`, `height`, `hidden`
 - **Cell:** `value` (Number | String | Boolean | Formula | Null), `address`, `formula`,
   `style` (getter/setter, full-replace), `note` / `comment`
@@ -128,6 +128,13 @@ See [docs/spec.md](docs/spec.md) for the full API specification.
 > There is no `Workbook.addImage`, `Workbook.getImage`,
 > `Worksheet.addBackgroundImage`, or `Worksheet.getBackgroundImageId` —
 > the ExcelJS global image registry is not replicated.
+
+> **ExcelJS compat note — Column setter:** In ExcelJS `worksheet.columns` is
+> a read-write property (getter + setter). In excelrs it is **getter-only**
+> — direct assignment (`worksheet.columns = [...]`) is not supported.
+> Call `worksheet.setColumns([...])` instead. This matches the method-call
+> pattern used elsewhere (`setCellStyle`, `setColumns`). The getter
+> `worksheet.columns` returns the current column definitions.
 
 ## v0.2.0 — Style System (write only)
 
