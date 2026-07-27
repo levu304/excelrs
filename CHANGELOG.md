@@ -1,6 +1,21 @@
 # Changelog
 <!-- Release process: tag-driven from main. `git tag -a vX.Y.Z -m "..."` then push the tag. -->
 
+## [2.3.2] - 2026-07-27
+
+### Added
+
+- Worksheet creation options: `addWorksheet(name, { views: [{ showGridLines }], ... })`
+  via `AddWorksheetOptions` interface (pageSetup, views, headerFooter, protection, autoFilter)
+- Documentation: explicit note on `addImage` API divergence from ExcelJS
+
+### Fixed
+
+- `ws.addImage()` now accepts Node.js Buffer input (was Error: Failed to get Array length)
+- `ws.getImages()[0].buffer` now returns real Node.js Buffer at runtime (was Array<number>)
+- TypeScript declarations: `AddImageOptions.buffer` and `ImageInfo.buffer` typed as Buffer (not Array<number>)
+- CI: `apply-glue.cjs` patches `index.d.ts` through build pipe (getCell overloads survive regeneration)
+
 ## [2.3.0] - 2026-07-26
 
 ### Added
