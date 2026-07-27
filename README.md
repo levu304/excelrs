@@ -103,6 +103,20 @@ Workbook → Worksheet → Row → Cell — mirrors exceljs exactly.
 
 See [docs/spec.md](docs/spec.md) for the full API specification.
 
+> **ExcelJS compat note — Images:** ExcelJS places `addImage` on the
+> `Workbook` (two-step: `workbook.addImage(buffer) → imageId` then
+> `worksheet.addImage(imageId, range)`). excelrs places it on `Worksheet`
+> as a single call:
+>
+> ```ts
+> const ws = wb.addWorksheet('Sheet1');
+> ws.addImage({ extension: 'png', buffer, anchor: { col: 1, row: 1 } });
+> ```
+>
+> There is no `Workbook.addImage`, `Workbook.getImage`,
+> `Worksheet.addBackgroundImage`, or `Worksheet.getBackgroundImageId` —
+> the ExcelJS global image registry is not replicated.
+
 ## v0.2.0 — Style System (write only)
 
 Read and write `.xlsx` files with correct data fidelity. Cell and column
