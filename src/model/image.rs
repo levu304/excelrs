@@ -1,6 +1,39 @@
 //! Embedded images / drawings (v1.0.0).
 
+use napi::bindgen_prelude::*;
+use napi::sys;
 use napi_derive::napi;
+
+/// Wrapper around `Vec<u8>` that accepts both `Buffer`/`TypedArray` and
+/// `Array<number>` from JavaScript at the napi FFI boundary.
+///
+/// `Vec<u8>` in `#[napi(object)]` structs only accepts `Array<number>`.
+/// This type tries `Buffer::from_napi_value` first, then falls back to
+/// `Vec<u8>::from_napi_value`. The TS type is overridden to `Buffer` via
+/// `#[napi(ts_type = "Buffer")]` on the field.
+#[derive(Clone, Debug)]
+pub struct NapiBuffer(pub Vec<u8>);
+
+impl FromNapiValue for NapiBuffer {
+    unsafe fn from_napi_value(env: sys::napi_env, napi_val: sys::napi_value) -> napi::Result<Self> {
+        // Try Buffer first (handles Buffer and TypedArray)
+        if let Ok(buf) = unsafe { <Buffer as FromNapiValue>::from_napi_value(env, napi_val) } {
+            return Ok(NapiBuffer(buf.to_vec()));
+        }
+        // Fall back to Vec<u8> (handles Array<number>)
+        unsafe { <Vec<u8> as FromNapiValue>::from_napi_value(env, napi_val) }.map(NapiBuffer)
+    }
+}
+
+impl ToNapiValue for NapiBuffer {
+    unsafe fn to_napi_value(env: sys::napi_env, val: Self) -> napi::Result<sys::napi_value> {
+        // Returns a real Node.js Buffer (zero-copy external buffer with GC finalizer).
+        // Per napi.rs docs: Buffer can be created from Vec<u8>; the external buffer's
+        // finalizer frees the Vec on GC, with a copy fallback on Electron (V8 Memory Cage).
+        let buf: Buffer = val.0.into();
+        unsafe { <Buffer as ToNapiValue>::to_napi_value(env, buf) }
+    }
+}
 
 /// Anchor type for embedded images.
 #[napi(string_enum)]
@@ -53,7 +86,8 @@ pub struct ImageAnchor {
 #[derive(Clone, Debug)]
 pub struct AddImageOptions {
     pub extension: String,
-    pub buffer: Vec<u8>,
+    #[napi(ts_type = "Buffer")]
+    pub buffer: NapiBuffer,
     pub image_type: Option<String>,
     pub positioning: Option<String>,
     pub anchor: ImageAnchor,
@@ -63,7 +97,8 @@ pub struct AddImageOptions {
 #[derive(Clone, Debug)]
 pub struct ImageInfo {
     pub extension: String,
-    pub buffer: Vec<u8>,
+    #[napi(ts_type = "Buffer")]
+    pub buffer: NapiBuffer,
     pub positioning: String,
     pub anchor: ImageAnchor,
 }

@@ -1,6 +1,6 @@
 import { test, expect } from 'vitest'
 import ExcelJS from 'exceljs'
-import { Workbook } from '../index'
+import { Workbook, AnchorType } from '../index'
 
 // ---------------------------------------------------------------------------
 // Workbook.xlsx read — end-to-end (Phase 2 regression)
@@ -360,4 +360,32 @@ test('getRow().getCell().style write then ExcelJS read validates style', async (
   expect(val).toBeNull()
   expect(cell.font!.bold).toBe(true)
   expect(cell.font!.color!.argb).toBe('FFFF0000')
+})
+
+test('getImages returns buffer as a real Buffer at runtime', () => {
+  const wb = new Workbook()
+  const ws = wb.addWorksheet('Images')
+
+  const buf = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
+  ws.addImage({
+    extension: 'png',
+    buffer: buf,
+    positioning: 'oneCell',
+    anchor: {
+      anchorType: AnchorType.OneCell,
+      col: 1,
+      row: 1,
+      x: 0,
+      y: 0,
+      col2: 1,
+      row2: 1,
+      x2: 0,
+      y2: 0,
+    },
+  })
+
+  const images = ws.getImages()
+  expect(images.length).toBe(1)
+  expect(Buffer.isBuffer(images[0].buffer)).toBe(true)
+  expect(Buffer.compare(images[0].buffer, buf)).toBe(0)
 })

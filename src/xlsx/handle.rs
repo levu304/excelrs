@@ -416,7 +416,7 @@ mod tests {
 
     #[test]
     fn test_roundtrip_images() {
-        use crate::model::image::{AddImageOptions, ImageAnchor};
+        use crate::model::image::{AddImageOptions, ImageAnchor, NapiBuffer};
 
         let mut inner = WorkbookInner::new();
         let ws = inner.add_worksheet("Sheet1".into());
@@ -433,7 +433,7 @@ mod tests {
         };
         let _ = ws.add_image(AddImageOptions {
             extension: "png".into(),
-            buffer: vec![1, 2, 3, 4, 5],
+            buffer: NapiBuffer(vec![1, 2, 3, 4, 5]),
             image_type: None,
             positioning: Some("oneCell".into()),
             anchor,
@@ -446,14 +446,14 @@ mod tests {
         let imgs = rws.get_images();
         assert_eq!(imgs.len(), 1);
         assert_eq!(imgs[0].extension, "png");
-        assert_eq!(imgs[0].buffer, vec![1, 2, 3, 4, 5]);
+        assert_eq!(imgs[0].buffer.0, vec![1, 2, 3, 4, 5]);
         assert_eq!(imgs[0].anchor.col, 1);
         assert_eq!(imgs[0].anchor.row, 2);
     }
 
     #[test]
     fn test_roundtrip_images_mismatched_drawing_number() {
-        use crate::model::image::{AddImageOptions, ImageAnchor};
+        use crate::model::image::{AddImageOptions, ImageAnchor, NapiBuffer};
         use std::io::{Cursor, Read, Write};
 
         let mut inner = WorkbookInner::new();
@@ -471,7 +471,7 @@ mod tests {
         };
         let _ = ws.add_image(AddImageOptions {
             extension: "png".into(),
-            buffer: vec![1, 2, 3, 4, 5],
+            buffer: NapiBuffer(vec![1, 2, 3, 4, 5]),
             image_type: None,
             positioning: Some("oneCell".into()),
             anchor,
