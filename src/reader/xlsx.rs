@@ -1949,7 +1949,7 @@ fn parse_sheet_images(data: &[u8], sheet_count: usize) -> Result<Vec<Vec<Workshe
                     .iter()
                     .map(|(id, _, target)| (id.clone(), target.clone()))
                     .collect();
-                for (rid, anchor) in parse_drawing_xml(&xml) {
+                for (rid, anchor, ext_sz) in parse_drawing_xml(&xml) {
                     if let Some(target) = media_map.get(&rid) {
                         let mpath = format!("xl/{}", target.trim_start_matches("../"));
                         if let Ok(mut me) = archive.by_name(&mpath) {
@@ -1965,6 +1965,7 @@ fn parse_sheet_images(data: &[u8], sheet_count: usize) -> Result<Vec<Vec<Workshe
                                 buffer: buf,
                                 positioning: "oneCell".to_string(),
                                 anchor,
+                                ext_size: ext_sz,
                                 media_index: 0,
                             });
                         }
@@ -1977,13 +1978,15 @@ fn parse_sheet_images(data: &[u8], sheet_count: usize) -> Result<Vec<Vec<Workshe
     Ok(per_sheet)
 }
 
-fn parse_drawing_xml(xml: &str) -> Vec<(String, ImageAnchor)> {
+type DrawingXmlResult = Vec<(String, ImageAnchor, Option<(u32, u32)>)>;
+
+fn parse_drawing_xml(xml: &str) -> DrawingXmlResult {
     use quick_xml::events::Event;
     use quick_xml::Reader;
 
     let mut reader = Reader::from_str(xml);
     let mut buf = Vec::new();
-    let mut out: Vec<(String, ImageAnchor)> = Vec::new();
+    let mut out: DrawingXmlResult = Vec::new();
     let mut cur = ImageAnchor {
         anchor_type: AnchorType::OneCell,
         col: 0,
@@ -1998,6 +2001,7 @@ fn parse_drawing_xml(xml: &str) -> Vec<(String, ImageAnchor)> {
     let mut in_from = false;
     let mut in_to = false;
     let mut embed_rid: Option<String> = None;
+    let mut current_ext: Option<(u32, u32)> = None;
     let mut events: u64 = 0;
     loop {
         buf.clear();
@@ -2020,6 +2024,7 @@ fn parse_drawing_xml(xml: &str) -> Vec<(String, ImageAnchor)> {
                         y2: 0,
                     };
                     embed_rid = None;
+                    current_ext = None;
                 }
                 b"xdr:twoCellAnchor" => {
                     cur = ImageAnchor {
@@ -2034,6 +2039,7 @@ fn parse_drawing_xml(xml: &str) -> Vec<(String, ImageAnchor)> {
                         y2: 0,
                     };
                     embed_rid = None;
+                    current_ext = None;
                 }
                 b"xdr:from" => in_from = true,
                 b"xdr:to" => in_to = true,
@@ -2069,6 +2075,21 @@ fn parse_drawing_xml(xml: &str) -> Vec<(String, ImageAnchor)> {
                         cur.y2 = v;
                     }
                 }
+                b"xdr:ext" => {
+                    for attr in e.attributes().flatten() {
+                        match attr.key.as_ref() {
+                            b"cx" => {
+                                let v: u32 = std::str::from_utf8(&attr.value).unwrap_or("0").parse().unwrap_or(0);
+                                current_ext = Some((v, current_ext.unwrap_or((0, 0)).1));
+                            }
+                            b"cy" => {
+                                let v: u32 = std::str::from_utf8(&attr.value).unwrap_or("0").parse().unwrap_or(0);
+                                current_ext = Some((current_ext.unwrap_or((0, 0)).0, v));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
                 b"a:blip" => {
                     for attr in e.attributes().flatten() {
                         if attr.key.as_ref() == b"r:embed" {
@@ -2083,7 +2104,7 @@ fn parse_drawing_xml(xml: &str) -> Vec<(String, ImageAnchor)> {
                 b"xdr:to" => in_to = false,
                 b"xdr:pic" => {
                     if let Some(rid) = embed_rid.take() {
-                        out.push((rid, cur.clone()));
+                        out.push((rid, cur.clone(), current_ext.take()));
                     }
                 }
                 _ => {}

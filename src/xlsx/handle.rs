@@ -416,20 +416,14 @@ mod tests {
 
     #[test]
     fn test_roundtrip_images() {
-        use crate::model::image::{AddImageOptions, ImageAnchor, NapiBuffer};
+        use crate::model::image::{AddImageOptions, AnchorPoint, ImageAnchorInput, NapiBuffer};
 
         let mut inner = WorkbookInner::new();
         let ws = inner.add_worksheet("Sheet1".into());
-        let anchor = ImageAnchor {
-            anchor_type: "oneCell".into(),
-            col: 1,
-            row: 2,
-            x: 0,
-            y: 0,
-            col2: 0,
-            row2: 0,
-            x2: 0,
-            y2: 0,
+        let anchor = ImageAnchorInput {
+            tl: AnchorPoint { col: 1.0, row: 2.0 },
+            br: Some(AnchorPoint { col: 4.0, row: 6.0 }),
+            ext: None,
         };
         let _ = ws.add_image(AddImageOptions {
             extension: "png".into(),
@@ -447,27 +441,23 @@ mod tests {
         assert_eq!(imgs.len(), 1);
         assert_eq!(imgs[0].extension, "png");
         assert_eq!(imgs[0].buffer.0, vec![1, 2, 3, 4, 5]);
-        assert_eq!(imgs[0].anchor.col, 1);
-        assert_eq!(imgs[0].anchor.row, 2);
+        assert_eq!(imgs[0].anchor.tl.col, 1.0);
+        assert_eq!(imgs[0].anchor.tl.row, 2.0);
+        assert_eq!(imgs[0].anchor.br.as_ref().unwrap().col, 4.0);
+        assert_eq!(imgs[0].anchor.br.as_ref().unwrap().row, 6.0);
     }
 
     #[test]
     fn test_roundtrip_images_mismatched_drawing_number() {
-        use crate::model::image::{AddImageOptions, ImageAnchor, NapiBuffer};
+        use crate::model::image::{AddImageOptions, AnchorPoint, ImageAnchorInput, NapiBuffer};
         use std::io::{Cursor, Read, Write};
 
         let mut inner = WorkbookInner::new();
         let ws = inner.add_worksheet("Sheet1".into());
-        let anchor = ImageAnchor {
-            anchor_type: "oneCell".into(),
-            col: 1,
-            row: 2,
-            x: 0,
-            y: 0,
-            col2: 0,
-            row2: 0,
-            x2: 0,
-            y2: 0,
+        let anchor = ImageAnchorInput {
+            tl: AnchorPoint { col: 1.0, row: 2.0 },
+            br: Some(AnchorPoint { col: 4.0, row: 6.0 }),
+            ext: None,
         };
         let _ = ws.add_image(AddImageOptions {
             extension: "png".into(),
@@ -514,6 +504,61 @@ mod tests {
         let imgs = re.worksheets()[0].get_images();
         assert_eq!(imgs.len(), 1, "image should be resolved via drawing2 rels");
         assert_eq!(imgs[0].extension, "png");
+    }
+
+    #[test]
+    fn test_roundtrip_images_onecell_ext() {
+        use crate::model::image::{AddImageOptions, AnchorPoint, ImageAnchorInput, ImageSize, NapiBuffer};
+        use std::io::Read;
+
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("Sheet1".into());
+        let anchor = ImageAnchorInput {
+            tl: AnchorPoint { col: 1.0, row: 1.0 },
+            br: None,
+            ext: Some(ImageSize {
+                width: 120.0,
+                height: 60.0,
+            }),
+        };
+        let _ = ws.add_image(AddImageOptions {
+            extension: "png".into(),
+            buffer: NapiBuffer(vec![1, 2, 3, 4, 5]),
+            image_type: None,
+            positioning: Some("oneCell".into()),
+            anchor,
+        });
+
+        let bytes = crate::writer::xlsx::workbook_to_bytes(&inner).unwrap();
+
+        // Verify raw XML contains xdr:ext
+        use std::io::Cursor;
+        let mut arc = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut found_ext = false;
+        for i in 0..arc.len() {
+            let entry = arc.by_index(i).unwrap();
+            if entry.name().starts_with("xl/drawings/drawing") {
+                let mut s = String::new();
+                let mut e = entry;
+                let _ = e.read_to_string(&mut s);
+                if s.contains("xdr:ext cx=\"1143000\" cy=\"571500\"") {
+                    found_ext = true;
+                }
+            }
+        }
+        assert!(found_ext, "expected <xdr:ext cx=1143000 cy=571500> in drawing XML");
+
+        // Verify round-trip preserves ext
+        let re = crate::reader::xlsx::workbook_inner_from_bytes(&bytes).unwrap();
+        let rws = &re.worksheets()[0];
+        let imgs = rws.get_images();
+        assert_eq!(imgs.len(), 1);
+        let anchor_out = &imgs[0].anchor;
+        assert!(anchor_out.ext.is_some(), "expected ext to be preserved");
+        let ext_out = anchor_out.ext.as_ref().unwrap();
+        assert!((ext_out.width - 120.0).abs() < 0.001, "width mismatch");
+        assert!((ext_out.height - 60.0).abs() < 0.001, "height mismatch");
+        assert!(anchor_out.br.is_none(), "expected br to be None for one-cell");
     }
 
     // ---- helpers ----

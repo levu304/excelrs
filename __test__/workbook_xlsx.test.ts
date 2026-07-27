@@ -1,6 +1,6 @@
 import { test, expect } from 'vitest'
 import ExcelJS from 'exceljs'
-import { Workbook, AnchorType } from '../index'
+import { Workbook } from '../index'
 
 // ---------------------------------------------------------------------------
 // Workbook.xlsx read — end-to-end (Phase 2 regression)
@@ -372,15 +372,8 @@ test('getImages returns buffer as a real Buffer at runtime', () => {
     buffer: buf,
     positioning: 'oneCell',
     anchor: {
-      anchorType: AnchorType.OneCell,
-      col: 1,
-      row: 1,
-      x: 0,
-      y: 0,
-      col2: 1,
-      row2: 1,
-      x2: 0,
-      y2: 0,
+      tl: { col: 1, row: 1 },
+      br: { col: 6, row: 4 },
     },
   })
 

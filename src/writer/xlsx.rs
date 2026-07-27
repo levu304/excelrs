@@ -578,6 +578,10 @@ fn write_drawing_xml<W: Write>(w: &mut W, images: &[WorksheetImage]) -> Result<(
         let mut body = String::new();
         body.push_str(open);
         body.push_str(&from);
+        if a.anchor_type == AnchorType::OneCell {
+            let (cx, cy) = img.ext_size.unwrap_or((0, 0));
+            body.push_str(&format!("<xdr:ext cx=\"{cx}\" cy=\"{cy}\"/>"));
+        }
         if a.anchor_type == AnchorType::TwoCell {
             body.push_str(&format!(
                 "<xdr:to><xdr:col>{}</xdr:col><xdr:colOff>{}</xdr:colOff><xdr:row>{}</xdr:row><xdr:rowOff>{}</xdr:rowOff></xdr:to>",

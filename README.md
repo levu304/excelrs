@@ -106,11 +106,23 @@ See [docs/spec.md](docs/spec.md) for the full API specification.
 > **ExcelJS compat note — Images:** ExcelJS places `addImage` on the
 > `Workbook` (two-step: `workbook.addImage(buffer) → imageId` then
 > `worksheet.addImage(imageId, range)`). excelrs places it on `Worksheet`
-> as a single call:
+> as a single call.
+>
+> The anchor shape also differs: ExcelJS uses `{ tl: {col,row}, br: {col,row} }`
+> while excelrs uses the same ExcelJS shape via `ImageAnchorInput` (with
+> `tl`, `br` or `ext`). The anchor type (one-cell vs two-cell) is inferred
+> from whether `br` (two-cell) or `ext` (one-cell with explicit size) is
+> provided — no `anchorType` field is needed. `col`/`row` support fractional
+> values (e.g. `5.5`) for sub-cell positioning.
 >
 > ```ts
 > const ws = wb.addWorksheet('Sheet1');
-> ws.addImage({ extension: 'png', buffer, anchor: { col: 1, row: 1 } });
+> // Two-cell anchor (fractional col/row allowed)
+> ws.addImage({ extension: 'png', buffer,
+>   anchor: { tl: { col: 0, row: 0 }, br: { col: 5.5, row: 2.2 } } });
+> // One-cell anchor with explicit size
+> ws.addImage({ extension: 'png', buffer,
+>   anchor: { tl: { col: 1, row: 1 }, ext: { width: 120, height: 60 } } });
 > ```
 >
 > There is no `Workbook.addImage`, `Workbook.getImage`,

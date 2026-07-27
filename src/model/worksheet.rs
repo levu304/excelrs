@@ -761,11 +761,13 @@ impl Worksheet {
     pub fn add_image(&self, opts: AddImageOptions) -> napi::Result<u32> {
         let mut images = self.images.lock().expect("Worksheet images lock poisoned");
         let idx = images.len() as u32;
+        let converted = opts.anchor.to_internal()?;
         images.push(WorksheetImage {
             extension: opts.extension.clone(),
             buffer: opts.buffer.0,
             positioning: opts.positioning.unwrap_or_else(|| "oneCell".to_string()),
-            anchor: opts.anchor,
+            anchor: converted.anchor,
+            ext_size: converted.ext_size,
             media_index: 0,
         });
         Ok(idx)
@@ -782,7 +784,7 @@ impl Worksheet {
                 extension: img.extension.clone(),
                 buffer: super::image::NapiBuffer(img.buffer.clone()),
                 positioning: img.positioning.clone(),
-                anchor: img.anchor.clone(),
+                anchor: img.anchor.to_exceljs_shape(img.ext_size),
             })
             .collect()
     }
