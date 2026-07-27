@@ -161,7 +161,7 @@ pub(crate) struct InternalAnchor {
 impl ImageAnchorInput {
     /// Convert the ExcelJS-shaped anchor to the internal OOXML storage form.
     /// Returns an error when neither `br` nor `ext` is set, or both are set.
-    pub fn to_internal(&self) -> napi::Result<InternalAnchor> {
+    pub(crate) fn to_internal(&self) -> napi::Result<InternalAnchor> {
         match (&self.br, &self.ext) {
             (None, None) => Err(napi::Error::from_reason(
                 "ImageAnchorInput requires exactly one of `br` (two-cell) or `ext` (one-cell); got neither",
