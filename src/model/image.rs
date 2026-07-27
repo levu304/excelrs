@@ -27,9 +27,11 @@ impl FromNapiValue for NapiBuffer {
 
 impl ToNapiValue for NapiBuffer {
     unsafe fn to_napi_value(env: sys::napi_env, val: Self) -> napi::Result<sys::napi_value> {
-        // Returns Array<number>. TS type overridden to Buffer via
-        // #[napi(ts_type = "Buffer")] on field — safe lie.
-        unsafe { <Vec<u8> as ToNapiValue>::to_napi_value(env, val.0) }
+        // Returns a real Node.js Buffer (zero-copy external buffer with GC finalizer).
+        // Per napi.rs docs: Buffer can be created from Vec<u8>; the external buffer's
+        // finalizer frees the Vec on GC, with a copy fallback on Electron (V8 Memory Cage).
+        let buf: Buffer = val.0.into();
+        unsafe { <Buffer as ToNapiValue>::to_napi_value(env, buf) }
     }
 }
 
