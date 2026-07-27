@@ -1965,6 +1965,7 @@ fn parse_sheet_images(data: &[u8], sheet_count: usize) -> Result<Vec<Vec<Workshe
                                 buffer: buf,
                                 positioning: "oneCell".to_string(),
                                 anchor,
+                                ext_size: None,
                                 media_index: 0,
                             });
                         }

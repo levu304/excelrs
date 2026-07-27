@@ -416,20 +416,14 @@ mod tests {
 
     #[test]
     fn test_roundtrip_images() {
-        use crate::model::image::{AddImageOptions, ImageAnchor, NapiBuffer};
+        use crate::model::image::{AddImageOptions, AnchorPoint, ImageAnchorInput, NapiBuffer};
 
         let mut inner = WorkbookInner::new();
         let ws = inner.add_worksheet("Sheet1".into());
-        let anchor = ImageAnchor {
-            anchor_type: "oneCell".into(),
-            col: 1,
-            row: 2,
-            x: 0,
-            y: 0,
-            col2: 0,
-            row2: 0,
-            x2: 0,
-            y2: 0,
+        let anchor = ImageAnchorInput {
+            tl: AnchorPoint { col: 1.0, row: 2.0 },
+            br: Some(AnchorPoint { col: 4.0, row: 6.0 }),
+            ext: None,
         };
         let _ = ws.add_image(AddImageOptions {
             extension: "png".into(),
@@ -447,27 +441,23 @@ mod tests {
         assert_eq!(imgs.len(), 1);
         assert_eq!(imgs[0].extension, "png");
         assert_eq!(imgs[0].buffer.0, vec![1, 2, 3, 4, 5]);
-        assert_eq!(imgs[0].anchor.col, 1);
-        assert_eq!(imgs[0].anchor.row, 2);
+        assert_eq!(imgs[0].anchor.tl.col, 1.0);
+        assert_eq!(imgs[0].anchor.tl.row, 2.0);
+        assert_eq!(imgs[0].anchor.br.as_ref().unwrap().col, 4.0);
+        assert_eq!(imgs[0].anchor.br.as_ref().unwrap().row, 6.0);
     }
 
     #[test]
     fn test_roundtrip_images_mismatched_drawing_number() {
-        use crate::model::image::{AddImageOptions, ImageAnchor, NapiBuffer};
+        use crate::model::image::{AddImageOptions, AnchorPoint, ImageAnchorInput, NapiBuffer};
         use std::io::{Cursor, Read, Write};
 
         let mut inner = WorkbookInner::new();
         let ws = inner.add_worksheet("Sheet1".into());
-        let anchor = ImageAnchor {
-            anchor_type: "oneCell".into(),
-            col: 1,
-            row: 2,
-            x: 0,
-            y: 0,
-            col2: 0,
-            row2: 0,
-            x2: 0,
-            y2: 0,
+        let anchor = ImageAnchorInput {
+            tl: AnchorPoint { col: 1.0, row: 2.0 },
+            br: Some(AnchorPoint { col: 4.0, row: 6.0 }),
+            ext: None,
         };
         let _ = ws.add_image(AddImageOptions {
             extension: "png".into(),

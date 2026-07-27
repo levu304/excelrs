@@ -519,7 +519,7 @@ export declare class Worksheet {
 }
 
 /** Active pane quadrant. */
-export declare const enum ActivePane {
+export declare enum ActivePane {
   BottomLeft = 'BottomLeft',
   BottomRight = 'BottomRight',
   TopLeft = 'TopLeft',
@@ -531,7 +531,7 @@ export interface AddImageOptions {
   buffer: Buffer
   imageType?: string
   positioning?: string
-  anchor: ImageAnchor
+  anchor: ImageAnchorInput
 }
 
 /** Options for `Worksheet.addTable`. */
@@ -577,7 +577,7 @@ export interface Alignment {
 }
 
 /** Horizontal alignment. */
-export declare const enum AlignmentHorizontal {
+export declare enum AlignmentHorizontal {
   Left = 'Left',
   Center = 'Center',
   Right = 'Right',
@@ -586,14 +586,14 @@ export declare const enum AlignmentHorizontal {
 }
 
 /** Vertical alignment. */
-export declare const enum AlignmentVertical {
+export declare enum AlignmentVertical {
   Top = 'Top',
   Middle = 'Middle',
   Bottom = 'Bottom'
 }
 
 /** Anchor type for embedded images. */
-export declare const enum AnchorType {
+export declare enum AnchorType {
   OneCell = 'OneCell',
   TwoCell = 'TwoCell'
 }
@@ -631,7 +631,7 @@ export interface BorderStyle {
 }
 
 /** Border line style per OOXML §18.18.3. */
-export declare const enum BorderStyleStyle {
+export declare enum BorderStyleStyle {
   Thin = 'Thin',
   Medium = 'Medium',
   Thick = 'Thick',
@@ -665,7 +665,7 @@ export interface CellComment {
 }
 
 /** Cell comments display mode. */
-export declare const enum CellComments {
+export declare enum CellComments {
   None = 'None',
   AsDisplayed = 'AsDisplayed',
   AtEnd = 'AtEnd'
@@ -870,7 +870,7 @@ export interface Fill {
 }
 
 /** Fill kind variants matching OOXML pattern fill types. */
-export declare const enum FillKind {
+export declare enum FillKind {
   None = 'None',
   Solid = 'Solid',
   Gradient = 'Gradient'
@@ -898,7 +898,7 @@ export interface GradientStop {
 }
 
 /** Gradient type: linear or path. */
-export declare const enum GradientType {
+export declare enum GradientType {
   Linear = 'Linear',
   Path = 'Path'
 }
@@ -933,23 +933,30 @@ export interface HeaderFooter {
  * `"oneCell"`, use `col`/`row`/`x`/`y`; for `"twoCell"`, `col2`/`row2`/`x2`/`y2`
  * describe the bottom-right corner.
  */
-export interface ImageAnchor {
-  anchorType: AnchorType
+/** ExcelJS-shaped anchor: top-left + exactly one of `br` (two-cell) or `ext` (one-cell). */
+export interface ImageAnchorInput {
+  tl: AnchorPoint
+  br?: AnchorPoint
+  ext?: ImageSize
+}
+
+/** A single anchor point with fractional col/row (ExcelJS-compatible). */
+export interface AnchorPoint {
   col: number
   row: number
-  x: number
-  y: number
-  col2: number
-  row2: number
-  x2: number
-  y2: number
+}
+
+/** Explicit image size in pixels (converted to EMU internally). */
+export interface ImageSize {
+  width: number
+  height: number
 }
 
 export interface ImageInfo {
   extension: string
   buffer: Buffer
   positioning: string
-  anchor: ImageAnchor
+  anchor: ImageAnchorInput
 }
 
 export interface JsStreamCell {
@@ -978,7 +985,7 @@ export interface JsStreamValue {
 }
 
 /** Page orientation. */
-export declare const enum Orientation {
+export declare enum Orientation {
   Portrait = 'Portrait',
   Landscape = 'Landscape'
 }
@@ -1085,7 +1092,7 @@ export interface SheetView {
 }
 
 /** Sheet view pane state. */
-export declare const enum SheetViewState {
+export declare enum SheetViewState {
   Frozen = 'Frozen',
   Split = 'Split'
 }

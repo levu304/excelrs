@@ -8,11 +8,22 @@ TBD - created by archiving change v1-0-0. Update Purpose after archive.
 
 ### Requirement: Worksheet exposes image add/get
 
-A `Worksheet` SHALL expose `addImage(opts)` accepting `{ extension,
-buffer|stream|path, type: "picture", positioning, anchor }` and returning a
-handle, and `getImages()` returning the embedded images. Anchor SHALL support
-one-cell (`{ col, row, x, y }`) and two-cell (`{ tl: {...}, br: {...} }`)
-positioning.
+A `Worksheet` SHALL expose `addImage(opts)` accepting
+`{ extension, buffer|stream|path, type: "picture", positioning, anchor }`
+returning a handle, and `getImages()` returning the embedded images.
+
+The `anchor` field SHALL use the ExcelJS shape: a top-left
+`tl: { col: number, row: number }` point plus **exactly one** of:
+
+- `br: { col: number, row: number }` → a two-cell anchor (image spans tl→br), OR
+- `ext: { width: number, height: number }` → a one-cell anchor sized in pixels.
+
+The anchor type (one-cell / two-cell) SHALL be **inferred** from which field
+is present; there SHALL be no public `anchorType` enum. `col`/`row` SHALL be
+`number` (floats allowed) so sub-cell positioning is expressible.
+`col`/`row` SHALL support fractional values; the fractional part SHALL be
+converted to EMU offsets against default cell dimensions
+(`colOff = fract(col) * 64px * 9525`, `rowOff = fract(row) * 20px * 9525`).
 
 The `buffer` field in `AddImageOptions` SHALL be declared as `Buffer` (not
 `Array<number>`) in the TypeScript type declarations. The `buffer` field in
@@ -21,20 +32,30 @@ SHALL accept both Node.js `Buffer` and `Array<number>` for the `buffer` field.
 At runtime, `getImages()` SHALL return `buffer` as a real Node.js `Buffer`
 (i.e. `Buffer.isBuffer(...) === true`) whose bytes match what was embedded.
 
-#### Scenario: Add an image with Buffer
+#### Scenario: Add image with two-cell anchor (ExcelJS shape)
 
-- **WHEN** `ws.addImage({ extension: "png", buffer: <Buffer>, type: "picture", positioning: "oneCell", anchor: { col: 1, row: 1, x: 0, y: 0 } })`
-- **THEN** `ws.getImages().length === 1` and the returned image reports `extension === "png"` and `buffer` is a `Buffer` matching the input bytes
+- **WHEN** `ws.addImage({ extension: "png", buffer: <Buffer>, type: "picture", positioning: "oneCell", anchor: { tl: { col: 0, row: 0 }, br: { col: 5.5, row: 2.2 } } })`
+- **THEN** `ws.getImages().length === 1`, returned image reports `extension === "png"` and `buffer` is a `Buffer` matching input bytes; a `<twoCellAnchor>` is emitted with `colOff`/`rowOff` derived from the fractional parts (`0.5*64*9525`, `0.2*20*9525`).
 
-#### Scenario: Add an image with number[] (backward compat)
+#### Scenario: Add image with one-cell anchor + explicit size
 
-- **WHEN** `ws.addImage({ extension: "png", buffer: [1, 2, 3], type: "picture", positioning: "oneCell", anchor: { col: 1, row: 1, x: 0, y: 0 } })`
+- **WHEN** `ws.addImage({ extension: "png", buffer: <Buffer>, type: "picture", anchor: { tl: { col: 1, row: 1 }, ext: { width: 120, height: 60 } } })`
+- **THEN** a `<oneCellAnchor>` is emitted with `<xdr:from>` at `col=1,row=1` and `<xdr:ext cx="1143000" cy="571500"/>` (pixels × 9525 EMU).
+
+#### Scenario: Add image with number[] (backward compat)
+
+- **WHEN** `ws.addImage({ extension: "png", buffer: [1, 2, 3], type: "picture", anchor: { tl: { col: 1, row: 1 }, br: { col: 3, row: 3 } } })`
 - **THEN** the call does NOT throw at runtime and the image is stored correctly
 
-#### Scenario: AddImageOptions.buffer accepts Buffer type in TS
+#### Scenario: AddImageOptions.anchor accepts ExcelJS shape in TS
 
-- **WHEN** a TypeScript project calls `ws.addImage({ ... buffer: x })` where `x` is a Node.js `Buffer`
-- **THEN** the TypeScript compiler does NOT emit type error TS2739 or TS2345 about `buffer`
+- **WHEN** a TypeScript project calls `ws.addImage({ extension: "png", buffer: <Buffer>, anchor: { tl: { col: 0, row: 0 }, br: { col: 5.5, row: 2.2 } } })`
+- **THEN** the TypeScript compiler does NOT emit type error TS2739 or TS2345; no `anchorType` field is required.
+
+#### Scenario: Missing br and ext is rejected
+
+- **WHEN** `ws.addImage({ extension: "png", buffer: <Buffer>, anchor: { tl: { col: 0, row: 0 } } })`
+- **THEN** the call returns an `Err` (or throws) stating that exactly one of `br`/`ext` is required; no image is added.
 
 #### Scenario: getImages returns buffer as Buffer type
 
@@ -43,8 +64,13 @@ At runtime, `getImages()` SHALL return `buffer` as a real Node.js `Buffer`
 
 #### Scenario: getImages returns buffer as a real Buffer at runtime
 
-- **WHEN** `ws.addImage({ extension: "png", buffer: <Buffer>, type: "picture", positioning: "oneCell", anchor: { col: 1, row: 1, x: 0, y: 0 } })` then `ws.getImages()`
+- **WHEN** `ws.addImage({ extension: "png", buffer: <Buffer>, type: "picture", anchor: { tl: { col: 1, row: 1 }, br: { col: 3, row: 3 } } })` then `ws.getImages()`
 - **THEN** `Buffer.isBuffer(ws.getImages()[0].buffer)` is `true` and its bytes equal the input bytes
+
+#### Scenario: getImages returns ExcelJS-shaped anchor
+
+- **WHEN** an image anchored at `{ tl: { col: 2, row: 3 }, br: { col: 6, row: 8 } }` is read back
+- **THEN** `ws.getImages()[0].anchor` reports `tl: { col: 2, row: 3 }` and `br: { col: 6, row: 8 }` (within float precision).
 
 ### Requirement: Writer embeds media and emits drawing part
 
@@ -79,5 +105,5 @@ relationship SHALL report no images.
 
 #### Scenario: Round-trip preserves anchor
 
-- **WHEN** an image was anchored at `{ col: 2, row: 3 }` and the workbook is read back
-- **THEN** the read-back image's anchor reports `col === 2` and `row === 3`
+- **WHEN** an image was anchored at `{ tl: { col: 2, row: 3 }, br: { col: 6, row: 8 } }` and the workbook is read back
+- **THEN** the read-back image's anchor reports `tl.col === 2`, `tl.row === 3`, `br.col === 6`, and `br.row === 8`
