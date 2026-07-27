@@ -11,12 +11,30 @@ use std::sync::{Arc, Mutex};
 use napi_derive::napi;
 
 use super::defined_name::DefinedName;
+use super::header_footer::HeaderFooter;
+use super::page_setup::PageSetup;
+use super::sheet_protection::SheetProtection;
+use super::sheet_view::SheetView;
 use super::workbook_inner::WorkbookInner;
 use super::workbook_view::{CalcProperties, WorkbookView};
 use super::worksheet::Worksheet;
 use crate::csv::WorkbookCsv;
 use crate::stream_handle::WorkbookStream;
 use crate::xlsx::WorkbookXlsx;
+
+/// Options for creating a new worksheet via `Workbook.addWorksheet(name, options?)`.
+///
+/// Mirrors ExcelJS `AddWorksheetOptions`; each field maps to the corresponding
+/// worksheet setter.
+#[napi(object)]
+#[derive(Clone, Debug, Default)]
+pub struct AddWorksheetOptions {
+    pub page_setup: Option<PageSetup>,
+    pub views: Option<Vec<SheetView>>,
+    pub header_footer: Option<HeaderFooter>,
+    pub protection: Option<SheetProtection>,
+    pub auto_filter: Option<String>,
+}
 
 /// Top-level workbook document.
 ///
@@ -42,11 +60,33 @@ impl Workbook {
         }
     }
 
-    /// Add a new worksheet with the given name.
+    /// Add a new worksheet with the given name and optional options.
     /// Returns the created Worksheet.
     #[napi]
-    pub fn add_worksheet(&mut self, name: String) -> Worksheet {
-        self.inner.lock().expect("Workbook lock poisoned").add_worksheet(name)
+    pub fn add_worksheet(&mut self, name: String, options: Option<AddWorksheetOptions>) -> Worksheet {
+        let mut inner = self.inner.lock().expect("Workbook lock poisoned");
+        let ws = inner.add_worksheet(name);
+
+        // Apply options on the returned clone (interior mutability propagates back)
+        if let Some(opts) = options {
+            if let Some(ps) = opts.page_setup {
+                ws.set_page_setup_inner(Some(ps));
+            }
+            if let Some(views) = opts.views {
+                ws.set_views_inner(views);
+            }
+            if let Some(hf) = opts.header_footer {
+                ws.set_header_footer_inner(Some(hf));
+            }
+            if let Some(p) = opts.protection {
+                ws.set_protection_inner(Some(p));
+            }
+            if let Some(af) = opts.auto_filter {
+                ws.set_auto_filter_range(Some(af));
+            }
+        }
+
+        ws
     }
 
     /// Get a worksheet by name (string) or 1-indexed position (number).
@@ -211,7 +251,7 @@ mod tests {
     #[test]
     fn test_add_worksheet() {
         let mut wb = Workbook::new();
-        let ws = wb.add_worksheet("Sheet1".into());
+        let ws = wb.add_worksheet("Sheet1".into(), None);
         assert_eq!(ws.name(), "Sheet1");
         assert_eq!(ws.id(), 1);
         assert_eq!(wb.worksheet_count(), 1);
@@ -220,8 +260,8 @@ mod tests {
     #[test]
     fn test_get_worksheet_by_name() {
         let mut wb = Workbook::new();
-        wb.add_worksheet("Sheet1".into());
-        wb.add_worksheet("Data".into());
+        wb.add_worksheet("Sheet1".into(), None);
+        wb.add_worksheet("Data".into(), None);
 
         let ws = wb.get_worksheet(serde_json::json!("Data"));
         assert!(ws.is_some());
@@ -234,8 +274,8 @@ mod tests {
     #[test]
     fn test_get_worksheet_by_index() {
         let mut wb = Workbook::new();
-        wb.add_worksheet("First".into());
-        wb.add_worksheet("Second".into());
+        wb.add_worksheet("First".into(), None);
+        wb.add_worksheet("Second".into(), None);
 
         let ws = wb.get_worksheet(serde_json::json!(2));
         assert!(ws.is_some());
@@ -248,9 +288,9 @@ mod tests {
     #[test]
     fn test_multiple_worksheets() {
         let mut wb = Workbook::new();
-        wb.add_worksheet("A".into());
-        wb.add_worksheet("B".into());
-        wb.add_worksheet("C".into());
+        wb.add_worksheet("A".into(), None);
+        wb.add_worksheet("B".into(), None);
+        wb.add_worksheet("C".into(), None);
 
         assert_eq!(wb.worksheet_count(), 3);
         let all = wb.worksheets();
@@ -331,10 +371,71 @@ mod tests {
     #[test]
     fn test_workbook_clone_shares_inner() {
         let mut wb = Workbook::new();
-        wb.add_worksheet("Original".into());
+        wb.add_worksheet("Original".into(), None);
         let cloned = wb.clone();
         // Both share the same inner — the clone sees the same state
         assert_eq!(cloned.worksheet_count(), 1);
         assert_eq!(cloned.worksheets()[0].name(), "Original");
+    }
+
+    #[test]
+    fn test_add_worksheet_with_options_applies_page_setup() {
+        use crate::model::page_setup::PageSetup;
+        let mut wb = Workbook::new();
+        let ws = wb.add_worksheet(
+            "Sheet1".into(),
+            Some(AddWorksheetOptions {
+                page_setup: Some(PageSetup {
+                    orientation: Some(crate::model::page_setup::Orientation::Landscape),
+                    paper_size: Some(9),
+                    ..Default::default()
+                }),
+                views: None,
+                header_footer: None,
+                protection: None,
+                auto_filter: None,
+            }),
+        );
+        let ps = ws.page_setup().expect("pageSetup should be set");
+        assert_eq!(ps.orientation, Some(crate::model::page_setup::Orientation::Landscape));
+        assert_eq!(ps.paper_size, Some(9));
+    }
+
+    #[test]
+    fn test_add_worksheet_with_options_applies_all_fields() {
+        use crate::model::page_setup::PageSetup;
+        use crate::model::sheet_view::SheetView;
+        let mut wb = Workbook::new();
+        let ws = wb.add_worksheet(
+            "Sheet1".into(),
+            Some(AddWorksheetOptions {
+                page_setup: Some(PageSetup {
+                    orientation: Some(crate::model::page_setup::Orientation::Portrait),
+                    ..Default::default()
+                }),
+                views: Some(vec![SheetView {
+                    show_grid_lines: Some(false),
+                    ..Default::default()
+                }]),
+                auto_filter: Some("A1:C10".into()),
+                protection: None,
+                header_footer: None,
+            }),
+        );
+        assert!(ws.page_setup().is_some());
+        assert_eq!(ws.views().len(), 1);
+        assert_eq!(ws.views()[0].show_grid_lines, Some(false));
+        assert_eq!(ws.auto_filter().as_deref(), Some("A1:C10"));
+    }
+
+    #[test]
+    fn test_add_worksheet_without_options_unchanged() {
+        let mut wb = Workbook::new();
+        let ws = wb.add_worksheet("Sheet1".into(), None);
+        assert_eq!(ws.name(), "Sheet1");
+        assert!(ws.page_setup().is_none());
+        assert!(ws.views().is_empty());
+        assert!(ws.auto_filter().is_none());
+        assert_eq!(wb.worksheet_count(), 1);
     }
 }

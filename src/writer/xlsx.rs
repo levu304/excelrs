@@ -1098,15 +1098,23 @@ fn emit_sheet_views<W: Write>(w: &mut W, ws: &Worksheet) -> Result<(), ExcelrsEr
     write_str(w, "<sheetViews>")?;
     for sv in &views {
         let state_str = sv.state.as_ref().map(|s| s.to_string());
+        let show_grid_lines_str = sv.show_grid_lines.map(|v| {
+            if v {
+                " showGridLines=\"1\""
+            } else {
+                " showGridLines=\"0\""
+            }
+        });
         write_str(
             w,
             &format!(
-                "<sheetView{}>",
+                "<sheetView{}{}>",
                 if let Some(ref s) = state_str {
                     format!(" state=\"{}\"", escape(s))
                 } else {
                     String::new()
-                }
+                },
+                show_grid_lines_str.unwrap_or_default(),
             ),
         )?;
         let has_pane =
@@ -3316,6 +3324,7 @@ mod tests {
             y_split: Some(1),
             top_left_cell: Some("C2".into()),
             active_pane: Some("bottomRight".into()),
+            show_grid_lines: Some(false),
         };
         ws.set_views(vec![sv]);
         assert_eq!(ws.views().len(), 1);
@@ -3359,6 +3368,11 @@ mod tests {
         assert_eq!(ws2.views()[0].state, Some(SheetViewState::Frozen));
         assert_eq!(ws2.views()[0].x_split, Some(2));
         assert_eq!(ws2.views()[0].y_split, Some(1));
+        assert_eq!(
+            ws2.views()[0].show_grid_lines,
+            Some(false),
+            "showGridLines should round-trip"
+        );
 
         // Assert protection survived
         let read_sp = ws2.protection();

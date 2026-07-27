@@ -190,10 +190,10 @@ export declare class StreamWriter {
 export declare class Workbook {
   constructor()
   /**
-   * Add a new worksheet with the given name.
+   * Add a new worksheet with the given name and optional options.
    * Returns the created Worksheet.
    */
-  addWorksheet(name: string): Worksheet
+  addWorksheet(name: string, options?: AddWorksheetOptions): Worksheet
   /**
    * Get a worksheet by name (string) or 1-indexed position (number).
    * Returns `None` if not found.
@@ -1055,6 +1055,20 @@ export interface SheetProtection {
   saltValue?: string
 }
 
+/** Options for creating a new worksheet. */
+export interface AddWorksheetOptions {
+  /** Page setup (orientation, paper size, etc.). */
+  pageSetup?: PageSetup
+  /** Sheet view descriptors (freeze/split panes, grid lines). */
+  views?: Array<SheetView>
+  /** Header/footer configuration. */
+  headerFooter?: HeaderFooter
+  /** Sheet protection flags. */
+  protection?: SheetProtection
+  /** Auto-filter range (e.g. "A1:C10"). */
+  autoFilter?: string
+}
+
 /** A single sheet view descriptor, mirroring a `<sheetView><pane>` pair. */
 export interface SheetView {
   /** Pane state: `"frozen"` | `"split"` | absent. */
@@ -1067,6 +1081,8 @@ export interface SheetView {
   topLeftCell?: string
   /** Active pane identifier: "bottomLeft", "bottomRight", "topLeft", "topRight". */
   activePane?: ActivePane
+  /** Whether to show grid lines in this sheet view. Omitted defaults to true. */
+  showGridLines?: boolean
 }
 
 /** Sheet view pane state. */
