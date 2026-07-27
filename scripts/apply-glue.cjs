@@ -70,6 +70,11 @@ function processFile(filePath) {
 const filePath = process.argv[2]
 if (filePath) {
   processFile(filePath)
+  // Also ensure index.d.ts gets getCell overloads when index.js is piped
+  if (path.basename(filePath) === 'index.js') {
+    const dtsPath = path.join(path.dirname(filePath), 'index.d.ts')
+    if (fs.existsSync(dtsPath)) processFile(dtsPath)
+  }
 } else {
   // Fallback: patch index.js and index.d.ts in cwd
   for (const f of ['index.js', 'index.d.ts']) {
