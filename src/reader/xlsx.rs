@@ -767,6 +767,7 @@ fn parse_views_from_xml(xml: &str) -> Vec<crate::model::sheet_view::SheetView> {
                             }
                         }
                         b"topLeftCell" => sv.top_left_cell = Some(String::from_utf8_lossy(&attr.value).into_owned()),
+                        b"showGridLines" => sv.show_grid_lines = parse_boolean_flag(&attr.value),
                         _ => {}
                     }
                 }

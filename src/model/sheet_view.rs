@@ -79,6 +79,8 @@ pub struct SheetView {
     pub top_left_cell: Option<String>,
     /// Active pane identifier: "bottomLeft", "bottomRight", "topLeft", "topRight".
     pub active_pane: Option<ActivePane>,
+    /// Whether to show grid lines. Omitted (None) means use the OOXML default (true).
+    pub show_grid_lines: Option<bool>,
 }
 
 #[cfg(test)]
@@ -101,6 +103,7 @@ mod tests {
             y_split: Some(2),
             top_left_cell: Some("B3".into()),
             active_pane: Some("bottomRight".into()),
+            show_grid_lines: None,
         };
         assert_eq!(sv.state, Some(SheetViewState::Frozen));
         assert_eq!(sv.x_split, Some(1));
