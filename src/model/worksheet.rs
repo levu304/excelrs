@@ -763,7 +763,7 @@ impl Worksheet {
         let idx = images.len() as u32;
         images.push(WorksheetImage {
             extension: opts.extension.clone(),
-            buffer: opts.buffer,
+            buffer: opts.buffer.0,
             positioning: opts.positioning.unwrap_or_else(|| "oneCell".to_string()),
             anchor: opts.anchor,
             media_index: 0,
@@ -780,7 +780,7 @@ impl Worksheet {
             .iter()
             .map(|img| ImageInfo {
                 extension: img.extension.clone(),
-                buffer: img.buffer.clone(),
+                buffer: super::image::NapiBuffer(img.buffer.clone()),
                 positioning: img.positioning.clone(),
                 anchor: img.anchor.clone(),
             })
