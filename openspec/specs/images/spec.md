@@ -18,6 +18,8 @@ The `buffer` field in `AddImageOptions` SHALL be declared as `Buffer` (not
 `Array<number>`) in the TypeScript type declarations. The `buffer` field in
 `ImageInfo` SHALL likewise be declared as `Buffer`. At runtime, `addImage`
 SHALL accept both Node.js `Buffer` and `Array<number>` for the `buffer` field.
+At runtime, `getImages()` SHALL return `buffer` as a real Node.js `Buffer`
+(i.e. `Buffer.isBuffer(...) === true`) whose bytes match what was embedded.
 
 #### Scenario: Add an image with Buffer
 
@@ -38,6 +40,11 @@ SHALL accept both Node.js `Buffer` and `Array<number>` for the `buffer` field.
 
 - **WHEN** a TypeScript project calls `ws.getImages()[0].buffer`
 - **THEN** the TypeScript compiler resolves the type as `Buffer`
+
+#### Scenario: getImages returns buffer as a real Buffer at runtime
+
+- **WHEN** `ws.addImage({ extension: "png", buffer: <Buffer>, type: "picture", positioning: "oneCell", anchor: { col: 1, row: 1, x: 0, y: 0 } })` then `ws.getImages()`
+- **THEN** `Buffer.isBuffer(ws.getImages()[0].buffer)` is `true` and its bytes equal the input bytes
 
 ### Requirement: Writer embeds media and emits drawing part
 
