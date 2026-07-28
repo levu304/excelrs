@@ -2500,6 +2500,115 @@ mod tests {
         assert_eq!(style.num_fmt.as_deref(), Some("0.00%"));
     }
 
+    /// Border-only cells survive write → read round-trip without leaking a fill.
+    /// Regression test for `patternType="solid"` default fill bug.
+    #[test]
+    fn test_round_trip_no_fill() {
+        use crate::model::style::{Border, BorderStyle, BorderStyleStyle, Style};
+
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("NoFill".into());
+        ws.add_row(vec![serde_json::json!("border-only")]);
+
+        // Set border-only style (NO fill)
+        ws.set_cell_style(
+            1,
+            1,
+            Some(Style {
+                border: Some(Border {
+                    bottom: Some(BorderStyle {
+                        style: BorderStyleStyle::Thick,
+                        color: None,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+
+        // Write with excelrs
+        let bytes = crate::writer::xlsx::workbook_to_bytes(&inner).unwrap();
+
+        // Read back with excelrs
+        let read_back = workbook_inner_from_bytes(&bytes).unwrap();
+        let ws = &read_back.worksheets()[0];
+        let cell = ws.get_cell_by_address("A1".into());
+
+        let style = cell.style().expect("style should round-trip");
+        // The fill must be None — no fill was set on this cell
+        assert!(
+            style.fill.is_none(),
+            "border-only cell must not have a fill: {:?}",
+            style.fill
+        );
+    }
+
+    /// Mixed cells (one with explicit fill, one border-only) round-trip without
+    /// cross-contamination.
+    #[test]
+    fn test_round_trip_mixed_fill() {
+        use crate::model::style::{Border, BorderStyle, BorderStyleStyle, Style};
+
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("MixedFill".into());
+
+        // Row 1: explicit fill
+        ws.add_row(vec![serde_json::json!("filled")]);
+        ws.set_cell_style(
+            1,
+            1,
+            Some(Style {
+                fill: Some(Fill {
+                    kind: "solid".into(),
+                    foreground: Some("FFFFFF00".into()), // yellow
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+
+        // Row 2: border-only (no fill)
+        ws.add_row(vec![serde_json::json!("bordered")]);
+        ws.set_cell_style(
+            2,
+            1,
+            Some(Style {
+                border: Some(Border {
+                    bottom: Some(BorderStyle {
+                        style: BorderStyleStyle::Thick,
+                        color: None,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+
+        let bytes = crate::writer::xlsx::workbook_to_bytes(&inner).unwrap();
+        let read_back = workbook_inner_from_bytes(&bytes).unwrap();
+        let ws = &read_back.worksheets()[0];
+
+        // A1 (explicit fill) must have fill
+        let cell_a1 = ws.get_cell_by_address("A1".into());
+        let style_a1 = cell_a1.style().expect("A1 style should round-trip");
+        assert!(style_a1.fill.is_some(), "A1 with explicit fill must have fill");
+        assert_eq!(style_a1.fill.as_ref().unwrap().foreground.as_deref(), Some("FFFFFF00"));
+
+        // A2 (border-only) must NOT have fill
+        let cell_a2 = ws.get_cell_by_address("A2".into());
+        let style_a2 = cell_a2.style().expect("A2 style should round-trip");
+        assert!(
+            style_a2.fill.is_none(),
+            "A2 with border-only must not have a fill: {:?}",
+            style_a2.fill
+        );
+    }
+
     // -- Regression: getCell().style / .value persist through round-trip (v0.4.0) --
 
     /// Write a workbook where styles and values are set via `getCell().style = {...}`

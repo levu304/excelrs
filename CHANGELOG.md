@@ -1,6 +1,31 @@
 # Changelog
 <!-- Release process: tag-driven from main. `git tag -a vX.Y.Z -m "..."` then push the tag. -->
 
+## [2.4.2] - 2026-07-28
+
+### Fixed
+
+- Default fill emits `patternType="none"` instead of `"solid"`. Border-only styles
+  no longer leak an unwanted fill in Excel.
+
+## [2.4.1] - 2026-07-28
+
+### Fixed
+
+- Type-safe `setColumns` using `ColumnInput` type
+
+### Documentation
+
+- Document that `columns` is getter-only vs ExcelJS
+
+## [2.4.0] - 2026-07-27
+
+### Fixed
+
+- Anchor shape: matches ExcelJS `{tl, br}/{tl, ext}` pattern
+- `ImageAnchorInput::to_internal` made pub(crate) to avoid `private_interfaces` lint
+- Parse `xdr:ext` on read so one-cell image sizes round-trip
+
 ## [2.3.2] - 2026-07-27
 
 ### Added
@@ -19,11 +44,13 @@
 ## [2.3.0] - 2026-07-26
 
 ### Added
+
 - Typed enum declarations for string-literal fields (FillKind, GradientType, BorderStyleStyle, AlignmentHorizontal, AlignmentVertical, AnchorType, SheetViewState, ActivePane, Orientation, CellComments)
 - TypeScript overlay types (CellValue, CfRule, DataValidation, CfvoType, CfRuleOperator, CfRuleType, CfTimePeriod, DataValidationType, DataValidationOperator, DataValidationErrorStyle, CellValueType, SheetViewState) via enums.d.ts
 - 7 missing OOXML border styles: Hair, DashDot, DashDotDot, MediumDashDot, SlantDashDot, MediumDashed, MediumDashDotDot
 
 ### Fixed
+
 - FillKind::Pattern removed (invalid OOXML ST_PatternType). Fill.pattern now stores raw OOXML pattern type name, emitted as-is in XML
 - Fill emission: fill.pattern plumbed through reader and writer for both regular fills and DXF fills
 - AlignmentVertical::Middle Display changed from "middle" to "center" (OOXML correct)
@@ -31,6 +58,7 @@
 ## [2.3.1] - 2026-07-26
 
 ### Fixed
+
 - Release CI: napi enum smoke test uses PascalCase FillKind values
 - Release CI: napi enum validation step added to build jobs (catches binding issues before publish)
 
@@ -607,6 +635,12 @@ first fully working release; v0.2.0 and v0.2.1 are superseded.
   and GitHub Release on tag push.
 - **Documentation** — complete spec (docs/spec.md), two architecture reviews.
 
+[2.4.2]: https://github.com/levu304/excelrs/compare/v2.4.1...v2.4.2
+[2.4.1]: https://github.com/levu304/excelrs/compare/v2.4.0...v2.4.1
+[2.4.0]: https://github.com/levu304/excelrs/compare/v2.3.2...v2.4.0
+[2.3.2]: https://github.com/levu304/excelrs/compare/v2.3.1...v2.3.2
+[2.3.1]: https://github.com/levu304/excelrs/compare/v2.3.0...v2.3.1
+[2.3.0]: https://github.com/levu304/excelrs/compare/v2.2.1...v2.3.0
 [2.2.1]: https://github.com/levu304/excelrs/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/levu304/excelrs/compare/v2.1.1...v2.2.0
 [2.1.1]: https://github.com/levu304/excelrs/compare/v2.1.0...v2.1.1

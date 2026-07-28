@@ -535,7 +535,7 @@ fn emit_fills<W: Write>(w: &mut W, fills: &[Fill]) -> Result<(), ExcelrsError> {
                 )?;
                 write_str(w, "</patternFill>")?;
             } else {
-                let pt = f.pattern.as_deref().unwrap_or("solid");
+                let pt = f.pattern.as_deref().unwrap_or("none");
                 write_str(w, &format!(r#"<patternFill patternType="{}"/>"#, pt))?;
             }
         }
@@ -834,6 +834,22 @@ mod tests {
 
         // Should not contain numFmts (no custom formats)
         assert!(!xml.contains("<numFmts"));
+    }
+
+    /// Default fill emits `patternType="none"` (not `"solid"`) — the bug path.
+    /// Write failing test before applying fix: currently emits `"solid"`.
+    #[test]
+    fn test_default_fill_emits_none() {
+        let table = build_style_table(&[]);
+        let mut buf = Vec::new();
+        emit_styles_xml(&mut buf, &table).unwrap();
+        let xml = String::from_utf8(buf).unwrap();
+
+        // The default fill (index 0) must use "none", not "solid"
+        assert!(
+            xml.contains(r#"patternType="none""#),
+            "default fill must emit patternType=\"none\""
+        );
     }
 
     /// Populated StyleTable with all sub-types.
