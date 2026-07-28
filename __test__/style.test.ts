@@ -195,6 +195,79 @@ test('B9: three distinct styles produce correct round-trip output', async () => 
   expect(wsjs.getCell('C1').font?.italic).toBe(true)
 })
 
+test('B10: border-only style round-trips through exceljs without leaking fill foreground', async () => {
+  const wb = new Workbook()
+  const ws = wb.addWorksheet('BorderOnly')
+  ws.addRow(['border'])
+  ws.setCellStyle(1, 1, {
+    border: {
+      bottom: { style: BorderStyleStyle.Thick },
+    },
+  })
+
+  const wbjs = await writeThenReadWithExceljs(wb)
+  const wsjs = wbjs.getWorksheet('BorderOnly')!
+  const cell = wsjs.getCell('A1')
+
+  // Border must be present
+  expect(cell.border?.bottom?.style).toBe('thick')
+  // Fill may be present (exceljs always reports a pattern fill), but MUST
+  // have NO foreground color — that's the fix (patternType="none")
+  if (cell.fill) {
+    // If exceljs reports a fill, its fgColor must be absent for patternType="none"
+    expect((cell.fill as { fgColor?: { argb?: string } })?.fgColor?.argb).toBeUndefined()
+  }
+})
+
+test('B11: mixed cells (fill + border-only) round-trip with correct fills', async () => {
+  const wb = new Workbook()
+  const ws = wb.addWorksheet('Mixed')
+  ws.addRow([1, 2])
+  // A1: explicit fill
+  ws.setCellStyle(1, 1, {
+    fill: { kind: FillKind.Solid, foreground: 'FFFFFF00' },
+  })
+  // B1: border-only (no fill)
+  ws.setCellStyle(1, 2, {
+    border: {
+      top: { style: BorderStyleStyle.Thin, color: 'FF000000' },
+    },
+  })
+
+  const wbjs = await writeThenReadWithExceljs(wb)
+  const wsjs = wbjs.getWorksheet('Mixed')!
+
+  // A1: must have fill with foreground color
+  expect((wsjs.getCell('A1').fill as { fgColor?: { argb?: string } })?.fgColor?.argb).toBe('FFFFFF00')
+  // B1: must NOT have a foreground color (border-only, no fill)
+  expect((wsjs.getCell('B1').fill as { fgColor?: { argb?: string } })?.fgColor?.argb).toBeUndefined()
+})
+
+test('B12: font-only and alignment-only styles round-trip without leaking fill foreground', async () => {
+  const wb = new Workbook()
+  const ws = wb.addWorksheet('FontAlign')
+  ws.addRow([1, 2])
+  // A1: font-only
+  ws.setCellStyle(1, 1, {
+    font: { bold: true },
+  })
+  // B1: alignment-only
+  ws.setCellStyle(1, 2, {
+    alignment: { horizontal: AlignmentHorizontal.Center },
+  })
+
+  const wbjs = await writeThenReadWithExceljs(wb)
+  const wsjs = wbjs.getWorksheet('FontAlign')!
+
+  // A1: font must be present, fill must have NO foreground color
+  expect(wsjs.getCell('A1').font?.bold).toBe(true)
+  expect((wsjs.getCell('A1').fill as { fgColor?: { argb?: string } })?.fgColor?.argb).toBeUndefined()
+
+  // B1: alignment must be present, fill must have NO foreground color
+  expect(wsjs.getCell('B1').alignment?.horizontal).toBe('center')
+  expect((wsjs.getCell('B1').fill as { fgColor?: { argb?: string } })?.fgColor?.argb).toBeUndefined()
+})
+
 // ---------------------------------------------------------------------------
 // Group C — Column-level style (4 tests)
 // ---------------------------------------------------------------------------
