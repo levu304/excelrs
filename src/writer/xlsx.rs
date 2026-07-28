@@ -1698,6 +1698,24 @@ fn write_cells_with_styles<W: Write>(
     cell_style_indices: &[u32],
     row_style_indices: &[u32],
 ) -> Result<(), ExcelrsError> {
+    // Pre-parse merged ranges once: (anchor_col, anchor_row, end_col, end_row).
+    // Used to skip non-anchor cells that belong to a merged range — Excel
+    // renders the anchor cell's style for the whole range, so emitting
+    // shadow cells with s="0" (Normal) confuses it.
+    let merged_ranges_parsed: Vec<(u32, u32, u32, u32)> = ws
+        .get_merged_ranges()
+        .iter()
+        .filter_map(|range| {
+            let parts: Vec<&str> = range.split(':').collect();
+            if parts.len() != 2 {
+                return None;
+            }
+            let (c1, r1) = crate::types::parse_address(parts[0]).ok()?;
+            let (c2, r2) = crate::types::parse_address(parts[1]).ok()?;
+            Some((c1, r1, c2, r2))
+        })
+        .collect();
+
     let mut cell_si = cell_style_indices.iter();
     let mut row_si = row_style_indices.iter();
     for row in ws.rows() {
@@ -1731,6 +1749,21 @@ fn write_cells_with_styles<W: Write>(
         }
 
         for cell in cells {
+            let address = cell.address();
+            // Skip cells that are inside a merged range but are not the anchor.
+            // Excel renders anchor cell style across the whole range; emitting
+            // non-anchors with s="0" overwrites that in Excel's rendering.
+            if let Ok((cell_col, cell_row)) = crate::types::parse_address(&address) {
+                if merged_ranges_parsed.iter().any(|&(c1, r1, c2, r2)| {
+                    cell_row >= r1
+                        && cell_row <= r2
+                        && cell_col >= c1
+                        && cell_col <= c2
+                        && !(cell_col == c1 && cell_row == r1)
+                }) {
+                    continue;
+                }
+            }
             let style_idx = cell_si
                 .next()
                 .copied()
@@ -2730,6 +2763,118 @@ mod tests {
         let ws = &read.worksheets()[0];
         assert_eq!(ws.is_merged(3, 3), Some("B2:D4".to_string())); // inside
         assert_eq!(ws.is_merged(1, 1), None); // outside
+    }
+
+    /// Merge cells with a border style on the master cell survive
+    /// write → read round-trip.
+    #[test]
+    fn test_merge_cells_with_border_roundtrip() {
+        use crate::model::style::{Border, BorderStyle, BorderStyleStyle};
+
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("MergeBorder".into());
+
+        ws.insert_cell_value(3, 6, CellValue::string("anchor"));
+        ws.merge_cells("F3:K3".into()).unwrap();
+
+        // Set thick bottom border on master cell
+        let mut cell = ws.get_cell_by_rc(3, 6);
+        cell.set_style_raw(Some(Style {
+            border: Some(Border {
+                bottom: Some(BorderStyle {
+                    style: "thick".into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }));
+
+        let bytes = workbook_to_bytes(&inner).unwrap();
+        let read_back = workbook_inner_from_bytes(&bytes).unwrap();
+        let ws = &read_back.worksheets()[0];
+
+        // Merge range preserved
+        let ranges = ws.get_merged_ranges();
+        assert!(
+            ranges.iter().any(|r| r == "F3:K3"),
+            "merged range F3:K3 should round-trip"
+        );
+
+        // Master cell border preserved
+        let cell = ws.get_cell_by_address("F3".into());
+        let style = cell.style().expect("F3 style should round-trip");
+        let border = style.border.expect("border should round-trip");
+        let bottom = border.bottom.expect("bottom border should round-trip");
+        assert_eq!(bottom.style, BorderStyleStyle::Thick);
+
+        // Anchor value preserved
+        assert_eq!(cell.value_raw().string.as_deref(), Some("anchor"));
+    }
+
+    /// Master cell with only a border (no value) — verifies the XML output
+    /// is correct even when the cell has no <v> child.
+    #[test]
+    fn test_merge_cells_border_only_xml() {
+        use crate::model::style::{Border, BorderStyle};
+        use std::io::Read;
+
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("BorderOnly".into());
+
+        ws.merge_cells("F3:K3".into()).unwrap();
+
+        // Set style on master cell — NO value (mirrors user bug report)
+        let mut cell = ws.get_cell_by_rc(3, 6);
+        cell.set_style_raw(Some(Style {
+            border: Some(Border {
+                bottom: Some(BorderStyle {
+                    style: "thick".into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }));
+
+        let bytes = workbook_to_bytes(&inner).unwrap();
+
+        // Extract sheet XML from ZIP
+        let cursor = std::io::Cursor::new(&bytes[..]);
+        let mut archive = zip::ZipArchive::new(cursor).unwrap();
+        let mut sheet_xml = String::new();
+        archive
+            .by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut sheet_xml)
+            .unwrap();
+
+        // Merge range declared
+        assert!(
+            sheet_xml.contains(r#"<mergeCell ref="F3:K3"/>"#),
+            "mergeCell F3:K3 should be in sheet XML"
+        );
+
+        // Cell F3 is emitted with a style attribute (not s="0" since border != Normal)
+        assert!(
+            sheet_xml.contains(r#"c r="F3" s=""#),
+            "F3 should be in sheet XML with a style index"
+        );
+
+        // F3 must NOT have s="0" — the border has bottom:thick, so border_id > 0
+        assert!(
+            !sheet_xml.contains(r#"c r="F3" s="0""#),
+            "F3 should not have Normal style index (border must be applied)"
+        );
+
+        // Cells G3:K3 must NOT be emitted (no value, no style on those cells)
+        for col in ["G", "H", "I", "J", "K"] {
+            let ref_str = format!("c r=\"{col}3\"");
+            assert!(
+                !sheet_xml.contains(&ref_str),
+                "Cell {col}3 should not appear in sheet XML (no value, no style)"
+            );
+        }
     }
 
     /// Row-level style survives a write → read round-trip. The writer emits
