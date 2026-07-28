@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use napi_derive::napi;
 
 use super::cell::{Cell, CellValue};
-use super::column::Column;
+use super::column::{Column, ColumnInput};
 use super::comment::CellComment;
 use super::conditional_formatting::ConditionalFormat;
 use super::data_validation::DataValidation;
@@ -462,19 +462,32 @@ impl Worksheet {
     /// Each column's style is validated (matching `Cell.set_style` behavior).
     /// Replace the worksheet's column definitions.
     ///
-    /// Accepts a JS array of column descriptor objects (header, key, width,
-    /// optional `colNum`, optional hidden, optional style).  Parsed
-    /// server-side via serde.  Each column's style is validated (matching
-    /// `Cell.set_style` behavior).
+    /// Accepts a JS array of `ColumnInput` objects (header, key, width,
+    /// optional `colNum`, optional hidden, optional style). Each column's
+    /// style is validated (matching `Cell.set_style` behavior).
     ///
-    /// `colNum` auto-assignment: columns with `colNum == 0` get sequential
-    /// numbers starting from `max(existing col_nums) + 1` (or 1 if none
-    /// exist).  Duplicate `colNum` values across the same call are rejected.
+    /// `colNum` auto-assignment: columns with `colNum` unset (or 0) get
+    /// sequential numbers starting from `max(existing col_nums) + 1` (or 1
+    /// if none exist).  Duplicate `colNum` values across the same call are
+    /// rejected.
     #[napi]
-    pub fn set_columns(&self, cols: serde_json::Value) -> napi::Result<()> {
+    pub fn set_columns(&self, cols: Vec<ColumnInput>) -> napi::Result<()> {
         let mut columns = self.columns.lock().expect("Worksheet columns lock poisoned");
-        let mut parsed: Vec<Column> =
-            serde_json::from_value(cols).map_err(|e| napi::Error::from_reason(format!("columns: {e}")))?;
+        let mut parsed: Vec<Column> = cols
+            .into_iter()
+            .map(|c| {
+                let mut col = Column::new(
+                    c.header.unwrap_or_default(),
+                    c.key.unwrap_or_default(),
+                    c.width.unwrap_or(0.0),
+                );
+                col.col_num = c.col_num.unwrap_or(0);
+                col.set_hidden(c.hidden.unwrap_or(false));
+                col.outline_level = c.outline_level.unwrap_or(0);
+                col.style = c.style;
+                col
+            })
+            .collect();
 
         // Auto-assign col_num for entries with col_num == 0
         let next_col_num = columns.iter().map(|c| c.col_num()).max().unwrap_or(0) + 1;

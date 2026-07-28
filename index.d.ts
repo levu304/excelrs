@@ -52,6 +52,24 @@ export declare class Cell {
 }
 
 /**
+ * Input type for `Worksheet.setColumns` — a plain JS object with optional fields.
+ * Every property is optional; omitted fields get sensible defaults
+ * (empty string for header/key, 0 for width, auto-assigned colNum, etc.).
+ */
+export interface ColumnInput {
+  /** 1-indexed column position. `undefined` or `0` means auto-assigned. */
+  colNum?: number
+  header?: string
+  key?: string
+  width?: number
+  hidden?: boolean
+  /** Column-level default style. */
+  style?: Style
+  /** Outline/grouping level, clamped to 0–7. */
+  outlineLevel?: number
+}
+
+/**
  * A column definition in a worksheet.
  *
  * Mirrors the exceljs `Column` interface: header label, data-binding key,
@@ -447,7 +465,7 @@ export declare class Worksheet {
    * numbers starting from `max(existing col_nums) + 1` (or 1 if none
    * exist).  Duplicate `colNum` values across the same call are rejected.
    */
-  setColumns(cols: any): void
+  setColumns(cols: Array<ColumnInput>): void
   /**
    * Merge a range of cells (e.g. "A1:C3"). Accepts an A1-style range string.
    * Validates that the range parses to a rectangular area; stores it for

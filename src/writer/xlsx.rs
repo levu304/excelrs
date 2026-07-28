@@ -2241,20 +2241,23 @@ mod tests {
     /// Column style applies to cells in that column that have no explicit style.
     #[test]
     fn test_column_style_applies_to_cells() {
-        use crate::model::column::Column;
+        use crate::model::column::ColumnInput;
 
         let mut ws = Worksheet::new("Col".into());
         ws.set_id(1);
 
         // Column A has its own style
-        let mut col_a = Column::new("A".into(), "a".into(), 10.0);
-        col_a
-            .set_style(Some(Style {
+        let col_a = ColumnInput {
+            header: Some("A".into()),
+            key: Some("a".into()),
+            width: Some(10.0),
+            style: Some(Style {
                 num_fmt: Some("0.00%".into()),
                 ..Default::default()
-            }))
-            .unwrap();
-        ws.set_columns(serde_json::to_value(&[col_a]).unwrap()).unwrap();
+            }),
+            ..Default::default()
+        };
+        ws.set_columns(vec![col_a]).unwrap();
 
         ws.add_row(vec![serde_json::json!(0.123)]); // A1, gets column style
         ws.add_row(vec![serde_json::json!(0.456)]); // A2, gets column style
@@ -2341,7 +2344,7 @@ mod tests {
         let mut ws = Worksheet::new("Outside".into());
         ws.set_id(1);
         // Empty columns array — no column styles
-        ws.set_columns(serde_json::json!([])).unwrap();
+        ws.set_columns(vec![]).unwrap();
 
         ws.add_row(vec![
             serde_json::json!(1),
@@ -2377,14 +2380,18 @@ mod tests {
     /// Column with empty (default) style is treated as no column style.
     #[test]
     fn test_column_empty_style_is_normal() {
-        use crate::model::column::Column;
-
         let mut ws = Worksheet::new("Empty".into());
         ws.set_id(1);
 
         // Column A with a Style::default() (all None)
-        let col_a = Column::new("A".into(), "a".into(), 10.0);
-        ws.set_columns(serde_json::to_value(&[col_a]).unwrap()).unwrap();
+        use crate::model::column::ColumnInput;
+        let col_a = ColumnInput {
+            header: Some("A".into()),
+            key: Some("a".into()),
+            width: Some(10.0),
+            ..Default::default()
+        };
+        ws.set_columns(vec![col_a]).unwrap();
 
         ws.add_row(vec![serde_json::json!(42)]); // A1
 
