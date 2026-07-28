@@ -4,6 +4,29 @@ use napi_derive::napi;
 
 use crate::model::style::{apply_style, Style};
 
+/// Input type for `Worksheet.setColumns` — a plain JS object with optional fields.
+///
+/// Mirrors the `Column` class fields but uses `Option<T>` so every property
+/// is optional in TypeScript.  napi-rs generates a TS interface (not a class)
+/// from `#[napi(object)]`, accepting plain JS objects directly.
+///
+/// Fields not provided by the caller get sensible defaults on the Rust side
+/// (empty string for header/key, 0 for width, etc.).
+#[napi(object)]
+#[derive(Clone, Debug, Default)]
+pub struct ColumnInput {
+    /// 1-indexed column position. `None` or `0` means auto-assigned.
+    pub col_num: Option<u32>,
+    pub header: Option<String>,
+    pub key: Option<String>,
+    pub width: Option<f64>,
+    pub hidden: Option<bool>,
+    /// Column-level default style.
+    pub style: Option<Style>,
+    /// Outline/grouping level, clamped to 0–7.
+    pub outline_level: Option<u8>,
+}
+
 /// A column definition in a worksheet.
 ///
 /// Mirrors the exceljs `Column` interface: header label, data-binding key,
