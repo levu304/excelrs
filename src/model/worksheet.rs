@@ -562,6 +562,18 @@ impl Worksheet {
         self.get_merged_ranges()
     }
 
+    /// Parse a merge range string like "F3:K3" into (col1, row1, col2, row2).
+    /// Returns `None` if the range string is malformed or unparseable.
+    fn parse_merge_range(&self, range: &str) -> Option<(u32, u32, u32, u32)> {
+        let parts: Vec<&str> = range.split(':').collect();
+        if parts.len() != 2 {
+            return None;
+        }
+        let (c1, r1) = crate::types::parse_address(parts[0]).ok()?;
+        let (c2, r2) = crate::types::parse_address(parts[1]).ok()?;
+        Some((c1, r1, c2, r2))
+    }
+
     /// Query whether the 1-indexed (row, col) lies inside any merged range.
     /// Returns the enclosing range string (e.g. `"B2:D4"`) if so, else `None`.
     /// Read companion to `mergedRanges`; closes the ExcelJS per-cell merged-state
@@ -569,14 +581,10 @@ impl Worksheet {
     #[napi]
     pub fn is_merged(&self, row: u32, col: u32) -> Option<String> {
         for range in self.get_merged_ranges() {
-            let parts: Vec<&str> = range.split(':').collect();
-            if parts.len() != 2 {
-                continue;
-            }
-            let (c1, r1) = crate::types::parse_address(parts[0]).ok()?;
-            let (c2, r2) = crate::types::parse_address(parts[1]).ok()?;
-            if col >= c1 && col <= c2 && row >= r1 && row <= r2 {
-                return Some(range);
+            if let Some((c1, r1, c2, r2)) = self.parse_merge_range(&range) {
+                if col >= c1 && col <= c2 && row >= r1 && row <= r2 {
+                    return Some(range);
+                }
             }
         }
         None
@@ -994,6 +1002,18 @@ impl Worksheet {
             .lock()
             .expect("Worksheet merged_ranges lock poisoned")
             .clone()
+    }
+
+    /// Check if (row, col) is the top-left anchor cell of any merged range.
+    pub fn is_cell_merged_anchor(&self, row: u32, col: u32) -> bool {
+        for range in self.get_merged_ranges() {
+            if let Some((c1, r1, ..)) = self.parse_merge_range(&range) {
+                if col == c1 && row == r1 {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Insert a cell value at (row, col) — used by the reader.
@@ -1551,5 +1571,45 @@ mod tests {
         // Re-read via worksheet's internal path — should see the mutation
         let cell_from_ws = ws.get_cell_by_rc(5, 1);
         assert_eq!(cell_from_ws.value_raw().string, Some("Hello!".into()));
+    }
+
+    #[test]
+    fn test_is_cell_merged_anchor() {
+        let ws = Worksheet::new("Test".into());
+        ws.merge_cells("F3:K3".into()).unwrap();
+
+        // F3 is the anchor (top-left) of F3:K3
+        assert!(ws.is_cell_merged_anchor(3, 6), "F3 should be anchor");
+
+        // G3 is inside merge range but not anchor
+        assert!(!ws.is_cell_merged_anchor(3, 7), "G3 should not be anchor");
+
+        // A1 is outside the merge range
+        assert!(!ws.is_cell_merged_anchor(1, 1), "A1 should not be anchor");
+    }
+
+    #[test]
+    fn test_is_cell_merged_anchor_multi_range() {
+        let ws = Worksheet::new("Test".into());
+        ws.merge_cells("A1:B2".into()).unwrap();
+        ws.merge_cells("D4:E5".into()).unwrap();
+
+        // Anchors
+        assert!(ws.is_cell_merged_anchor(1, 1), "A1 anchor of A1:B2");
+        assert!(ws.is_cell_merged_anchor(4, 4), "D4 anchor of D4:E5");
+
+        // Non-anchors
+        assert!(!ws.is_cell_merged_anchor(1, 2), "B1 in A1:B2, not anchor");
+        assert!(!ws.is_cell_merged_anchor(2, 1), "A2 in A1:B2, not anchor");
+        assert!(!ws.is_cell_merged_anchor(5, 5), "E5 in D4:E5, not anchor");
+
+        // Outside both ranges
+        assert!(!ws.is_cell_merged_anchor(3, 3), "C3 outside all ranges");
+    }
+
+    #[test]
+    fn test_is_cell_merged_anchor_no_merges() {
+        let ws = Worksheet::new("Test".into());
+        assert!(!ws.is_cell_merged_anchor(1, 1), "A1 not anchor when no merges");
     }
 }
