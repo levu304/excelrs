@@ -1643,26 +1643,31 @@ fn write_sheet_xml<W: Write>(
 /// with a row-level style (including styled empty rows).
 /// Returns `Err` if `cell_style_indices` is exhausted before the last cell
 /// (writer internal invariant).
-/// Emit a minimal `<cols>` block containing only the grouped columns (those
-/// with `outlineLevel > 0`). When no column is grouped, emit nothing so default
-/// output stays byte-identical to the prior writer (which emitted no `<cols>`).
+/// Emit `<cols>` for every column that has at least one explicit property set
+/// (width, outline level, or hidden). Columns with default values are omitted.
 fn emit_worksheet_cols<W: Write>(w: &mut W, ws: &Worksheet) -> Result<(), ExcelrsError> {
     let cols = ws.columns();
-    let grouped: Vec<_> = cols.into_iter().filter(|c| c.outline_level() > 0).collect();
-    if grouped.is_empty() {
+    let visible: Vec<_> = cols
+        .into_iter()
+        .filter(|c| c.width() != 0.0 || c.outline_level() > 0 || c.hidden())
+        .collect();
+    if visible.is_empty() {
         return Ok(());
     }
-    write_str(w, &format!(r#"<cols count="{}">"#, grouped.len()))?;
-    for c in &grouped {
-        write_str(
-            w,
-            &format!(
-                r#"<col min="{}" max="{}" outlineLevel="{}"/>"#,
-                c.col_num(),
-                c.col_num(),
-                c.outline_level()
-            ),
-        )?;
+    write_str(w, &format!(r#"<cols count="{}">"#, visible.len()))?;
+    for c in &visible {
+        let mut attrs = format!(r#"min="{}" max="{}""#, c.col_num(), c.col_num());
+        if c.width() != 0.0 {
+            attrs.push_str(&format!(r#" width="{}""#, c.width()));
+            attrs.push_str(r#" customWidth="1""#);
+        }
+        if c.outline_level() > 0 {
+            attrs.push_str(&format!(r#" outlineLevel="{}""#, c.outline_level()));
+        }
+        if c.hidden() {
+            attrs.push_str(r#" hidden="1""#);
+        }
+        write_str(w, &format!("<col {attrs}/>"))?;
     }
     write_str(w, "</cols>")?;
     Ok(())
@@ -1707,28 +1712,27 @@ fn write_cells_with_styles<W: Write>(
             .ok_or_else(|| ExcelrsError::Write("row_style_indices exhausted mid-sheet (writer bug)".into()))?;
         let has_row_style = row.style().is_some();
 
-        if cells.is_empty() && !has_row_style {
-            // Skip completely empty rows (no data, no row style)
+        let row_outline = row.outline_level();
+        let row_height = row.height();
+
+        if cells.is_empty() && !has_row_style && row_height.is_none() {
+            // Skip completely empty rows (no data, no row style, no height)
+            // preserving height-only rows so ht attribute round-trips correctly
             continue;
         }
-
-        let row_outline = row.outline_level();
-        // Emit <row> with optional s="N" for row-level style and outlineLevel for grouping
-        if has_row_style && row_outline > 0 {
-            write!(
-                w,
-                r#"<row r="{}" s="{}" outlineLevel="{}">"#,
-                row.number(),
-                row_style_idx,
-                row_outline
-            )?;
-        } else if has_row_style {
-            write!(w, r#"<row r="{}" s="{}">"#, row.number(), row_style_idx)?;
-        } else if row_outline > 0 {
-            write!(w, r#"<row r="{}" outlineLevel="{}">"#, row.number(), row_outline)?;
-        } else {
-            write!(w, r#"<row r="{}">"#, row.number())?;
+        // Build <row> tag with optional attributes: s, outlineLevel, ht
+        let mut row_attrs = format!(r#"r="{}""#, row.number());
+        if has_row_style {
+            row_attrs.push_str(&format!(r#" s="{}""#, row_style_idx));
         }
+        if row_outline > 0 {
+            row_attrs.push_str(&format!(r#" outlineLevel="{}""#, row_outline));
+        }
+        if let Some(h) = row_height {
+            row_attrs.push_str(&format!(r#" ht="{}""#, h));
+            row_attrs.push_str(r#" customHeight="1""#);
+        }
+        write!(w, "<row {row_attrs}>")?;
 
         for cell in cells {
             let address = cell.address();
@@ -3846,6 +3850,125 @@ mod tests {
             val.hyperlink.as_deref(),
             Some("https://example.com"),
             "hyperlink should round-trip"
+        );
+    }
+    // ---- Column width / row height emission tests ----
+
+    #[test]
+    fn test_column_widths_emitted_in_xml() {
+        use crate::model::column::ColumnInput;
+        use std::io::{Cursor, Read};
+
+        let mut ws = Worksheet::new("Widths".into());
+        ws.set_id(1);
+        ws.set_columns(vec![
+            ColumnInput {
+                width: Some(15.83),
+                ..Default::default()
+            },
+            ColumnInput {
+                width: Some(14.67),
+                ..Default::default()
+            },
+        ])
+        .unwrap();
+
+        let mut inner = WorkbookInner::new();
+        inner.worksheets.push(ws);
+        let bytes = workbook_to_bytes(&inner).unwrap();
+
+        let mut archive = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut xml = String::new();
+        archive
+            .by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut xml)
+            .unwrap();
+
+        assert!(
+            xml.contains(r##"<col min="1" max="1" width="15.83" customWidth="1"/"##),
+            "col 1 width 15.83 with customWidth should be in XML: {xml}"
+        );
+        assert!(
+            xml.contains(r##"<col min="2" max="2" width="14.67" customWidth="1"/"##),
+            "col 2 width 14.67 with customWidth should be in XML: {xml}"
+        );
+    }
+
+    #[test]
+    fn test_row_heights_emitted_in_xml() {
+        use std::io::{Cursor, Read};
+
+        let mut ws = Worksheet::new("Heights".into());
+        ws.set_id(1);
+        ws.get_row(1).set_height(Some(29.0));
+        ws.get_row(2).set_height(Some(14.0));
+
+        let mut inner = WorkbookInner::new();
+        inner.worksheets.push(ws);
+        let bytes = workbook_to_bytes(&inner).unwrap();
+
+        let mut archive = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut xml = String::new();
+        archive
+            .by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut xml)
+            .unwrap();
+
+        assert!(
+            xml.contains(r##"<row r="1""##) && xml.contains(r##"ht="29""##) && xml.contains(r##"customHeight="1""##),
+            "row 1 ht 29 with customHeight should be in XML: {xml}"
+        );
+        assert!(
+            xml.contains(r##"<row r="2""##) && xml.contains(r##"ht="14""##) && xml.contains(r##"customHeight="1""##),
+            "row 2 ht 14 with customHeight should be in XML: {xml}"
+        );
+    }
+
+    #[test]
+    fn test_non_grouped_columns_with_widths_emit_cols() {
+        use crate::model::column::ColumnInput;
+        use std::io::{Cursor, Read};
+
+        let mut ws = Worksheet::new("NonGrouped".into());
+        ws.set_id(1);
+        // Columns with widths and NO outlineLevel set should still emit <cols>
+        ws.set_columns(vec![
+            ColumnInput {
+                width: Some(10.0),
+                ..Default::default()
+            },
+            ColumnInput {
+                width: Some(20.0),
+                ..Default::default()
+            },
+        ])
+        .unwrap();
+
+        let mut inner = WorkbookInner::new();
+        inner.worksheets.push(ws);
+        let bytes = workbook_to_bytes(&inner).unwrap();
+
+        let mut archive = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut xml = String::new();
+        archive
+            .by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut xml)
+            .unwrap();
+
+        assert!(
+            xml.contains("<cols"),
+            "<cols> must be emitted for non-grouped columns with widths: {xml}"
+        );
+        assert!(
+            xml.contains(r##"<col min="1" max="1" width="10" customWidth="1"/"##),
+            "col 1 width 10 with customWidth should be in XML: {xml}"
+        );
+        assert!(
+            xml.contains(r##"<col min="2" max="2" width="20" customWidth="1"/"##),
+            "col 2 width 20 with customWidth should be in XML: {xml}"
         );
     }
 }
