@@ -53,41 +53,38 @@ test('readXlsxBuffer reads all sheets and cell types', async () => {
 
   // String
   const a1 = ws.getCell('A1')
-  expect(a1.value.valueType).toBe('String')
-  expect(a1.value.string).toBe('Hello')
+  expect(a1.type).toBe('String')
+  expect(a1.value).toBe('Hello')
 
   // Number (int)
   const b1 = ws.getCell('B1')
-  expect(b1.value.valueType).toBe('Number')
-  expect(b1.value.number).toBe(42)
+  expect(b1.type).toBe('Number')
+  expect(b1.value).toBe(42)
 
   // Number (float)
   const c1 = ws.getCell('C1')
-  expect(c1.value.valueType).toBe('Number')
-  expect(c1.value.number).toBeCloseTo(3.14, 2)
+  expect(c1.type).toBe('Number')
+  expect(c1.value as number).toBeCloseTo(3.14, 2)
 
   // Boolean true
   const d1 = ws.getCell('D1')
-  expect(d1.value.valueType).toBe('Boolean')
-  expect(d1.value.boolean).toBe(true)
+  expect(d1.type).toBe('Boolean')
+  expect(d1.value).toBe(true)
 
   // Boolean false
   const e1 = ws.getCell('E1')
-  expect(e1.value.valueType).toBe('Boolean')
-  expect(e1.value.boolean).toBe(false)
+  expect(e1.type).toBe('Boolean')
+  expect(e1.value).toBe(false)
 
   // Null
   const f1 = ws.getCell('F1')
-  expect(f1.value.valueType).toBe('Null')
+  expect(f1.type).toBe('Null')
+  expect(f1.value).toBeNull()
 
-  // Date — now reads as Date type (v0.13.0)
+  // Date — cell.value returns Date primitive (v2.5.0)
   const a2 = ws.getCell('A2')
-  expect(a2.value.valueType).toBe('Date')
-  expect(a2.value.dateSerial).toBeGreaterThan(0)
-  expect(a2.value).not.toBeInstanceOf(Date)
-  expect(typeof a2.value.dateSerial).toBe('number')
-  expect(a2.value.dateSerial!).toBeGreaterThan(0)
-  expect(a2.date).toBeInstanceOf(Date)
+  expect(a2.type).toBe('Date')
+  expect(a2.value).toBeInstanceOf(Date)
 
   // Formula cell — verify formula string is preserved
   const c3 = ws.getCell('C3')
@@ -100,8 +97,8 @@ test('readXlsxBuffer reads all sheets and cell types', async () => {
   // --- Sheet 2: Data ---
   const ws2 = wb.getWorksheet('Data')!
   expect(ws2).not.toBeNull()
-  expect(ws2.getCell('A1').value.string).toBe('Name')
-  expect(ws2.getCell('B1').value.string).toBe('Age')
+  expect(ws2.getCell('A1').value).toBe('Name')
+  expect(ws2.getCell('B1').value).toBe('Age')
 })
 
 // ---------------------------------------------------------------------------
@@ -151,7 +148,7 @@ test('readXlsxFile reads from file path', async () => {
   try {
     await wb.xlsx.readFile(tmpFile)
     expect(wb.worksheetCount).toBe(1)
-    expect(wb.getWorksheet('FileTest')!.getCell('A1').value.number).toBe(99)
+    expect(wb.getWorksheet('FileTest')!.getCell('A1').value).toBe(99)
   } finally {
     try { fs.unlinkSync(tmpFile) } catch { /* ignore */ }
   }
@@ -193,6 +190,6 @@ test('readXlsxBuffer handles long strings', async () => {
   await wb.xlsx.read(buf as never)
 
   const cell = wb.getWorksheet('LongStr')!.getCell('A1')
-  expect(cell.value.valueType).toBe('String')
-  expect(cell.value.string).toBe(longStr)
+  expect(cell.type).toBe('String')
+  expect(cell.value).toBe(longStr)
 })

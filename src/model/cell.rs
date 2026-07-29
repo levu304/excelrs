@@ -16,12 +16,33 @@ use std::sync::{Arc, Mutex};
 
 use napi::bindgen_prelude::{FromNapiValue, JsValue};
 use napi::Env;
+use napi::Unknown;
 use napi_derive::napi;
 
 use crate::error::ExcelrsError;
 use crate::model::comment::CellComment;
 use crate::model::style::{apply_style, Font, Style};
 use crate::types;
+
+// ---------------------------------------------------------------------------
+// CellType
+// ---------------------------------------------------------------------------
+
+/// Discriminant for cell value variants. Mirrors the `value_type` string values.
+#[napi(string_enum)]
+#[derive(Clone, Debug)]
+pub enum CellType {
+    Null,
+    Number,
+    String,
+    Boolean,
+    Date,
+    Formula,
+    Error,
+    Hyperlink,
+    RichText,
+    Merge,
+}
 
 // ---------------------------------------------------------------------------
 // CellValue
@@ -43,7 +64,8 @@ use crate::types;
 /// path so they appear as `Null` when read back (see spec §9.2.1 item 2).
 /// A rich text run: a text fragment with optional font formatting.
 #[napi(object)]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RichTextRun {
     /// Text content for this run.
     pub text: String,
@@ -52,10 +74,14 @@ pub struct RichTextRun {
 }
 
 #[napi(object)]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CellValue {
     /// Discriminant: "Null" | "Number" | "String" | "Boolean" | "Formula" | "Error"
-    /// | "Hyperlink" | "RichText" | "Merge"
+    /// | "Hyperlink" | "RichText" | "Date" | "Merge"
+    #[napi(
+        ts_type = "\"Null\" | \"Number\" | \"String\" | \"Boolean\" | \"Formula\" | \"Error\" | \"Hyperlink\" | \"RichText\" | \"Date\" | \"Merge\""
+    )]
     pub value_type: String,
     pub number: Option<f64>,
     pub string: Option<String>,
@@ -220,18 +246,44 @@ impl Cell {
 
     // -- value (getter + setter) --
 
-    #[napi(getter)]
-    pub fn value(&self) -> napi::Result<CellValue> {
+    #[napi(getter, ts_return_type = "CellValueResult")]
+    pub fn value(&self, env: Env) -> napi::Result<Unknown<'_>> {
         let inner = self.inner.lock().expect("Cell lock poisoned");
         let cv = &inner.value;
-        if cv.value_type == "Date" {
-            Ok(CellValue {
-                value_type: "Date".into(),
-                date_serial: cv.date_serial,
-                ..Default::default()
-            })
-        } else {
-            Ok(cv.clone())
+        match cv.value_type.as_str() {
+            "Number" => Ok(env.to_js_value(&cv.number.unwrap_or(f64::NAN))?),
+            "String" => Ok(env.to_js_value(&cv.string.as_deref().unwrap_or(""))?),
+            "Boolean" => Ok(env.to_js_value(&cv.boolean.unwrap_or(false))?),
+            "Date" => {
+                let serial = cv.date_serial.unwrap_or(0.0);
+                let ms = serial_to_millis(serial) as f64;
+                let d = env.create_date(ms)?;
+                // SAFETY: JsDate lifetime marker is nominal; the underlying napi_value
+                // is valid for the environment's lifetime (same pattern as date getter).
+                let d: napi::JsDate<'static> = unsafe { std::mem::transmute(d) };
+                Ok(d.to_unknown())
+            }
+            "Null" => Ok(env.to_js_value(&serde_json::Value::Null)?),
+            _ => Ok(env.to_js_value(cv)?), // Formula, RichText, Hyperlink, Error, Merge
+        }
+    }
+
+    /// Returns the cell value type discriminant.
+    #[napi(getter, js_name = "type")]
+    pub fn value_type(&self) -> CellType {
+        let inner = self.inner.lock().expect("Cell lock poisoned");
+        match inner.value.value_type.as_str() {
+            "Null" => CellType::Null,
+            "Number" => CellType::Number,
+            "String" => CellType::String,
+            "Boolean" => CellType::Boolean,
+            "Date" => CellType::Date,
+            "Formula" => CellType::Formula,
+            "Error" => CellType::Error,
+            "Hyperlink" => CellType::Hyperlink,
+            "RichText" => CellType::RichText,
+            "Merge" => CellType::Merge,
+            _ => CellType::Null,
         }
     }
 

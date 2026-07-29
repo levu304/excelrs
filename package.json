@@ -1,6 +1,6 @@
 {
   "name": "@levu304/excelrs",
-  "version": "2.4.4",
+  "version": "2.5.0",
   "description": "Native XLSX spreadsheet library for Node.js (Rust port of exceljs)",
   "main": "index.js",
   "types": "index.d.ts",
@@ -16,7 +16,8 @@
       "aarch64-apple-darwin",
       "x86_64-unknown-linux-gnu",
       "x86_64-pc-windows-msvc"
-    ]
+    ],
+    "dtsHeaderFile": "./dts-header.d.ts"
   },
   "scripts": {
     "build": "napi build --platform --js native.js --dts native.d.ts --pipe \"node scripts/apply-glue.cjs\"",

@@ -26,8 +26,8 @@ test('cell.value = { richText: ... } writes and round-trips', async () => {
   await wb2.xlsx.read(buf)
   const cell2 = wb2.getWorksheet('S')!.getCell('A1')
 
-  const result = cell2.value
-  expect(result.valueType).toBe('RichText')
+  expect(cell2.type).toBe('RichText')
+  const result = cell2.value as import('../index').CellValue
   expect(result.richText).toBeDefined()
   expect(result.richText!.length).toBe(2)
   expect(result.richText![0].text).toBe('Hello ')
@@ -58,8 +58,8 @@ test('cell.value = { richText: ... } with full font (user reproduction)', async 
   await wb2.xlsx.read(buf)
   const cell2 = wb2.getWorksheet('S')!.getCell('A1')
 
-  const result = cell2.value
-  expect(result.valueType).toBe('RichText')
+  expect(cell2.type).toBe('RichText')
+  const result = cell2.value as import('../index').CellValue
   expect(result.richText!.length).toBe(2)
   expect(result.richText![0].text).toBe('B: (11) = (7) + (10)\n')
   expect(result.richText![0].font?.name).toBe('Times New Roman')
@@ -82,8 +82,7 @@ test('cell.value = { hyperlink: ... } writes and round-trips', async () => {
   await wb2.xlsx.read(buf)
   const cell2 = wb2.getWorksheet('S')!.getCell('A1')
 
-  const result = cell2.value
-  expect(result.valueType).toBe('Hyperlink')
+  expect(cell2.type).toBe('Hyperlink')
 })
 
 test('cell.value = { formula: ... } sets value type via setter', () => {
@@ -97,9 +96,7 @@ test('cell.value = { formula: ... } sets value type via setter', () => {
 
   // Formula is write-only — value_type is Formula after assign, but
   // XLSX round-trip stores the computed result, not the formula string.
-  const result = cell.value
-  expect(result.valueType).toBe('Formula')
-  expect(result.formula).toBe('SUM(A1:B1)')
+  expect(cell.type).toBe('Formula')
   expect(cell.formula).toBe('SUM(A1:B1)')
 })
 
@@ -136,7 +133,7 @@ test('reassigning a primitive after formula clears the formula', () => {
 
   cell.value = 42
   expect(cell.formula).toBeNull()
-  expect(cell.value.valueType).toBe('Number')
+  expect(cell.type).toBe('Number')
 })
 
 test('primitives still work (no regression)', async () => {
@@ -152,10 +149,10 @@ test('primitives still work (no regression)', async () => {
   const wb2 = new Workbook()
   await wb2.xlsx.read(buf)
 
-  expect(wb2.getWorksheet('S')!.getCell('A1').value.valueType).toBe('Number')
-  expect(wb2.getWorksheet('S')!.getCell('A2').value.valueType).toBe('String')
-  expect(wb2.getWorksheet('S')!.getCell('A3').value.valueType).toBe('Boolean')
-  expect(wb2.getWorksheet('S')!.getCell('A4').value.valueType).toBe('Null')
+  expect(wb2.getWorksheet('S')!.getCell('A1').type).toBe('Number')
+  expect(wb2.getWorksheet('S')!.getCell('A2').type).toBe('String')
+  expect(wb2.getWorksheet('S')!.getCell('A3').type).toBe('Boolean')
+  expect(wb2.getWorksheet('S')!.getCell('A4').type).toBe('Null')
 })
 
 test('Date primitive still works (no regression)', async () => {
@@ -168,5 +165,5 @@ test('Date primitive still works (no regression)', async () => {
   await wb2.xlsx.read(buf)
   const cell = wb2.getWorksheet('S')!.getCell('A1')
 
-  expect(cell.value.valueType).toBe('Date')
+  expect(cell.type).toBe('Date')
 })

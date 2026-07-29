@@ -39,12 +39,7 @@ export interface Row {
   /** Get cell by column letter (JS glue → getCellByColLetter). */
   getCell(col: string): Cell
 }
-// napi generates set value(val: unknown) for the napi::Unknown parameter.
-// This declaration merge narrows it to a union of acceptable types.
-export interface Cell {
-  /** Accepts primitives, CellValue objects, or Date — dispatch by shape. */
-  set value(val: CellValue | string | number | boolean | Date | null)
-}
+
 `
 
 function processFile(filePath) {

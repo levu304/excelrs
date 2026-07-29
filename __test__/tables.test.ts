@@ -22,10 +22,10 @@ test('addTable writes header and data cells (v1.1.0)', () => {
       [4, 5, 6],
     ],
   })
-  expect(ws.getCell('A1').value.string).toBe('A')
-  expect(ws.getCell('C1').value.string).toBe('C')
-  expect(ws.getCell('A2').value.number).toBe(1)
-  expect(ws.getCell('C3').value.number).toBe(6)
+  expect(ws.getCell('A1').value).toBe('A')
+  expect(ws.getCell('C1').value).toBe('C')
+  expect(ws.getCell('A2').value).toBe(1)
+  expect(ws.getCell('C3').value).toBe(6)
 })
 
 test('addTable round-trips through write/read (v1.1.0)', async () => {
@@ -74,16 +74,16 @@ test('getTables lists tables and removeTable leaves cells intact (v1.1.0)', () =
   })
   expect(ws.getTables().length).toBe(1)
   // Cells are populated before removeTable.
-  expect(ws.getCell('A2').value.number).toBe(1)
+  expect(ws.getCell('A2').value).toBe(1)
 
   const ok = ws.removeTable('T1')
   expect(ok).toBe(true)
   expect(ws.getTable('T1')).toBeNull()
   expect(ws.getTables().length).toBe(0)
   // Underlying cells remain intact.
-  expect(ws.getCell('A1').value.string).toBe('A')
-  expect(ws.getCell('A2').value.number).toBe(1)
-  expect(ws.getCell('C3').value.number).toBe(6)
+  expect(ws.getCell('A1').value).toBe('A')
+  expect(ws.getCell('A2').value).toBe(1)
+  expect(ws.getCell('C3').value).toBe(6)
 })
 
 test('duplicate table name is rejected (v1.1.0)', () => {
@@ -217,7 +217,7 @@ test('totals row round-trips (v1.1.0)', async () => {
     ],
     rows: [[1, 2, 3], [4, 5, 6]],
   })
-  expect(ws.getCell('A4').value.string).toBe('Total')
+  expect(ws.getCell('A4').value).toBe('Total')
   const wb2 = await rt(wb)
   const t = wb2.getWorksheet('Sheet1')!.getTable('T1')!
   expect(t).toBeDefined()

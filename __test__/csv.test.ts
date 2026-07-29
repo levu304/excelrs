@@ -30,22 +30,22 @@ test('csv round-trip preserves values', async () => {
   expect(ws2.rowCount).toBe(2)
 
   // Row 1
-  const a1 = ws2.getCellByAddress('A1').value
-  expect(a1.valueType).toBe('Number')
-  expect(a1.number).toBe(1)
+  const a1Cell = ws2.getCellByAddress('A1')
+  expect(a1Cell.type).toBe('Number')
+  expect(a1Cell.value).toBe(1)
 
-  const b1 = ws2.getCellByAddress('B1').value
-  expect(b1.valueType).toBe('String')
-  expect(b1.string).toBe('a')
+  const b1Cell = ws2.getCellByAddress('B1')
+  expect(b1Cell.type).toBe('String')
+  expect(b1Cell.value).toBe('a')
 
   // Row 2
-  const a2 = ws2.getCellByAddress('A2').value
-  expect(a2.valueType).toBe('Number')
-  expect(a2.number).toBe(2)
+  const a2Cell = ws2.getCellByAddress('A2')
+  expect(a2Cell.type).toBe('Number')
+  expect(a2Cell.value).toBe(2)
 
-  const b2 = ws2.getCellByAddress('B2').value
-  expect(b2.valueType).toBe('String')
-  expect(b2.string).toBe('b')
+  const b2Cell = ws2.getCellByAddress('B2')
+  expect(b2Cell.type).toBe('String')
+  expect(b2Cell.value).toBe('b')
 })
 
 test('csv numeric inference on read', async () => {
@@ -53,16 +53,16 @@ test('csv numeric inference on read', async () => {
   await wb.csv.read(Buffer.from('42,hello\n3.14,world'))
 
   const ws = wb.getWorksheet('Sheet1')!
-  const a1 = ws.getCellByAddress('A1').value
-  expect(a1.valueType).toBe('Number')
-  expect(a1.number).toBe(42)
+  const a1Cell = ws.getCellByAddress('A1')
+  expect(a1Cell.type).toBe('Number')
+  expect(a1Cell.value).toBe(42)
 
-  const b1 = ws.getCellByAddress('B1').value
-  expect(b1.valueType).toBe('String')
+  const b1Cell = ws.getCellByAddress('B1')
+  expect(b1Cell.type).toBe('String')
 
-  const a2 = ws.getCellByAddress('A2').value
-  expect(a2.valueType).toBe('Number')
-  expect(a2.number).toBe(3.14)
+  const a2Cell = ws.getCellByAddress('A2')
+  expect(a2Cell.type).toBe('Number')
+  expect(a2Cell.value).toBe(3.14)
 })
 
 test('csv custom delimiter', async () => {
@@ -70,11 +70,11 @@ test('csv custom delimiter', async () => {
   await wb.csv.read(Buffer.from('a;b\n1;2'), ';')
 
   const ws = wb.getWorksheet('Sheet1')!
-  const a1 = ws.getCellByAddress('A1').value
-  expect(a1.string).toBe('a')
+  const a1Cell = ws.getCellByAddress('A1')
+  expect(a1Cell.value).toBe('a')
 
-  const b2 = ws.getCellByAddress('B2').value
-  expect(b2.number).toBe(2)
+  const b2Cell = ws.getCellByAddress('B2')
+  expect(b2Cell.value).toBe(2)
 
   // write with same delimiter
   const out = await wb.csv.write(';', false)
@@ -94,7 +94,7 @@ test('csv write with BOM', async () => {
   const wb2 = new Workbook()
   await wb2.csv.read(buf)
   const ws = wb2.getWorksheet('Sheet1')!
-  expect(ws.getCellByAddress('A1').value.number).toBe(99)
+  expect(ws.getCellByAddress('A1').value).toBe(99)
 })
 
 test('csv write empty workbook produces empty buffer', async () => {
@@ -134,7 +134,7 @@ test('csv read file and write file round-trip', async () => {
 
   const ws = wb2.getWorksheet('Sheet1')!
   expect(ws.rowCount).toBe(1)
-  expect(ws.getCellByAddress('A1').value.number).toBe(1)
+  expect(ws.getCellByAddress('A1').value).toBe(1)
 
   // clean up
   const fs = await import('fs')
