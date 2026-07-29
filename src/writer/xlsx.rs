@@ -1750,6 +1750,13 @@ fn write_cells_with_styles<W: Write>(
 
         for cell in cells {
             let address = cell.address();
+            // Every cell in written_cells() has a corresponding style index,
+            // including non-anchor merged cells. Advance the iterator for
+            // every cell so subsequent cells stay in sync.
+            let style_idx = cell_si
+                .next()
+                .copied()
+                .ok_or_else(|| ExcelrsError::Write("cell_style_indices exhausted mid-sheet (writer bug)".into()))?;
             // Skip cells that are inside a merged range but are not the anchor.
             // Excel renders anchor cell style across the whole range; emitting
             // non-anchors with s="0" overwrites that in Excel's rendering.
@@ -1764,10 +1771,6 @@ fn write_cells_with_styles<W: Write>(
                     continue;
                 }
             }
-            let style_idx = cell_si
-                .next()
-                .copied()
-                .ok_or_else(|| ExcelrsError::Write("cell_style_indices exhausted mid-sheet (writer bug)".into()))?;
             write_cell_xml(w, &cell, string_indices, style_idx)?;
         }
         write_str(w, "</row>")?;
