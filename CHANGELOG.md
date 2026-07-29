@@ -14,6 +14,15 @@
 - Fix column width / row height emission in XLSX writer.
 - Add `customWidth` / `customHeight` OOXML compliance attributes.
 
+## [2.4.4] - 2026-07-30
+
+### Fixed
+
+- Emit full merged-range bounding box in sheetData so anchor borders
+  render across merged ranges.
+- Persist formula set via object-shaped cell value setter; validate
+  `valueType` on dispatch.
+
 ## [2.4.2] - 2026-07-28
 
 ### Fixed
