@@ -20,7 +20,7 @@ use napi_derive::napi;
 
 use crate::error::ExcelrsError;
 use crate::model::comment::CellComment;
-use crate::model::style::{apply_style, Style};
+use crate::model::style::{apply_style, Font, Style};
 use crate::types;
 
 // ---------------------------------------------------------------------------
@@ -278,10 +278,6 @@ impl Cell {
             return Ok(());
         }
 
-        // ponytail: CellValue-object round-trip (cell.value = cell.value for Date
-        // cells) not handled — use cell.value = new Date(...) pattern instead.
-        // serde_json handles null/undefined → Null, numbers/strings/bools correctly.
-        // Objects (including CellValue literals) become Null (pre-existing).
         let json = unsafe { serde_json::Value::from_napi_value(raw_env, raw_val)? };
         let mut inner = self.inner.lock().expect("Cell lock poisoned");
         inner.value = match json {
@@ -300,6 +296,84 @@ impl Cell {
                 boolean: Some(b),
                 ..Default::default()
             },
+            serde_json::Value::Object(obj) => {
+                // Object-shape inference: detect cell-value variant from keys
+                if obj.contains_key("richText") {
+                    let runs = obj
+                        .get("richText")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .map(|item| {
+                                    let text = item.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                    let font = item.get("font").and_then(|v| {
+                                        v.as_object().map(|f| Font {
+                                            name: f.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                            size: f.get("size").and_then(|v| v.as_f64()),
+                                            bold: f.get("bold").and_then(|v| v.as_bool()),
+                                            italic: f.get("italic").and_then(|v| v.as_bool()),
+                                            underline: f.get("underline").and_then(|v| v.as_bool()),
+                                            color: f.get("color").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                            color_theme: None,
+                                            color_tint: None,
+                                        })
+                                    });
+                                    RichTextRun { text, font }
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    CellValue::rich_text(runs)
+                } else if let Some(url) = obj.get("hyperlink").and_then(|v| v.as_str()) {
+                    let text = obj.get("hyperlinkText").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    CellValue::hyperlink(url.to_string(), text)
+                } else if let Some(f) = obj.get("formula").and_then(|v| v.as_str()) {
+                    CellValue::formula(f.to_string())
+                } else if let Some(vt) = obj.get("valueType").and_then(|v| v.as_str()) {
+                    let number = obj.get("number").and_then(|v| v.as_f64());
+                    let string = obj.get("string").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let boolean = obj.get("boolean").and_then(|v| v.as_bool());
+                    let formula = obj.get("formula").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let error_value = obj.get("errorValue").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let hyperlink = obj.get("hyperlink").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let hyperlink_text = obj.get("hyperlinkText").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let date_serial = obj.get("dateSerial").and_then(|v| v.as_f64());
+                    let rich_text = obj.get("richText").and_then(|v| v.as_array()).map(|arr| {
+                        arr.iter()
+                            .map(|item| {
+                                let text = item.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                let font = item.get("font").and_then(|v| {
+                                    v.as_object().map(|f| Font {
+                                        name: f.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                        size: f.get("size").and_then(|v| v.as_f64()),
+                                        bold: f.get("bold").and_then(|v| v.as_bool()),
+                                        italic: f.get("italic").and_then(|v| v.as_bool()),
+                                        underline: f.get("underline").and_then(|v| v.as_bool()),
+                                        color: f.get("color").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                        color_theme: None,
+                                        color_tint: None,
+                                    })
+                                });
+                                RichTextRun { text, font }
+                            })
+                            .collect::<Vec<_>>()
+                    });
+                    CellValue {
+                        value_type: vt.to_string(),
+                        number,
+                        string,
+                        boolean,
+                        formula,
+                        error_value,
+                        hyperlink,
+                        hyperlink_text,
+                        date_serial,
+                        rich_text,
+                    }
+                } else {
+                    CellValue::default()
+                }
+            }
             _ => CellValue::default(),
         };
         Ok(())

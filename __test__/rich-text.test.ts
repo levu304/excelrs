@@ -1,0 +1,135 @@
+import { test, expect } from 'vitest'
+
+import { Workbook } from '../index'
+
+function makeWorkbook() {
+  const wb = new Workbook()
+  wb.addWorksheet('S')
+  return wb
+}
+
+test('cell.value = { richText: ... } writes and round-trips', async () => {
+  const wb = makeWorkbook()
+  const ws = wb.getWorksheet('S')!
+  const cell = ws.getCell('A1')
+
+  cell.value = {
+    richText: [
+      { text: 'Hello ', font: { bold: true } },
+      { text: 'World' },
+    ],
+  }
+
+  // write and read back
+  const buf = await wb.xlsx.write()
+  const wb2 = new Workbook()
+  await wb2.xlsx.read(buf)
+  const cell2 = wb2.getWorksheet('S')!.getCell('A1')
+
+  const result = cell2.value
+  expect(result.valueType).toBe('RichText')
+  expect(result.richText).toBeDefined()
+  expect(result.richText!.length).toBe(2)
+  expect(result.richText![0].text).toBe('Hello ')
+  expect(result.richText![0].font?.bold).toBe(true)
+  expect(result.richText![1].text).toBe('World')
+})
+
+test('cell.value = { richText: ... } with full font (user reproduction)', async () => {
+  const wb = makeWorkbook()
+  const ws = wb.getWorksheet('S')!
+  const cell = ws.getCell('A1')
+
+  cell.value = {
+    richText: [
+      {
+        text: 'B: (11) = (7) + (10)\n',
+        font: { name: 'Times New Roman', size: 8 },
+      },
+      {
+        text: 'S: (11) = (7) - (8) - (10)',
+        font: { name: 'Times New Roman', size: 8 },
+      },
+    ],
+  }
+
+  const buf = await wb.xlsx.write()
+  const wb2 = new Workbook()
+  await wb2.xlsx.read(buf)
+  const cell2 = wb2.getWorksheet('S')!.getCell('A1')
+
+  const result = cell2.value
+  expect(result.valueType).toBe('RichText')
+  expect(result.richText!.length).toBe(2)
+  expect(result.richText![0].text).toBe('B: (11) = (7) + (10)\n')
+  expect(result.richText![0].font?.name).toBe('Times New Roman')
+  expect(result.richText![0].font?.size).toBeCloseTo(8)
+  expect(result.richText![1].text).toBe('S: (11) = (7) - (8) - (10)')
+})
+
+test('cell.value = { hyperlink: ... } writes and round-trips', async () => {
+  const wb = makeWorkbook()
+  const ws = wb.getWorksheet('S')!
+  const cell = ws.getCell('A1')
+
+  cell.value = {
+    hyperlink: 'https://example.com',
+    hyperlinkText: 'Example',
+  }
+
+  const buf = await wb.xlsx.write()
+  const wb2 = new Workbook()
+  await wb2.xlsx.read(buf)
+  const cell2 = wb2.getWorksheet('S')!.getCell('A1')
+
+  const result = cell2.value
+  expect(result.valueType).toBe('Hyperlink')
+})
+
+test('cell.value = { formula: ... } sets value type via setter', () => {
+  const wb = makeWorkbook()
+  const ws = wb.getWorksheet('S')!
+  const cell = ws.getCell('A1')
+
+  cell.value = {
+    formula: 'SUM(A1:B1)',
+  }
+
+  // Formula is write-only — value_type is Formula after assign, but
+  // XLSX round-trip stores the computed result, not the formula string.
+  const result = cell.value
+  expect(result.valueType).toBe('Formula')
+  expect(result.formula).toBe('SUM(A1:B1)')
+})
+
+test('primitives still work (no regression)', async () => {
+  const wb = makeWorkbook()
+  const ws = wb.getWorksheet('S')!
+
+  ws.getCell('A1').value = 42
+  ws.getCell('A2').value = 'hello'
+  ws.getCell('A3').value = true
+  ws.getCell('A4').value = null
+
+  const buf = await wb.xlsx.write()
+  const wb2 = new Workbook()
+  await wb2.xlsx.read(buf)
+
+  expect(wb2.getWorksheet('S')!.getCell('A1').value.valueType).toBe('Number')
+  expect(wb2.getWorksheet('S')!.getCell('A2').value.valueType).toBe('String')
+  expect(wb2.getWorksheet('S')!.getCell('A3').value.valueType).toBe('Boolean')
+  expect(wb2.getWorksheet('S')!.getCell('A4').value.valueType).toBe('Null')
+})
+
+test('Date primitive still works (no regression)', async () => {
+  const wb = makeWorkbook()
+  const ws = wb.getWorksheet('S')!
+  ws.getCell('A1').value = new Date('2024-01-15')
+
+  const buf = await wb.xlsx.write()
+  const wb2 = new Workbook()
+  await wb2.xlsx.read(buf)
+  const cell = wb2.getWorksheet('S')!.getCell('A1')
+
+  expect(cell.value.valueType).toBe('Date')
+})
