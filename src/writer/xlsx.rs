@@ -2794,7 +2794,6 @@ mod tests {
     /// Master cell with only a border (no value) — verifies the XML output
     /// is correct even when the cell has no <v> child.
     #[test]
-    #[test]
     fn test_merged_range_with_values_omitted() {
         use crate::model::cell::CellValue;
         use crate::model::style::{Border, BorderStyle};
@@ -2997,6 +2996,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn test_merge_cells_border_only_xml() {
         use crate::model::style::{Border, BorderStyle};
         use std::io::Read;
