@@ -1,6 +1,6 @@
 import { test, expect } from 'vitest'
 
-import { Workbook } from '../index'
+import { Cell, Workbook } from '../index'
 
 function makeWorkbook() {
   const wb = new Workbook()
@@ -100,6 +100,43 @@ test('cell.value = { formula: ... } sets value type via setter', () => {
   const result = cell.value
   expect(result.valueType).toBe('Formula')
   expect(result.formula).toBe('SUM(A1:B1)')
+  expect(cell.formula).toBe('SUM(A1:B1)')
+})
+
+test('cell.value = { formula: ... } persists through XLSX write and read-back', async () => {
+  const wb = makeWorkbook()
+  const ws = wb.getWorksheet('S')!
+  const cell = ws.getCell('A1')
+
+  cell.value = { formula: 'SUM(A1:A2)' }
+  expect(cell.formula).toBe('SUM(A1:A2)')
+
+  const buf = await wb.xlsx.write()
+  const wb2 = new Workbook()
+  await wb2.xlsx.read(buf)
+  const cell2 = wb2.getWorksheet('S')!.getCell('A1')
+
+  expect(cell2.formula).toBe('SUM(A1:A2)')
+})
+
+test('unknown valueType raises an error', () => {
+  const cell = new Cell('A1', 0, 0)
+  expect(() => {
+    ;(cell as any).value = { valueType: 'Banana', number: 5 }
+  }).toThrow(/Unknown valueType/)
+})
+
+test('reassigning a primitive after formula clears the formula', () => {
+  const wb = makeWorkbook()
+  const ws = wb.getWorksheet('S')!
+  const cell = ws.getCell('A1')
+
+  cell.value = { formula: 'SUM(A1:A2)' }
+  expect(cell.formula).toBe('SUM(A1:A2)')
+
+  cell.value = 42
+  expect(cell.formula).toBeNull()
+  expect(cell.value.valueType).toBe('Number')
 })
 
 test('primitives still work (no regression)', async () => {

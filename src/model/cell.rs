@@ -275,6 +275,7 @@ impl Cell {
         if let Ok(ms) = unsafe { napi::JsDate::from_napi_value(raw_env, raw_val) }.and_then(|d| d.value_of()) {
             let mut inner = self.inner.lock().expect("Cell lock poisoned");
             inner.value = CellValue::date(millis_to_serial(ms));
+            inner.formula = None;
             return Ok(());
         }
 
@@ -330,51 +331,45 @@ impl Cell {
                 } else if let Some(f) = obj.get("formula").and_then(|v| v.as_str()) {
                     CellValue::formula(f.to_string())
                 } else if let Some(vt) = obj.get("valueType").and_then(|v| v.as_str()) {
+                    if !matches!(
+                        vt,
+                        "Number"
+                            | "String"
+                            | "Boolean"
+                            | "Formula"
+                            | "Error"
+                            | "Hyperlink"
+                            | "RichText"
+                            | "Date"
+                            | "Null"
+                            | "Merge"
+                    ) {
+                        return Err(napi::Error::from_reason(format!("Unknown valueType discriminant: '{vt}'. Expected one of: Number, String, Boolean, Formula, Error, Hyperlink, RichText, Date, Null, Merge")));
+                    }
                     let number = obj.get("number").and_then(|v| v.as_f64());
                     let string = obj.get("string").and_then(|v| v.as_str()).map(|s| s.to_string());
                     let boolean = obj.get("boolean").and_then(|v| v.as_bool());
-                    let formula = obj.get("formula").and_then(|v| v.as_str()).map(|s| s.to_string());
                     let error_value = obj.get("errorValue").and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let hyperlink = obj.get("hyperlink").and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let hyperlink_text = obj.get("hyperlinkText").and_then(|v| v.as_str()).map(|s| s.to_string());
                     let date_serial = obj.get("dateSerial").and_then(|v| v.as_f64());
-                    let rich_text = obj.get("richText").and_then(|v| v.as_array()).map(|arr| {
-                        arr.iter()
-                            .map(|item| {
-                                let text = item.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                                let font = item.get("font").and_then(|v| {
-                                    v.as_object().map(|f| Font {
-                                        name: f.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                        size: f.get("size").and_then(|v| v.as_f64()),
-                                        bold: f.get("bold").and_then(|v| v.as_bool()),
-                                        italic: f.get("italic").and_then(|v| v.as_bool()),
-                                        underline: f.get("underline").and_then(|v| v.as_bool()),
-                                        color: f.get("color").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                        color_theme: None,
-                                        color_tint: None,
-                                    })
-                                });
-                                RichTextRun { text, font }
-                            })
-                            .collect::<Vec<_>>()
-                    });
                     CellValue {
                         value_type: vt.to_string(),
                         number,
                         string,
                         boolean,
-                        formula,
                         error_value,
-                        hyperlink,
-                        hyperlink_text,
                         date_serial,
-                        rich_text,
+                        ..Default::default()
                     }
                 } else {
                     CellValue::default()
                 }
             }
             _ => CellValue::default(),
+        };
+        inner.formula = if inner.value.value_type == "Formula" {
+            inner.value.formula.clone()
+        } else {
+            None
         };
         Ok(())
     }
