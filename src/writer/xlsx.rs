@@ -1703,6 +1703,13 @@ fn write_cells_with_styles<W: Write>(
     cell_style_indices: &[u32],
     row_style_indices: &[u32],
 ) -> Result<(), ExcelrsError> {
+    // Pre-parse merge ranges once per sheet.
+    let merged_ranges: Vec<(u32, u32, u32, u32)> = ws
+        .get_merged_ranges()
+        .iter()
+        .filter_map(|r| ws.parse_merge_range(r))
+        .collect();
+
     let mut cell_si = cell_style_indices.iter();
     let mut row_si = row_style_indices.iter();
     for row in ws.rows() {
@@ -1715,9 +1722,19 @@ fn write_cells_with_styles<W: Write>(
         let row_outline = row.outline_level();
         let row_height = row.height();
 
-        if cells.is_empty() && !has_row_style && row_height.is_none() {
-            // Skip completely empty rows (no data, no row style, no height)
-            // preserving height-only rows so ht attribute round-trips correctly
+        // Determine all columns to emit: written_cells + merged-range bounding boxes.
+        let mut emit_cols: std::collections::BTreeSet<u32> = cells.iter().map(|c| c.col()).collect();
+        let row_num = row.number();
+        for &(c1, r1, c2, r2) in &merged_ranges {
+            if row_num >= r1 && row_num <= r2 {
+                for c in c1..=c2 {
+                    emit_cols.insert(c);
+                }
+            }
+        }
+
+        if emit_cols.is_empty() && !has_row_style && row_height.is_none() {
+            // Skip completely empty rows (no data, no merge cells, no row style, no height)
             continue;
         }
         // Build <row> tag with optional attributes: s, outlineLevel, ht
@@ -1734,24 +1751,28 @@ fn write_cells_with_styles<W: Write>(
         }
         write!(w, "<row {row_attrs}>")?;
 
-        for cell in cells {
-            let address = cell.address();
-            // Every cell in written_cells() has a corresponding style index,
-            // including non-anchor merged cells. Advance the iterator for
-            // every cell so subsequent cells stay in sync.
-            let style_idx = cell_si
-                .next()
-                .copied()
-                .ok_or_else(|| ExcelrsError::Write("cell_style_indices exhausted mid-sheet (writer bug)".into()))?;
-            // Skip cells that are inside a merged range but are not the anchor.
-            // Excel renders anchor cell style across the whole range; emitting
-            // non-anchors with s="0" overwrites that in Excel's rendering.
-            if let Ok((cell_col, cell_row)) = crate::types::parse_address(&address) {
-                if ws.is_merged(cell_row, cell_col).is_some() && !ws.is_cell_merged_anchor(cell_row, cell_col) {
-                    continue;
-                }
+        // Emit cells in column order, consuming style indices only for real cells.
+        // Synthetic (injected) empty non-anchor merged cells carry no `s` attribute
+        // (Excel treats omitted s as Normal/0), matching ExcelJS behavior.
+        let cell_map: std::collections::HashMap<u32, &Cell> = cells.iter().map(|c| (c.col(), c)).collect();
+        for &c in &emit_cols {
+            if let Some(cell) = cell_map.get(&c) {
+                let style_idx = cell_si
+                    .next()
+                    .copied()
+                    .ok_or_else(|| ExcelrsError::Write("cell_style_indices exhausted mid-sheet (writer bug)".into()))?;
+                write_cell_xml(w, cell, string_indices, style_idx)?;
+            } else {
+                // Synthetic empty non-anchor merged cell -- emit with no `s` attribute (Normal/0).
+                // ponytail: synthetic cells get no `s` attr, matching ExcelJS. Column-style on
+                // empty non-anchor merged cells (rare) not yet injected -- add effective-style
+                // injection if column-style round-trip is needed.
+                let addr = match crate::types::col_num_to_letter(c) {
+                    Ok(letter) => format!("{}{}", letter, row_num),
+                    Err(_) => format!("R{row_num}C{c}"),
+                };
+                write!(w, "<c r=\"{}\"/>", addr)?;
             }
-            write_cell_xml(w, &cell, string_indices, style_idx)?;
         }
         write_str(w, "</row>")?;
     }
@@ -2876,12 +2897,12 @@ mod tests {
             "F3 should not have Normal style index"
         );
 
-        // Non-anchor merged cells G3:K3 must NOT be emitted even WITH values
+        // Non-anchor merged cells G3:K3 ARE emitted with their own styles
         for col in ["G", "H", "I", "J", "K"] {
-            let ref_str = format!("c r=\"{col}3\"");
+            let ref_str = format!("c r=\"{col}3\" s=\"");
             assert!(
-                !sheet_xml.contains(&ref_str),
-                "Cell {col}3 should not appear in sheet XML (non-anchor merged cell with value)"
+                sheet_xml.contains(&ref_str),
+                "Cell {col}3 should appear in sheet XML (non-anchor merged cell with value)"
             );
         }
 
@@ -2984,10 +3005,10 @@ mod tests {
             "mergeCell F3:K3 should be in sheet XML"
         );
 
-        // G3 must NOT be emitted
+        // G3 must BE emitted (non-anchor merged cell with own style)
         assert!(
-            !sheet_xml.contains(r#"c r="G3" s=""#),
-            "G3 (non-anchor merged cell) should not appear in sheet XML"
+            sheet_xml.contains(r#"c r="G3" s=""#),
+            "G3 (non-anchor merged cell with own style) should appear in sheet XML"
         );
 
         // L3 must be emitted. Its style index should match the same
@@ -3053,12 +3074,12 @@ mod tests {
             "F3 should not have Normal style index (border must be applied)"
         );
 
-        // Cells G3:K3 must NOT be emitted (no value, no style on those cells)
+        // Cells G3:K3 ARE emitted (injected empty non-anchor merged cells)
         for col in ["G", "H", "I", "J", "K"] {
             let ref_str = format!("c r=\"{col}3\"");
             assert!(
-                !sheet_xml.contains(&ref_str),
-                "Cell {col}3 should not appear in sheet XML (no value, no style)"
+                sheet_xml.contains(&ref_str),
+                "Cell {col}3 should appear in sheet XML (injected empty merged cell)"
             );
         }
     }
