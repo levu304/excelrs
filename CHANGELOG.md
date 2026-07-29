@@ -1,6 +1,19 @@
 # Changelog
 <!-- Release process: tag-driven from main. `git tag -a vX.Y.Z -m "..."` then push the tag. -->
 
+## [2.4.3] - 2026-07-30
+
+### Fixed
+
+- Filter non-anchor merged cells from sheetData XML (fixes border rendering
+  in merged ranges).
+- Fix style-index desync when merged cells skip iterator cell (cells after
+  merge range received wrong `s` attribute).
+- Consolidate duplicate merge-range parsing into shared `parse_merge_range()`
+  helper on `Worksheet`.
+- Fix column width / row height emission in XLSX writer.
+- Add `customWidth` / `customHeight` OOXML compliance attributes.
+
 ## [2.4.2] - 2026-07-28
 
 ### Fixed
