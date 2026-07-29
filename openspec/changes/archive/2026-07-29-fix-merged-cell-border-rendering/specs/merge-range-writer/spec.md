@@ -1,10 +1,12 @@
-# merge-range-writer Specification
+## REMOVED Requirements
 
-## Purpose
+### Requirement: Writer filters non-anchor cells from merged ranges in sheetData
 
-TBD - created by archiving change fix-merge-cells-sheet-data. Update Purpose after archive.
+**Reason**: Omitting non-anchor merged cells from `<sheetData>` prevents Excel from rendering the anchor cell's border and formatting across the full merged range. Excel only extends merged-cell styling when the non-anchor cells physically exist in the grid. ExcelJS — this library's drop-in compatibility target — always emits the full merge bounding box, and omitting cells produced files where merged borders appeared only under the anchor. Commit `1b8b28b` added this filter but it was a no-op for the common case (empty non-anchors were already excluded by `written_cells()`) and codified broken behavior.
 
-## Requirements
+**Migration**: Replaced by the new requirement "Writer emits merged range bounding box in sheetData".
+
+## ADDED Requirements
 
 ### Requirement: Writer emits merged range bounding box in sheetData
 
@@ -45,36 +47,3 @@ The writer SHALL emit every cell within a declared merged range's bounding box i
 - **WHEN** a worksheet has cells both inside and outside merged ranges
 - **THEN** cells outside merge ranges SHALL be emitted with their full style as before
 - **AND** the change SHALL only add previously-omitted non-anchor merged cells
-### Requirement: Helper to identify anchor cell of a merged range
-
-The Worksheet model SHALL provide a method to determine whether a given (row, col) position is the top-left anchor cell of any declared merged range.
-
-#### Scenario: Anchor detection
-
-- **WHEN** merging range `F3:K3`
-- **AND** checking position (row=3, col=6) (address F3)
-- **THEN** the helper SHALL return true (this is the anchor)
-
-#### Scenario: Non-anchor inside merged range
-
-- **WHEN** merging range `F3:K3`
-- **AND** checking position (row=3, col=7) (address G3)
-- **THEN** the helper SHALL return false (non-anchor, should be filtered)
-
-#### Scenario: Outside merged range
-
-- **WHEN** merging range `F3:K3`
-- **AND** checking position (row=1, col=1) (address A1)
-- **THEN** the helper SHALL return false (outside merge range)
-
-### Requirement: Writer uses consolidated `is_cell_merged_anchor()` helper
-
-The `write_cells_with_styles` function SHALL call `ws.is_cell_merged_anchor(cell_row, cell_col)` instead of reimplementing the merge-range containment check inline.
-
-#### Scenario: Writer delegates anchor check to model helper
-
-- **WHEN** `write_cells_with_styles` processes a cell at (row=3, col=7) (G3)
-- **AND** the worksheet has merge range F3:K3
-- **THEN** it calls `ws.is_cell_merged_anchor(3, 7)` which returns false
-- **AND** the writer emits G3 as a synthetic empty cell (no s attribute, Normal/0)
-- **AND** the anchor F3 still carries its border style

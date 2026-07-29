@@ -564,7 +564,7 @@ impl Worksheet {
 
     /// Parse a merge range string like "F3:K3" into (col1, row1, col2, row2).
     /// Returns `None` if the range string is malformed or unparseable.
-    fn parse_merge_range(&self, range: &str) -> Option<(u32, u32, u32, u32)> {
+    pub fn parse_merge_range(&self, range: &str) -> Option<(u32, u32, u32, u32)> {
         let parts: Vec<&str> = range.split(':').collect();
         if parts.len() != 2 {
             return None;
