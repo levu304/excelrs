@@ -1659,6 +1659,7 @@ fn emit_worksheet_cols<W: Write>(w: &mut W, ws: &Worksheet) -> Result<(), Excelr
         let mut attrs = format!(r#"min="{}" max="{}""#, c.col_num(), c.col_num());
         if c.width() != 0.0 {
             attrs.push_str(&format!(r#" width="{}""#, c.width()));
+            attrs.push_str(r#" customWidth="1""#);
         }
         if c.outline_level() > 0 {
             attrs.push_str(&format!(r#" outlineLevel="{}""#, c.outline_level()));
@@ -1729,6 +1730,7 @@ fn write_cells_with_styles<W: Write>(
         }
         if let Some(h) = row_height {
             row_attrs.push_str(&format!(r#" ht="{}""#, h));
+            row_attrs.push_str(r#" customHeight="1""#);
         }
         write!(w, "<row {row_attrs}>")?;
 
@@ -3884,12 +3886,12 @@ mod tests {
             .unwrap();
 
         assert!(
-            xml.contains(r##"<col min="1" max="1" width="15.83"/"##),
-            "col 1 width 15.83 should be in XML: {xml}"
+            xml.contains(r##"<col min="1" max="1" width="15.83" customWidth="1"/"##),
+            "col 1 width 15.83 with customWidth should be in XML: {xml}"
         );
         assert!(
-            xml.contains(r##"<col min="2" max="2" width="14.67"/"##),
-            "col 2 width 14.67 should be in XML: {xml}"
+            xml.contains(r##"<col min="2" max="2" width="14.67" customWidth="1"/"##),
+            "col 2 width 14.67 with customWidth should be in XML: {xml}"
         );
     }
 
@@ -3915,12 +3917,12 @@ mod tests {
             .unwrap();
 
         assert!(
-            xml.contains(r##"<row r="1" ht="29""##),
-            "row 1 ht 29 should be in XML: {xml}"
+            xml.contains(r##"<row r="1""##) && xml.contains(r##"ht="29""##) && xml.contains(r##"customHeight="1""##),
+            "row 1 ht 29 with customHeight should be in XML: {xml}"
         );
         assert!(
-            xml.contains(r##"<row r="2" ht="14""##),
-            "row 2 ht 14 should be in XML: {xml}"
+            xml.contains(r##"<row r="2""##) && xml.contains(r##"ht="14""##) && xml.contains(r##"customHeight="1""##),
+            "row 2 ht 14 with customHeight should be in XML: {xml}"
         );
     }
 
@@ -3961,12 +3963,12 @@ mod tests {
             "<cols> must be emitted for non-grouped columns with widths: {xml}"
         );
         assert!(
-            xml.contains(r##"<col min="1" max="1" width="10"/"##),
-            "col 1 width 10 should be in XML: {xml}"
+            xml.contains(r##"<col min="1" max="1" width="10" customWidth="1"/"##),
+            "col 1 width 10 with customWidth should be in XML: {xml}"
         );
         assert!(
-            xml.contains(r##"<col min="2" max="2" width="20"/"##),
-            "col 2 width 20 should be in XML: {xml}"
+            xml.contains(r##"<col min="2" max="2" width="20" customWidth="1"/"##),
+            "col 2 width 20 with customWidth should be in XML: {xml}"
         );
     }
 }
