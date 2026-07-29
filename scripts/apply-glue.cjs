@@ -43,7 +43,7 @@ export interface Row {
 // This declaration merge narrows it to a union of acceptable types.
 export interface Cell {
   /** Accepts primitives, CellValue objects, or Date — dispatch by shape. */
-  set value(val: CellValue | string | number | boolean | Date | null): void
+  set value(val: CellValue | string | number | boolean | Date | null)
 }
 `
 
