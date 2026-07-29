@@ -1698,24 +1698,6 @@ fn write_cells_with_styles<W: Write>(
     cell_style_indices: &[u32],
     row_style_indices: &[u32],
 ) -> Result<(), ExcelrsError> {
-    // Pre-parse merged ranges once: (anchor_col, anchor_row, end_col, end_row).
-    // Used to skip non-anchor cells that belong to a merged range — Excel
-    // renders the anchor cell's style for the whole range, so emitting
-    // shadow cells with s="0" (Normal) confuses it.
-    let merged_ranges_parsed: Vec<(u32, u32, u32, u32)> = ws
-        .get_merged_ranges()
-        .iter()
-        .filter_map(|range| {
-            let parts: Vec<&str> = range.split(':').collect();
-            if parts.len() != 2 {
-                return None;
-            }
-            let (c1, r1) = crate::types::parse_address(parts[0]).ok()?;
-            let (c2, r2) = crate::types::parse_address(parts[1]).ok()?;
-            Some((c1, r1, c2, r2))
-        })
-        .collect();
-
     let mut cell_si = cell_style_indices.iter();
     let mut row_si = row_style_indices.iter();
     for row in ws.rows() {
@@ -1761,13 +1743,7 @@ fn write_cells_with_styles<W: Write>(
             // Excel renders anchor cell style across the whole range; emitting
             // non-anchors with s="0" overwrites that in Excel's rendering.
             if let Ok((cell_col, cell_row)) = crate::types::parse_address(&address) {
-                if merged_ranges_parsed.iter().any(|&(c1, r1, c2, r2)| {
-                    cell_row >= r1
-                        && cell_row <= r2
-                        && cell_col >= c1
-                        && cell_col <= c2
-                        && !(cell_col == c1 && cell_row == r1)
-                }) {
+                if ws.is_merged(cell_row, cell_col).is_some() && !ws.is_cell_merged_anchor(cell_row, cell_col) {
                     continue;
                 }
             }
@@ -2818,6 +2794,209 @@ mod tests {
     /// Master cell with only a border (no value) — verifies the XML output
     /// is correct even when the cell has no <v> child.
     #[test]
+    #[test]
+    fn test_merged_range_with_values_omitted() {
+        use crate::model::cell::CellValue;
+        use crate::model::style::{Border, BorderStyle};
+        use std::io::Read;
+
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("Values".into());
+
+        ws.merge_cells("F3:K3".into()).unwrap();
+
+        // Set value and style on every cell F3:L3
+        for col in 6..=12 {
+            let mut cell = ws.get_cell_by_rc(3, col);
+            cell.set_value_raw(CellValue {
+                value_type: "Number".into(),
+                number: Some(col as f64),
+                string: None,
+                boolean: None,
+                formula: None,
+                error_value: None,
+                hyperlink: None,
+                hyperlink_text: None,
+                rich_text: None,
+                date_serial: None,
+            });
+            // Non-anchor cells get a different style to verify they're suppressed
+            cell.set_style_raw(Some(Style {
+                border: Some(Border {
+                    bottom: Some(BorderStyle {
+                        style: "thin".into(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }));
+        }
+        // Anchor cell F3 gets a thick bottom border
+        {
+            let mut cell = ws.get_cell_by_rc(3, 6);
+            cell.set_style_raw(Some(Style {
+                border: Some(Border {
+                    bottom: Some(BorderStyle {
+                        style: "thick".into(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }));
+        }
+
+        let bytes = workbook_to_bytes(&inner).unwrap();
+        let cursor = std::io::Cursor::new(&bytes[..]);
+        let mut archive = zip::ZipArchive::new(cursor).unwrap();
+        let mut sheet_xml = String::new();
+        archive
+            .by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut sheet_xml)
+            .unwrap();
+
+        // Merge range declared
+        assert!(
+            sheet_xml.contains(r#"<mergeCell ref="F3:K3"/"#),
+            "mergeCell F3:K3 should be in sheet XML"
+        );
+
+        // Anchor F3 is emitted with style attribute (not s="0")
+        assert!(
+            sheet_xml.contains(r#"c r="F3" s=""#),
+            "F3 should be in sheet XML with a style index"
+        );
+        assert!(
+            !sheet_xml.contains(r#"c r="F3" s="0""#),
+            "F3 should not have Normal style index"
+        );
+
+        // Non-anchor merged cells G3:K3 must NOT be emitted even WITH values
+        for col in ["G", "H", "I", "J", "K"] {
+            let ref_str = format!("c r=\"{col}3\"");
+            assert!(
+                !sheet_xml.contains(&ref_str),
+                "Cell {col}3 should not appear in sheet XML (non-anchor merged cell with value)"
+            );
+        }
+
+        // L3 (after merge range) IS emitted
+        assert!(
+            sheet_xml.contains(r#"c r="L3" s=""#),
+            "L3 should be in sheet XML with a style index"
+        );
+    }
+
+    #[test]
+    fn test_style_index_sync_after_merged_cells() {
+        // Verifies the style-index iterator stays in sync when non-anchor
+        // merged cells are skipped. Regression test for the desync bug found
+        // during PR #42 review where `continue` in the skip filter bypassed
+        // `cell_si.next()`, causing subsequent cells to receive wrong s attr.
+        use crate::model::cell::CellValue;
+        use crate::model::style::{Border, BorderStyle};
+        use std::io::Read;
+
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("Sync".into());
+
+        ws.merge_cells("F3:K3".into()).unwrap();
+
+        // Set values on F3:L3
+        for col in 6..=12 {
+            let mut cell = ws.get_cell_by_rc(3, col);
+            let val: f64 = col as f64;
+            cell.set_value_raw(CellValue {
+                value_type: "Number".into(),
+                number: Some(val),
+                string: None,
+                boolean: None,
+                formula: None,
+                error_value: None,
+                hyperlink: None,
+                hyperlink_text: None,
+                rich_text: None,
+                date_serial: None,
+            });
+        }
+
+        // Anchor F3: thick border
+        {
+            let mut cell = ws.get_cell_by_rc(3, 6);
+            cell.set_style_raw(Some(Style {
+                border: Some(Border {
+                    bottom: Some(BorderStyle {
+                        style: "thick".into(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }));
+        }
+        // Non-anchor G3: thin border
+        {
+            let mut cell = ws.get_cell_by_rc(3, 7);
+            cell.set_style_raw(Some(Style {
+                border: Some(Border {
+                    bottom: Some(BorderStyle {
+                        style: "thin".into(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }));
+        }
+        // L3: double border (after merge range — verify it gets correct index)
+        {
+            let mut cell = ws.get_cell_by_rc(3, 12);
+            cell.set_style_raw(Some(Style {
+                border: Some(Border {
+                    bottom: Some(BorderStyle {
+                        style: "double".into(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }));
+        }
+
+        let bytes = workbook_to_bytes(&inner).unwrap();
+        let cursor = std::io::Cursor::new(&bytes[..]);
+        let mut archive = zip::ZipArchive::new(cursor).unwrap();
+        let mut sheet_xml = String::new();
+        archive
+            .by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut sheet_xml)
+            .unwrap();
+
+        // Merge range declared
+        assert!(
+            sheet_xml.contains(r#"<mergeCell ref="F3:K3"/"#),
+            "mergeCell F3:K3 should be in sheet XML"
+        );
+
+        // G3 must NOT be emitted
+        assert!(
+            !sheet_xml.contains(r#"c r="G3" s=""#),
+            "G3 (non-anchor merged cell) should not appear in sheet XML"
+        );
+
+        // L3 must be emitted. Its style index should match the same
+        // border style class (double) regardless of whether G3:K3 were
+        // skipped — verifying the iterator stayed in sync.
+        let l3_pattern = r#"c r="L3" s=""#;
+        assert!(
+            sheet_xml.contains(l3_pattern),
+            "L3 should be in sheet XML with a style index"
+        );
+    }
+
     fn test_merge_cells_border_only_xml() {
         use crate::model::style::{Border, BorderStyle};
         use std::io::Read;

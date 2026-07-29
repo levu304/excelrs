@@ -562,6 +562,18 @@ impl Worksheet {
         self.get_merged_ranges()
     }
 
+    /// Parse a merge range string like "F3:K3" into (col1, row1, col2, row2).
+    /// Returns `None` if the range string is malformed or unparseable.
+    fn parse_merge_range(&self, range: &str) -> Option<(u32, u32, u32, u32)> {
+        let parts: Vec<&str> = range.split(':').collect();
+        if parts.len() != 2 {
+            return None;
+        }
+        let (c1, r1) = crate::types::parse_address(parts[0]).ok()?;
+        let (c2, r2) = crate::types::parse_address(parts[1]).ok()?;
+        Some((c1, r1, c2, r2))
+    }
+
     /// Query whether the 1-indexed (row, col) lies inside any merged range.
     /// Returns the enclosing range string (e.g. `"B2:D4"`) if so, else `None`.
     /// Read companion to `mergedRanges`; closes the ExcelJS per-cell merged-state
@@ -569,14 +581,10 @@ impl Worksheet {
     #[napi]
     pub fn is_merged(&self, row: u32, col: u32) -> Option<String> {
         for range in self.get_merged_ranges() {
-            let parts: Vec<&str> = range.split(':').collect();
-            if parts.len() != 2 {
-                continue;
-            }
-            let (c1, r1) = crate::types::parse_address(parts[0]).ok()?;
-            let (c2, r2) = crate::types::parse_address(parts[1]).ok()?;
-            if col >= c1 && col <= c2 && row >= r1 && row <= r2 {
-                return Some(range);
+            if let Some((c1, r1, c2, r2)) = self.parse_merge_range(&range) {
+                if col >= c1 && col <= c2 && row >= r1 && row <= r2 {
+                    return Some(range);
+                }
             }
         }
         None
@@ -999,14 +1007,7 @@ impl Worksheet {
     /// Check if (row, col) is the top-left anchor cell of any merged range.
     pub fn is_cell_merged_anchor(&self, row: u32, col: u32) -> bool {
         for range in self.get_merged_ranges() {
-            let parts: Vec<&str> = range.split(':').collect();
-            if parts.len() != 2 {
-                continue;
-            }
-            if let (Ok((c1, r1)), Ok((_c2, _r2))) = (
-                crate::types::parse_address(parts[0]),
-                crate::types::parse_address(parts[1]),
-            ) {
+            if let Some((c1, r1, ..)) = self.parse_merge_range(&range) {
                 if col == c1 && row == r1 {
                     return true;
                 }
