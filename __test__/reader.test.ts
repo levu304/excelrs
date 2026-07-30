@@ -81,10 +81,12 @@ test('readXlsxBuffer reads all sheets and cell types', async () => {
   expect(f1.type).toBe('Null')
   expect(f1.value).toBeNull()
 
-  // Date — cell.value returns Date primitive (v2.5.0)
+  // Date — cell.value returns Date primitive (v2.5.0), UTC-anchored (ExcelJS parity)
   const a2 = ws.getCell('A2')
   expect(a2.type).toBe('Date')
-  expect(a2.value).toBeInstanceOf(Date)
+  // Round-trips via UTC milliseconds: the returned Date must equal
+  // the original UTC instant ExcelJS stored, not a local-component guess.
+  expect((a2.value as Date).getTime()).toBe(new Date(2025, 0, 1).getTime())
 
   // Formula cell — verify formula string is preserved
   const c3 = ws.getCell('C3')

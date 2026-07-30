@@ -21,6 +21,8 @@
 - `cell.value.valueType` → `cell.type`
 - `cell.value.number` / `.string` / `.boolean` → `cell.value`
 - `cell.value.dateSerial` → `cell.date` (or `(cell.value as Date).getTime()`)
+- **Date values are UTC-anchored** — `cell.value` for a Date cell reflects the Excel serial as a UTC instant (`(serial - 25569) * 86400000` ms). Use `.toISOString()` / `.getUTCDate()` for exact values, or normalize for local display.
+- `cell.value = new Date(y, m, d)` (local constructor) is interpreted by its UTC milliseconds; use `new Date(Date.UTC(y, m, d))` for a Calendar date that round-trips exactly regardless of timezone.
 
 ## [2.4.3] - 2026-07-30
 

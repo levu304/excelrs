@@ -45,6 +45,15 @@ test('CellValue setter throws on undefined (napi-rs constraint)', () => {
   expect(() => { cell.value = undefined as never }).toThrow()
 })
 
+test('CellValue setter dispatches Date and round-trips via UTC milliseconds', () => {
+  const cell = new Cell('G7', 7, 7)
+  const utcDate = new Date(Date.UTC(2026, 0, 15))
+  cell.value = utcDate
+  expect(cell.type).toBe('Date')
+  expect((cell.value as Date).getTime()).toBe(utcDate.getTime())
+  expect((cell.value as Date).toISOString()).toBe('2026-01-15T00:00:00.000Z')
+})
+
 test('readonly fields are not writable from JS', () => {
   const cell = new Cell('A1', 1, 1)
   // These should be readonly — TS would catch at compile time, but at runtime
