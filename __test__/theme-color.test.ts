@@ -143,7 +143,7 @@ test('F8: custom theme fixture resolves custom accent1 ARGB', async () => {
   await wb.xlsx.read(buf)
   const cell = wb.getWorksheet('Sheet1')!.getCell('A1')
   // Fixture has accent1=FF0000 (red) instead of default 4F81BD
-  expect(cell.value?.string).toBe('Custom Theme')
+  expect(cell.value).toBe('Custom Theme')
   expect(cell.style?.font?.color).toBe('FFFF0000')
 })
 

@@ -1,6 +1,29 @@
 # Changelog
 <!-- Release process: tag-driven from main. `git tag -a vX.Y.Z -m "..."` then push the tag. -->
 
+## [2.5.0] - 2026-07-30
+
+### ⚠ BREAKING
+
+- **`Cell.value` getter now returns JS primitives for simple cells.**
+  `Number` → `number`, `String` → `string`, `Boolean` → `boolean`,
+  `Date` → `Date`, `Null` → `null`. Rich types (Formula, RichText,
+  Hyperlink, Error, Merge) continue to return `CellValue`.
+
+### Added
+
+- **`Cell.type` getter** — returns `CellType` string enum
+  (`"Number" | "String" | "Boolean" | "Date" | "Null" | "Formula" | …`)
+  as the discriminant, replacing `cell.value.valueType`.
+
+### Migration
+
+- `cell.value.valueType` → `cell.type`
+- `cell.value.number` / `.string` / `.boolean` → `cell.value`
+- `cell.value.dateSerial` → `cell.date` (or `(cell.value as Date).getTime()`)
+- **Date values are UTC-anchored** — `cell.value` for a Date cell reflects the Excel serial as a UTC instant (`(serial - 25569) * 86400000` ms). Use `.toISOString()` / `.getUTCDate()` for exact values, or normalize for local display.
+- `cell.value = new Date(y, m, d)` (local constructor) is interpreted by its UTC milliseconds; use `new Date(Date.UTC(y, m, d))` for a Calendar date that round-trips exactly regardless of timezone.
+
 ## [2.4.3] - 2026-07-30
 
 ### Fixed
@@ -664,6 +687,7 @@ first fully working release; v0.2.0 and v0.2.1 are superseded.
 [2.3.1]: https://github.com/levu304/excelrs/compare/v2.3.0...v2.3.1
 [2.3.0]: https://github.com/levu304/excelrs/compare/v2.2.1...v2.3.0
 [2.2.1]: https://github.com/levu304/excelrs/compare/v2.2.0...v2.2.1
+[2.5.0]: https://github.com/levu304/excelrs/compare/v2.4.4...v2.5.0
 [2.2.0]: https://github.com/levu304/excelrs/compare/v2.1.1...v2.2.0
 [2.1.1]: https://github.com/levu304/excelrs/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/levu304/excelrs/compare/v2.0.5...v2.1.0

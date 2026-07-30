@@ -17,7 +17,7 @@ test('wb.xlsx.read populates workbook from buffer', async () => {
 
   expect(wb.worksheetCount).toBe(1)
   expect(wb.getWorksheet('TestSheet')).toBeDefined()
-  expect(wb.getWorksheet('TestSheet')!.getCell('A1').value.number).toBe(42)
+  expect(wb.getWorksheet('TestSheet')!.getCell('A1').value).toBe(42)
 })
 
 test('wb.xlsx.readFile populates workbook from file', async () => {
@@ -36,7 +36,7 @@ test('wb.xlsx.readFile populates workbook from file', async () => {
   try {
     await wb.xlsx.readFile(tmpFile)
     expect(wb.worksheetCount).toBe(1)
-    expect(wb.getWorksheet('FileSheet')!.getCell('B2').value.string).toBe('file test')
+    expect(wb.getWorksheet('FileSheet')!.getCell('B2').value).toBe('file test')
   } finally {
     try { fs.unlinkSync(tmpFile) } catch { /* ignore */ }
   }
@@ -87,7 +87,7 @@ test('getCell().value = x persists through write/read round-trip', async () => {
   const wb2 = new Workbook()
   await wb2.xlsx.read(buf)
   const ws2 = wb2.getWorksheet('Mutate')!
-  expect(ws2.getCell('A1').value.number).toBe(42)
+  expect(ws2.getCell('A1').value).toBe(42)
 })
 
 test('getCell().style = {...} persists through write/read round-trip', async () => {
@@ -125,7 +125,7 @@ test('row.getCell().value mutates persisted cell', () => {
   cell.value = 99
 
   // Read back via worksheet — should see the mutation
-  expect(ws.getCell('A1').value.number).toBe(99)
+  expect(ws.getCell('A1').value).toBe(99)
 })
 
 // ---------------------------------------------------------------------------
@@ -153,24 +153,24 @@ test('round-trip excelrs write then read matches data', async () => {
 
   // Check cell values
   const a1 = ws2.getCell('A1')
-  expect(a1.value.valueType).toBe('Number')
-  expect(a1.value.number).toBe(42)
+  expect(a1.type).toBe('Number')
+  expect(a1.value).toBe(42)
 
   const b1 = ws2.getCell('B1')
-  expect(b1.value.valueType).toBe('String')
-  expect(b1.value.string).toBe('hello')
+  expect(b1.type).toBe('String')
+  expect(b1.value).toBe('hello')
 
   const c1 = ws2.getCell('C1')
-  expect(c1.value.valueType).toBe('Boolean')
-  expect(c1.value.boolean).toBe(true)
+  expect(c1.type).toBe('Boolean')
+  expect(c1.value).toBe(true)
 
   const a2 = ws2.getCell('A2')
-  expect(a2.value.valueType).toBe('Number')
-  expect(a2.value.number).toBeCloseTo(3.14, 2)
+  expect(a2.type).toBe('Number')
+  expect(a2.value as number).toBeCloseTo(3.14, 2)
 
   const b2 = ws2.getCell('B2')
-  expect(b2.value.valueType).toBe('String')
-  expect(b2.value.string).toBe('world')
+  expect(b2.type).toBe('String')
+  expect(b2.value).toBe('world')
 })
 
 // ---------------------------------------------------------------------------
@@ -222,8 +222,8 @@ test('round-trip exceljs write then excelrs read matches', async () => {
 
   expect(wb.worksheetCount).toBe(1)
   const ws = wb.getWorksheet('Regression')!
-  expect(ws.getCell('A1').value.number).toBe(99)
-  expect(ws.getCell('B1').value.string).toBe('keep')
+  expect(ws.getCell('A1').value).toBe(99)
+  expect(ws.getCell('B1').value).toBe('keep')
 })
 
 // ---------------------------------------------------------------------------
@@ -244,7 +244,7 @@ test('write then read multiple sheets', async () => {
   expect(wb2.worksheetCount).toBe(2)
   expect(wb2.getWorksheet('First')).toBeDefined()
   expect(wb2.getWorksheet('Second')).toBeDefined()
-  expect(wb2.getWorksheet('Second')!.getCell('A1').value.string).toBe('hello')
+  expect(wb2.getWorksheet('Second')!.getCell('A1').value).toBe('hello')
 })
 
 // ---------------------------------------------------------------------------
@@ -301,7 +301,7 @@ test('getRow().getCell().value survives write/read round-trip', async () => {
 
   const wb2 = new Workbook()
   await wb2.xlsx.read(buf)
-  expect(wb2.getWorksheet('Test')!.getCell('A1').value.string).toBe('RoundTrip!')
+  expect(wb2.getWorksheet('Test')!.getCell('A1').value).toBe('RoundTrip!')
 })
 
 test('getRow().getCell() multiple cells on different rows round-trip', async () => {
@@ -315,9 +315,9 @@ test('getRow().getCell() multiple cells on different rows round-trip', async () 
 
   const wb2 = new Workbook()
   await wb2.xlsx.read(buf)
-  expect(wb2.getWorksheet('Multi')!.getCell('A1').value.number).toBe(10)
-  expect(wb2.getWorksheet('Multi')!.getCell('B1').value.number).toBe(20)
-  expect(wb2.getWorksheet('Multi')!.getCell('A5').value.string).toBe('spare')
+  expect(wb2.getWorksheet('Multi')!.getCell('A1').value).toBe(10)
+  expect(wb2.getWorksheet('Multi')!.getCell('B1').value).toBe(20)
+  expect(wb2.getWorksheet('Multi')!.getCell('A5').value).toBe('spare')
 })
 
 test('getRow().getCell() coexists with addRow values on same row', async () => {
@@ -330,8 +330,8 @@ test('getRow().getCell() coexists with addRow values on same row', async () => {
 
   const wb2 = new Workbook()
   await wb2.xlsx.read(buf)
-  expect(wb2.getWorksheet('Merge')!.getCell('A1').value.string).toBe('header')
-  expect(wb2.getWorksheet('Merge')!.getCell('B1').value.string).toBe('computed')
+  expect(wb2.getWorksheet('Merge')!.getCell('A1').value).toBe('header')
+  expect(wb2.getWorksheet('Merge')!.getCell('B1').value).toBe('computed')
 })
 
 test('getRow().getCell() write then read with ExcelJS validates output', async () => {

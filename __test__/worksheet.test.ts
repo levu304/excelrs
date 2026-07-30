@@ -15,7 +15,8 @@ test('getCell by address (via JS glue)', () => {
   expect(cell.address).toBe('A1')
   expect(cell.row).toBe(1)
   expect(cell.col).toBe(1)
-  expect(cell.value.valueType).toBe('Null')
+  expect(cell.value).toBeNull()
+  expect(cell.type).toBe('Null')
 })
 
 test('getCell by row/col (via JS glue)', () => {
@@ -48,16 +49,16 @@ test('addRow creates row with cell values', () => {
 
   // Verify via getCell
   const c1 = ws.getCell('A1')
-  expect(c1.value.string).toBe('Alice')
-  expect(c1.value.valueType).toBe('String')
+  expect(c1.value).toBe('Alice')
+  expect(c1.type).toBe('String')
 
   const c2 = ws.getCell('B1')
-  expect(c2.value.number).toBe(30)
-  expect(c2.value.valueType).toBe('Number')
+  expect(c2.value).toBe(30)
+  expect(c2.type).toBe('Number')
 
   const c3 = ws.getCell('C1')
-  expect(c3.value.boolean).toBe(true)
-  expect(c3.value.valueType).toBe('Boolean')
+  expect(c3.value).toBe(true)
+  expect(c3.type).toBe('Boolean')
 })
 
 test('multiple addRow calls', () => {
@@ -67,8 +68,8 @@ test('multiple addRow calls', () => {
   ws.addRow(['c', 3])
   expect(ws.rowCount).toBe(3)
 
-  expect(ws.getCell('A2').value.string).toBe('b')
-  expect(ws.getCell('B3').value.number).toBe(3)
+  expect(ws.getCell('A2').value).toBe('b')
+  expect(ws.getCell('B3').value).toBe(3)
 })
 
 test('getRow creates row if not exists', () => {
@@ -88,7 +89,8 @@ test('removeRow removes row', () => {
   // Row 1 is gone but rowCount reflects max row (still 2)
   // getCell on row 1 returns empty cell
   const cell = ws.getCell('A1')
-  expect(cell.value.valueType).toBe('Null')
+  expect(cell.type).toBe('Null')
+  expect(cell.value).toBeNull()
 })
 
 test('getRows returns range', () => {
@@ -130,9 +132,9 @@ test('getRow().getCell().value on fresh row — string', () => {
 
   cell.value = 'Hello!'
 
-  expect(ws.getCell('A1').value.string).toBe('Hello!')
+  expect(ws.getCell('A1').value).toBe('Hello!')
 
-  expect(ws.getCell('A1').value.valueType).toBe('String')
+  expect(ws.getCell('A1').type).toBe('String')
 
 })
 
@@ -142,9 +144,9 @@ test('getRow().getCell().value on fresh row — string', () => {
 
   ws.getRow(2).getCell('B').value = 42
 
-  expect(ws.getCell('B2').value.number).toBe(42)
+  expect(ws.getCell('B2').value).toBe(42)
 
-  expect(ws.getCell('B2').value.valueType).toBe('Number')
+  expect(ws.getCell('B2').type).toBe('Number')
 
 })
 
@@ -154,9 +156,9 @@ test('getRow().getCell().value on fresh row — string', () => {
 
   ws.getRow(3).getCell('C').value = true
 
-  expect(ws.getCell('C3').value.boolean).toBe(true)
+  expect(ws.getCell('C3').value).toBe(true)
 
-  expect(ws.getCell('C3').value.valueType).toBe('Boolean')
+  expect(ws.getCell('C3').type).toBe('Boolean')
 
 })
 
@@ -178,7 +180,7 @@ test('getRow().getCell().value on fresh row — string', () => {
 
   ws.getRow(1).getCell(1).value = 99
 
-  expect(ws.getCell('A1').value.number).toBe(99)
+  expect(ws.getCell('A1').value).toBe(99)
 
 })
 
@@ -188,7 +190,7 @@ test('getRow().getCell().value on fresh row — string', () => {
 
   ws.getRow(100).getCell('A').value = 'sparse'
 
-  expect(ws.getCell('A100').value.string).toBe('sparse')
+  expect(ws.getCell('A100').value).toBe('sparse')
 
 })
 
