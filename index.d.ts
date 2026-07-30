@@ -60,6 +60,20 @@ export declare class Cell {
    * - Throws `ExcelrsError::InvalidStyle` on validation failure.
    */
   set style(val: Style | undefined | null)
+  /**
+   * Returns the full `CellValue` discriminated union for this cell.
+   * The return type is `CellValue` (a TS discriminated union);
+   * narrow on `valueType` to access variant-specific fields
+   * without casting.
+   */
+  get valueOf(): CellValue
+  /**
+   * Returns the parsed rich-text runs when the cell is a RichText cell,
+   * or `null` otherwise. No cast is required to read the runs.
+   * Mirrors `cell.formula` — a dedicated typed accessor instead of forcing
+   * the caller to narrow `CellValue`.
+   */
+  get richText(): Array<RichTextRun> | null
 }
 
 /**
@@ -530,7 +544,7 @@ export declare class Worksheet {
 }
 
 /** Active pane quadrant. */
-export declare enum ActivePane {
+export declare const enum ActivePane {
   BottomLeft = 'BottomLeft',
   BottomRight = 'BottomRight',
   TopLeft = 'TopLeft',
@@ -588,7 +602,7 @@ export interface Alignment {
 }
 
 /** Horizontal alignment. */
-export declare enum AlignmentHorizontal {
+export declare const enum AlignmentHorizontal {
   Left = 'Left',
   Center = 'Center',
   Right = 'Right',
@@ -597,7 +611,7 @@ export declare enum AlignmentHorizontal {
 }
 
 /** Vertical alignment. */
-export declare enum AlignmentVertical {
+export declare const enum AlignmentVertical {
   Top = 'Top',
   Middle = 'Middle',
   Bottom = 'Bottom'
@@ -613,7 +627,7 @@ export interface AnchorPoint {
 }
 
 /** Anchor type for embedded images. */
-export declare enum AnchorType {
+export declare const enum AnchorType {
   OneCell = 'OneCell',
   TwoCell = 'TwoCell'
 }
@@ -651,7 +665,7 @@ export interface BorderStyle {
 }
 
 /** Border line style per OOXML §18.18.3. */
-export declare enum BorderStyleStyle {
+export declare const enum BorderStyleStyle {
   Thin = 'Thin',
   Medium = 'Medium',
   Thick = 'Thick',
@@ -685,14 +699,14 @@ export interface CellComment {
 }
 
 /** Cell comments display mode. */
-export declare enum CellComments {
+export declare const enum CellComments {
   None = 'None',
   AsDisplayed = 'AsDisplayed',
   AtEnd = 'AtEnd'
 }
 
 /** Discriminant for cell value variants. Mirrors the `value_type` string values. */
-export declare enum CellType {
+export declare const enum CellType {
   Null = 'Null',
   Number = 'Number',
   String = 'String',
@@ -705,29 +719,17 @@ export declare enum CellType {
   Merge = 'Merge'
 }
 
-export interface CellValue {
-  /**
-   * Discriminant: "Null" | "Number" | "String" | "Boolean" | "Formula" | "Error"
-   * | "Hyperlink" | "RichText" | "Date" | "Merge"
-   */
-  valueType: "Null" | "Number" | "String" | "Boolean" | "Formula" | "Error" | "Hyperlink" | "RichText" | "Date" | "Merge"
-  number?: number
-  string?: string
-  boolean?: boolean
-  formula?: string
-  errorValue?: string
-  /** URL for hyperlink (write-only, Null on read). */
-  hyperlink?: string
-  /** Display text for hyperlink (write-only, Null on read). */
-  hyperlinkText?: string
-  /** Rich text runs (write-only, Null on read). */
-  richText?: Array<RichTextRun>
-  /**
-   * Excel serial date value (days since 1899-12-30; fractional part = time of day).
-   * Exposed as `dateSerial` on the JS `CellValue` object for round-trip support.
-   */
-  dateSerial?: number
-}
+export type CellValue =
+  | { valueType: "Null" }
+  | { valueType: "Number"; number: number }
+  | { valueType: "String"; string: string }
+  | { valueType: "Boolean"; boolean: boolean }
+  | { valueType: "Date"; dateSerial: number }
+  | { valueType: "Formula"; formula: string }
+  | { valueType: "Error"; errorValue: string }
+  | { valueType: "Hyperlink"; hyperlink: string; hyperlinkText?: string }
+  | { valueType: "RichText"; richText: Array<RichTextRun> }
+  | { valueType: "Merge" };
 
 /** A single color used by `colorScale` / `dataBar` / `iconSet` rules. */
 export interface CfColor {
@@ -927,7 +929,7 @@ export interface Fill {
 }
 
 /** Fill kind variants matching OOXML pattern fill types. */
-export declare enum FillKind {
+export declare const enum FillKind {
   None = 'None',
   Solid = 'Solid',
   Gradient = 'Gradient'
@@ -955,7 +957,7 @@ export interface GradientStop {
 }
 
 /** Gradient type: linear or path. */
-export declare enum GradientType {
+export declare const enum GradientType {
   Linear = 'Linear',
   Path = 'Path'
 }
@@ -1051,7 +1053,7 @@ export interface JsStreamValue {
 }
 
 /** Page orientation. */
-export declare enum Orientation {
+export declare const enum Orientation {
   Portrait = 'Portrait',
   Landscape = 'Landscape'
 }
@@ -1158,7 +1160,7 @@ export interface SheetView {
 }
 
 /** Sheet view pane state. */
-export declare enum SheetViewState {
+export declare const enum SheetViewState {
   Frozen = 'Frozen',
   Split = 'Split'
 }

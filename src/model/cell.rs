@@ -506,6 +506,26 @@ impl Cell {
         let mut inner = self.inner.lock().expect("Cell lock poisoned");
         apply_style(&mut inner.style, val)
     }
+
+    // -- value_of / rich_text (typed accessors) --
+
+    /// Returns the full `CellValue` discriminated union for this cell.
+    /// The return type is `CellValue` (a TS discriminated union);
+    /// narrow on `valueType` to access variant-specific fields
+    /// without casting.
+    #[napi(getter, js_name = "valueOf")]
+    pub fn value_of(&self) -> CellValue {
+        self.inner.lock().expect("Cell lock poisoned").value.clone()
+    }
+
+    /// Returns the parsed rich-text runs when the cell is a RichText cell,
+    /// or `null` otherwise. No cast is required to read the runs.
+    /// Mirrors `cell.formula` — a dedicated typed accessor instead of forcing
+    /// the caller to narrow `CellValue`.
+    #[napi(getter)]
+    pub fn rich_text(&self) -> Option<Vec<RichTextRun>> {
+        self.inner.lock().expect("Cell lock poisoned").value.rich_text.clone()
+    }
 }
 
 impl Cell {
@@ -544,6 +564,8 @@ impl Cell {
     /// and recomputing its A1 `address`. Used when rows are shifted
     /// (insert/splice/duplicate) so cell addresses stay consistent.
     pub fn renumber(&mut self, new_row: u32) {
+        // Lock the inner state and update directly (row/col/address on Cell
+        // are #[napi(getter)] which shadows direct field access).
         let mut inner = self.inner.lock().expect("Cell lock poisoned");
         inner.row = new_row;
         inner.address = Cell::compute_address(new_row, inner.col);
