@@ -36,24 +36,33 @@ const CELLVALUE_UNION_TYPE = `export type CellValue =
   | { valueType: "RichText"; richText: Array<RichTextRun> }
   | { valueType: "Merge" };`
 
+// Class body refinements inlined into napi-generated declarations
+// to avoid unsafe class + interface declaration merging.
+const REFINED_CELL_VALUE_SETTER = `  /**
+   * Accepts primitives, CellValue-like objects, or Date — dispatch by shape.
+   */
+  set value(val: CellValue | Partial<CellValue> | string | number | boolean | Date | null)`
+
+const DEPRECATED_CELL_DATE_GETTER = `  /**
+   * @deprecated Use \`cell.value\` instead (returns Date for Date cells).
+   * Will be removed in v3.
+   */
+  get date(): Date | null`
+
+const ROW_GETCELL_GLUE = `  /** Get cell by 1-indexed column number (JS glue → getCellByColNum). */
+  getCell(col: number): Cell
+  /** Get cell by column letter (JS glue → getCellByColLetter). */
+  getCell(col: string): Cell`
+
+const WORKSHEET_GETCELL_GLUE = `  /** Get cell by A1-style address string (JS glue → getCellByAddress). */
+  getCell(address: string): Cell
+  /** Get cell by 1-indexed row and column numbers (JS glue → getCellByRc). */
+  getCell(row: number, col: number): Cell`
+
 const DTS_MARKER = '__EXCELJS_GETCELL_GLUE__'
 
 const DTS_GLUE = `
 // __EXCELJS_GETCELL_GLUE__
-// ExcelJS-compat getCell overloads (TypeScript declaration merging)
-export interface Worksheet {
-  /** Get cell by A1-style address string (JS glue → getCellByAddress). */
-  getCell(address: string): Cell
-  /** Get cell by 1-indexed row and column numbers (JS glue → getCellByRc). */
-  getCell(row: number, col: number): Cell
-}
-export interface Row {
-  /** Get cell by 1-indexed column number (JS glue → getCellByColNum). */
-  getCell(col: number): Cell
-  /** Get cell by column letter (JS glue → getCellByColLetter). */
-  getCell(col: string): Cell
-}
-
 `
 
 function processFile(filePath) {
@@ -88,7 +97,46 @@ function processFile(filePath) {
       modified = true
     }
 
-    // Add getCell overloads (only for index.d.ts)
+    // --- Class body refinements (native.d.ts only) ---
+    // Inline into napi-generated class declarations instead of using
+    // declaration merging (export interface + export declare class).
+    if (basename === 'native.d.ts') {
+      // Cell: refined set value type (napi emits unknown)
+      if (content.includes('  set value(val: unknown)')) {
+        content = content.replace(
+          /  \/\*\*\n   \* Accepts JS primitives and CellValue objects\.[\s\S]*?\n  set value\(val: unknown\)/,
+          REFINED_CELL_VALUE_SETTER
+        )
+        modified = true
+      }
+
+      // Cell: add @deprecated to date getter
+      const plainDateGetter = '  /** Returns a JS `Date` for Date-type cells, or `null` otherwise. */\n  get date(): Date | null'
+      if (content.includes(plainDateGetter)) {
+        content = content.replace(plainDateGetter, DEPRECATED_CELL_DATE_GETTER)
+        modified = true
+      }
+
+      // Row: inject getCell overloads before closing }
+      if (content.includes('getCellByColLetter(colLetter: string): Cell\n}')) {
+        content = content.replace(
+          /(getCellByColLetter\(colLetter: string\): Cell\n)\}/,
+          '$1' + ROW_GETCELL_GLUE + '\n}'
+        )
+        modified = true
+      }
+
+      // Worksheet: inject getCell overloads before closing }
+      if (content.includes('removeTable(name: string): boolean\n}')) {
+        content = content.replace(
+          /(removeTable\(name: string\): boolean\n)\}/,
+          '$1' + WORKSHEET_GETCELL_GLUE + '\n}'
+        )
+        modified = true
+      }
+    }
+
+    // Add DTS marker (only for index.d.ts)
     if (basename === 'index.d.ts') {
       if (content.includes(DTS_MARKER)) {
         // CellValue already handled above; write if we replaced it.

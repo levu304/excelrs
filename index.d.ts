@@ -1,15 +1,5 @@
 type CellSimpleValue = number | string | boolean | null
-type CellValueResult = CellSimpleValue | Date | CellValue
-
-export interface Cell {
-  /** Accepts primitives, CellValue-like objects, or Date — dispatch by shape. */
-  set value(val: CellValue | Partial<CellValue> | string | number | boolean | Date | null)
-  /**
-   * @deprecated Use `cell.value` instead (returns Date for Date cells).
-   * Will be removed in v3.
-   */
-  get date(): Date | null
-}/**
+type CellValueResult = CellSimpleValue | Date | CellValue/**
  * A single cell in a worksheet.
  *
  * Holds `Arc<Mutex<CellInner>>` so that every clone shares the same underlying
@@ -21,17 +11,15 @@ export declare class Cell {
   get value(): CellValueResult
   /** Returns the cell value type discriminant. */
   get type(): CellType
-  /** Returns a JS `Date` for Date-type cells, or `null` otherwise. */
+  /**
+   * @deprecated Use `cell.value` instead (returns Date for Date cells).
+   * Will be removed in v3.
+   */
   get date(): Date | null
   /**
-   * Accepts JS primitives and CellValue objects.
-   *
-   * Three-path dispatch:
-   * 1. Raw JS `Date` → serial (for `cell.value = new Date(...)`)
-   * 2. `CellValue` object / other objects → `Null` (round-trip via object is not supported)
-   * 3. `serde_json::Value` fallback (Number, String, Bool, Null)
+   * Accepts primitives, CellValue-like objects, or Date — dispatch by shape.
    */
-  set value(val: unknown)
+  set value(val: CellValue | Partial<CellValue> | string | number | boolean | Date | null)
   get address(): string
   get row(): number
   get col(): number
@@ -137,6 +125,10 @@ export declare class Row {
    * This is the Rust backing for `Row.getCell(col: string)`.
    */
   getCellByColLetter(colLetter: string): Cell
+  /** Get cell by 1-indexed column number (JS glue → getCellByColNum). */
+  getCell(col: number): Cell
+  /** Get cell by column letter (JS glue → getCellByColLetter). */
+  getCell(col: string): Cell
 }
 
 /**
@@ -541,6 +533,10 @@ export declare class Worksheet {
   getTables(): Array<Table>
   /** Remove the named table (and its part/relationship); cells stay intact. */
   removeTable(name: string): boolean
+  /** Get cell by A1-style address string (JS glue → getCellByAddress). */
+  getCell(address: string): Cell
+  /** Get cell by 1-indexed row and column numbers (JS glue → getCellByRc). */
+  getCell(row: number, col: number): Cell
 }
 
 /** Active pane quadrant. */
@@ -1240,18 +1236,4 @@ export interface WorkbookView {
 }
 
 // __EXCELJS_GETCELL_GLUE__
-// ExcelJS-compat getCell overloads (TypeScript declaration merging)
-export interface Worksheet {
-  /** Get cell by A1-style address string (JS glue → getCellByAddress). */
-  getCell(address: string): Cell
-  /** Get cell by 1-indexed row and column numbers (JS glue → getCellByRc). */
-  getCell(row: number, col: number): Cell
-}
-export interface Row {
-  /** Get cell by 1-indexed column number (JS glue → getCellByColNum). */
-  getCell(col: number): Cell
-  /** Get cell by column letter (JS glue → getCellByColLetter). */
-  getCell(col: string): Cell
-}
-
 
