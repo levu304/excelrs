@@ -36,12 +36,28 @@ const CELLVALUE_UNION_TYPE = `export type CellValue =
   | { valueType: "RichText"; richText: Array<RichTextRun> }
   | { valueType: "Merge" };`
 
+// Input form for the Cell.value setter: same variants but with an optional
+// discriminant, so object-shaped values can be assigned with or without
+// valueType. A union (not a flat interface) so excess-property checking rejects
+// cross-variant field mixes like { valueType: "Number", string: "x" }.
+const CELLVALUE_INPUT_TYPE = `export type CellValueInput =
+  | { valueType?: "Null" }
+  | { valueType?: "Number"; number: number }
+  | { valueType?: "String"; string: string }
+  | { valueType?: "Boolean"; boolean: boolean }
+  | { valueType?: "Date"; dateSerial: number }
+  | { valueType?: "Formula"; formula: string }
+  | { valueType?: "Error"; errorValue: string }
+  | { valueType?: "Hyperlink"; hyperlink: string; hyperlinkText?: string }
+  | { valueType?: "RichText"; richText: Array<RichTextRun> }
+  | { valueType?: "Merge" };`
+
 // Class body refinements inlined into napi-generated declarations
 // to avoid unsafe class + interface declaration merging.
 const REFINED_CELL_VALUE_SETTER = `  /**
-   * Accepts primitives, CellValue-like objects, or Date — dispatch by shape.
+   * Accepts primitives, CellValueInput-like objects, or Date — dispatch by shape.
    */
-  set value(val: CellValue | Partial<CellValue> | string | number | boolean | Date | null)`
+  set value(val: CellValueInput | string | number | boolean | Date | null)`
 
 const DEPRECATED_CELL_DATE_GETTER = `  /**
    * @deprecated Use \`cell.value\` instead (returns Date for Date cells).
@@ -93,6 +109,15 @@ function processFile(filePath) {
       content = content.replace(
         /export interface CellValue \{[^}]*\n\}/,
         CELLVALUE_UNION_TYPE
+      )
+      modified = true
+    }
+
+    // Append CellValueInput right after the union (idempotent).
+    if (content.includes('export type CellValue =') && !content.includes('export type CellValueInput =')) {
+      content = content.replace(
+        /(export type CellValue =[^\n]*(?:\n[^\n]*)*?;\n)/,
+        '$1' + '\n' + CELLVALUE_INPUT_TYPE + '\n'
       )
       modified = true
     }

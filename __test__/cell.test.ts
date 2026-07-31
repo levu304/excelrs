@@ -102,3 +102,15 @@ test('cell.valueOf vs cell.value — primitive vs CellValue object', () => {
     expect(cv.number).toBe(42)
   }
 })
+
+test('cell.richText returns null for a Number cell', () => {
+  const cell = new Cell('A1', 0, 0)
+  cell.value = 42
+  expect(cell.type).toBe('Number')
+  expect(cell.richText).toBeNull()
+})
+
+test('cell.valueOf returns Null variant for a freshly constructed cell', () => {
+  const cell = new Cell('A1', 0, 0)
+  expect(cell.valueOf.valueType).toBe('Null')
+})

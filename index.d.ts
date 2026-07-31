@@ -17,9 +17,9 @@ export declare class Cell {
    */
   get date(): Date | null
   /**
-   * Accepts primitives, CellValue-like objects, or Date — dispatch by shape.
+   * Accepts primitives, CellValueInput-like objects, or Date — dispatch by shape.
    */
-  set value(val: CellValue | Partial<CellValue> | string | number | boolean | Date | null)
+  set value(val: CellValueInput | string | number | boolean | Date | null)
   get address(): string
   get row(): number
   get col(): number
@@ -726,6 +726,18 @@ export type CellValue =
   | { valueType: "Hyperlink"; hyperlink: string; hyperlinkText?: string }
   | { valueType: "RichText"; richText: Array<RichTextRun> }
   | { valueType: "Merge" };
+
+export type CellValueInput =
+  | { valueType?: "Null" }
+  | { valueType?: "Number"; number: number }
+  | { valueType?: "String"; string: string }
+  | { valueType?: "Boolean"; boolean: boolean }
+  | { valueType?: "Date"; dateSerial: number }
+  | { valueType?: "Formula"; formula: string }
+  | { valueType?: "Error"; errorValue: string }
+  | { valueType?: "Hyperlink"; hyperlink: string; hyperlinkText?: string }
+  | { valueType?: "RichText"; richText: Array<RichTextRun> }
+  | { valueType?: "Merge" };
 
 /** A single color used by `colorScale` / `dataBar` / `iconSet` rules. */
 export interface CfColor {
