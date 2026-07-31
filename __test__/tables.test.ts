@@ -53,8 +53,9 @@ test('addTable round-trips through write/read (v1.1.0)', async () => {
   expect(t.columns.length).toBe(3)
   expect(t.columns[0].name).toBe('A')
   expect(t.rows.length).toBe(2)
-  expect(t.rows[0].values[0].number).toBe(1)
-  expect(t.rows[1].values[2].number).toBe(6)
+  // Ponte: tables test uses array values, not CellValue narrowing
+  expect((t.rows[0].values[0] as any).number).toBe(1)
+  expect((t.rows[1].values[2] as any).number).toBe(6)
   expect(t.style?.theme).toBe('TableStyleMedium2')
   expect(t.autofilterRef).toBe('A1:C3')
 })
@@ -133,7 +134,7 @@ test('reads an ExcelJS-authored table (v1.1.0)', async () => {
   // OOXML-correct reconstruction (exclude the totals row) yields 1 data row here.
   // Assert fidelity: at least the first authored data row is recovered.
   expect(t.rows.length).toBeGreaterThanOrEqual(1)
-  expect(t.rows[0].values[0].number).toBe(1)
+  expect((t.rows[0].values[0] as any).number).toBe(1)
 })
 
 test('autoFilter disabled (v1.1.0)', async () => {

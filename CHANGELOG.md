@@ -1,6 +1,33 @@
 # Changelog
 <!-- Release process: tag-driven from main. `git tag -a vX.Y.Z -m "..."` then push the tag. -->
 
+## [2.5.1] - 2026-07-30
+
+### Added
+
+- **`Cell.richText` getter** — reads `RichTextRun[] | null` directly from a
+  RichText cell without an `as CellValue` cast. Mirrors `cell.formula` / `cell.note`.
+- **`Cell.valueOf` getter** — returns the full `CellValue` discriminated-union object
+  (the rich value shape) for any cell, even Number/String/Boolean cells where
+  `cell.value` unwraps to a primitive.
+- **`CellValue` is now a true TypeScript discriminated union** — the generated
+  `native.d.ts` / `index.d.ts` replaces `export interface CellValue { … }` with
+  `export type CellValue = …` (one variant per `valueType`). TS narrows fields
+  automatically on `if (cv.valueType === "RichText") cv.richText`.
+
+### Changed
+
+- **`dts-header.d.ts` references `CellValue` correctly** — the `dts-header.d.ts`
+  already used `CellValue` as a type reference; the discriminated union makes
+  narrowing work at compile time.
+
+### Internal
+
+- `scripts/apply-glue.cjs`: added `CELLVALUE_UNION_TYPE` const + regex replacement
+  on `native.d.ts` and `index.d.ts` during the build pipe.
+- Added `#[napi(getter, js_name = "valueOf")] value_of(&self)` and
+  `#[napi(getter)] rich_text(&self)` on `impl Cell` in `src/model/cell.rs`.
+
 ## [2.5.0] - 2026-07-30
 
 ### ⚠ BREAKING

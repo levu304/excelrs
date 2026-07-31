@@ -27,12 +27,11 @@ test('cell.value = { richText: ... } writes and round-trips', async () => {
   const cell2 = wb2.getWorksheet('S')!.getCell('A1')
 
   expect(cell2.type).toBe('RichText')
-  const result = cell2.value as import('../index').CellValue
-  expect(result.richText).toBeDefined()
-  expect(result.richText!.length).toBe(2)
-  expect(result.richText![0].text).toBe('Hello ')
-  expect(result.richText![0].font?.bold).toBe(true)
-  expect(result.richText![1].text).toBe('World')
+  expect(cell2.richText).toBeDefined()
+  expect(cell2.richText!.length).toBe(2)
+  expect(cell2.richText![0].text).toBe('Hello ')
+  expect(cell2.richText![0].font?.bold).toBe(true)
+  expect(cell2.richText![1].text).toBe('World')
 })
 
 test('cell.value = { richText: ... } with full font (user reproduction)', async () => {
@@ -59,12 +58,11 @@ test('cell.value = { richText: ... } with full font (user reproduction)', async 
   const cell2 = wb2.getWorksheet('S')!.getCell('A1')
 
   expect(cell2.type).toBe('RichText')
-  const result = cell2.value as import('../index').CellValue
-  expect(result.richText!.length).toBe(2)
-  expect(result.richText![0].text).toBe('B: (11) = (7) + (10)\n')
-  expect(result.richText![0].font?.name).toBe('Times New Roman')
-  expect(result.richText![0].font?.size).toBeCloseTo(8)
-  expect(result.richText![1].text).toBe('S: (11) = (7) - (8) - (10)')
+  expect(cell2.richText!.length).toBe(2)
+  expect(cell2.richText![0].text).toBe('B: (11) = (7) + (10)\n')
+  expect(cell2.richText![0].font?.name).toBe('Times New Roman')
+  expect(cell2.richText![0].font?.size).toBeCloseTo(8)
+  expect(cell2.richText![1].text).toBe('S: (11) = (7) - (8) - (10)')
 })
 
 test('cell.value = { hyperlink: ... } writes and round-trips', async () => {
@@ -114,6 +112,25 @@ test('cell.value = { formula: ... } persists through XLSX write and read-back', 
   const cell2 = wb2.getWorksheet('S')!.getCell('A1')
 
   expect(cell2.formula).toBe('SUM(A1:A2)')
+})
+
+test('cell.valueOf discriminated union narrows on valueType', () => {
+  const wb = makeWorkbook()
+  const ws = wb.getWorksheet('S')!
+  const cell = ws.getCell('A1')
+
+  cell.value = {
+    richText: [{ text: 'A' }, { text: 'B' }],
+  }
+
+  // Narrow via valueType — TS prevents accessing richText on other variants
+  const cv = cell.valueOf
+  if (cv.valueType === 'RichText') {
+    expect(cv.richText.length).toBe(2)
+  } else {
+    // Should never reach here for a RichText cell
+    expect(true).toBe(false)
+  }
 })
 
 test('unknown valueType raises an error', () => {

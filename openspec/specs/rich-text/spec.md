@@ -20,6 +20,22 @@ When reading an `.xlsx`, the reader SHALL parse rich-text cell values (inline `<
 - **WHEN** a cell holds a plain string value
 - **THEN** `cell.value.value_type === "String"` and `rich_text` is `undefined`/`null`
 
+### Requirement: Cell.richText accessor returns runs without a cast
+
+The `Cell.richText` getter (`#[napi(getter)]`) SHALL return `RichTextRun[] | null` — the
+parsed runs when the cell is a RichText cell, or `null` otherwise. The caller SHALL read
+`cell.richText` directly (property access, no parentheses) without any `as CellValue` cast.
+
+#### Scenario: Read runs directly
+
+- **WHEN** a RichText cell was written with two runs and `cell.type === "RichText"`
+- **THEN** `cell.richText` SHALL be the `RichTextRun[]` (length 2) with the bold flag preserved on the first run, typed without any cast
+
+#### Scenario: Non-RichText cell returns null
+
+- **WHEN** a Number cell stores `42`
+- **THEN** `cell.richText` SHALL be `null`
+
 ### Requirement: Workbook round-trips rich text
 
 A workbook written by excelrs with rich-text runs SHALL, after being read back, yield a `CellValue` whose `rich_text` runs match the originally written runs (text and per-run font).

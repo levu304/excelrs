@@ -79,3 +79,37 @@ test('set value with a CellValue object literal dispatches by valueType', () => 
   expect(cell.type).toBe('Number')
   expect(cell.value).toBe(5)
 })
+
+test('cell.valueOf returns CellValue discriminated union for RichText cells', () => {
+  const cell = new Cell('A1', 0, 0)
+  cell.value = {
+    richText: [{ text: 'Hello' }],
+  }
+  expect(cell.valueOf.valueType).toBe('RichText')
+  expect(cell.richText).toBeDefined()
+  expect(cell.richText!.length).toBe(1)
+})
+
+test('cell.valueOf vs cell.value — primitive vs CellValue object', () => {
+  const cell = new Cell('A1', 0, 0)
+  cell.value = 42
+  // value unwraps primitives; valueOf returns the full discriminated union
+  expect(cell.value).toBe(42)
+  expect(cell.valueOf.valueType).toBe('Number')
+  const cv = cell.valueOf
+  if (cv.valueType === 'Number') {
+    expect(cv.number).toBe(42)
+  }
+})
+
+test('cell.richText returns null for a Number cell', () => {
+  const cell = new Cell('A1', 0, 0)
+  cell.value = 42
+  expect(cell.type).toBe('Number')
+  expect(cell.richText).toBeNull()
+})
+
+test('cell.valueOf returns Null variant for a freshly constructed cell', () => {
+  const cell = new Cell('A1', 0, 0)
+  expect(cell.valueOf.valueType).toBe('Null')
+})
