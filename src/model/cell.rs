@@ -44,6 +44,26 @@ pub enum CellType {
     Merge,
 }
 
+impl CellType {
+    /// Central lookup table mapping discriminant tag strings to `CellType`.
+    /// Returns `None` for unrecognized tags.
+    pub(crate) fn from_tag(tag: &str) -> Option<CellType> {
+        Some(match tag {
+            "Null" => CellType::Null,
+            "Number" => CellType::Number,
+            "String" => CellType::String,
+            "Boolean" => CellType::Boolean,
+            "Date" => CellType::Date,
+            "Formula" => CellType::Formula,
+            "Error" => CellType::Error,
+            "Hyperlink" => CellType::Hyperlink,
+            "RichText" => CellType::RichText,
+            "Merge" => CellType::Merge,
+            _ => return None,
+        })
+    }
+}
+
 // ---------------------------------------------------------------------------
 // CellValue
 // ---------------------------------------------------------------------------
@@ -272,19 +292,7 @@ impl Cell {
     #[napi(getter, js_name = "type")]
     pub fn value_type(&self) -> CellType {
         let inner = self.inner.lock().expect("Cell lock poisoned");
-        match inner.value.value_type.as_str() {
-            "Null" => CellType::Null,
-            "Number" => CellType::Number,
-            "String" => CellType::String,
-            "Boolean" => CellType::Boolean,
-            "Date" => CellType::Date,
-            "Formula" => CellType::Formula,
-            "Error" => CellType::Error,
-            "Hyperlink" => CellType::Hyperlink,
-            "RichText" => CellType::RichText,
-            "Merge" => CellType::Merge,
-            _ => CellType::Null,
-        }
+        CellType::from_tag(&inner.value.value_type).unwrap_or(CellType::Null)
     }
 
     // -- date (read-only) --
@@ -383,19 +391,7 @@ impl Cell {
                 } else if let Some(f) = obj.get("formula").and_then(|v| v.as_str()) {
                     CellValue::formula(f.to_string())
                 } else if let Some(vt) = obj.get("valueType").and_then(|v| v.as_str()) {
-                    if !matches!(
-                        vt,
-                        "Number"
-                            | "String"
-                            | "Boolean"
-                            | "Formula"
-                            | "Error"
-                            | "Hyperlink"
-                            | "RichText"
-                            | "Date"
-                            | "Null"
-                            | "Merge"
-                    ) {
+                    if CellType::from_tag(vt).is_none() {
                         return Err(napi::Error::from_reason(format!("Unknown valueType discriminant: '{vt}'. Expected one of: Number, String, Boolean, Formula, Error, Hyperlink, RichText, Date, Null, Merge")));
                     }
                     let number = obj.get("number").and_then(|v| v.as_f64());
