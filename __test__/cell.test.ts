@@ -85,7 +85,6 @@ test('cell.valueOf returns CellValue discriminated union for RichText cells', ()
   cell.value = {
     richText: [{ text: 'Hello' }],
   }
-  expect(cell.valueOf).toBeDefined()
   expect(cell.valueOf.valueType).toBe('RichText')
   expect(cell.richText).toBeDefined()
   expect(cell.richText!.length).toBe(1)
