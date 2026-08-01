@@ -1,0 +1,6 @@
+schema: spec-driven
+created: 2026-08-01
+# Doc-comment dedup = zero behavioral delta (no API/runtime/behavior change).
+# Per spec-driven: pure tooling/docs changes must NOT invent requirements;
+# skip_specs leaves specs legitimately empty.
+skip_specs: true

@@ -189,3 +189,188 @@ test('4.1 writeToWritable ends the destination stream', async () => {
   expect(sheets).toHaveLength(1)
   expect(sheets[0].name).toBe('Data')
 })
+
+// ---------------------------------------------------------------------------
+// 6.1 finalizeToFile round-trip test
+// ---------------------------------------------------------------------------
+
+import { open } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { mkdirSync, rmSync } from 'node:fs'
+
+test('6.1 finalizeToFile round-trips through StreamReader', async () => {
+  const wbjs = new ExcelJS.Workbook()
+  const ws = wbjs.addWorksheet('Data')
+  ws.getCell('A1').value = 'finalizeToFile'
+  ws.getCell('B1').value = 99
+  const buf = Buffer.from(await wbjs.xlsx.writeBuffer())
+
+  // Write via StreamWriter to a temp file
+  const reader = new StreamReader(buf)
+  const writer = new StreamWriter()
+  for await (const sheet of reader as unknown as AsyncIterable<JsStreamSheet>) {
+    writer.writeSheet(sheet)
+  }
+
+  const tmpDir = join(dirname(fileURLToPath(import.meta.url)), '__tmp_test__')
+  mkdirSync(tmpDir, { recursive: true })
+  const tmpPath = join(tmpDir, 'test-roundtrip.xlsx')
+
+  await writer.finalizeToFile(tmpPath)
+
+  // Read back via StreamReader and verify
+  const fileBuf = await import('node:fs/promises').then(m => m.readFile(tmpPath))
+  const reader2 = new StreamReader(Buffer.from(fileBuf))
+  const sheets: JsStreamSheet[] = []
+  for await (const s of reader2 as unknown as AsyncIterable<JsStreamSheet>) sheets.push(s)
+
+  expect(sheets).toHaveLength(1)
+  expect(sheets[0].name).toBe('Data')
+  expect(sheets[0].rows[0].cells[0].value.text).toBe('finalizeToFile')
+  expect(sheets[0].rows[0].cells[1].value.number).toBe(99)
+
+  rmSync(tmpDir, { recursive: true })
+})
+
+// ---------------------------------------------------------------------------
+// 6.2 finalizeToReadable round-trips when consumed to a file
+// ---------------------------------------------------------------------------
+
+test('6.2 finalizeToReadable round-trips through a file', async () => {
+  const wbjs = new ExcelJS.Workbook()
+  const ws = wbjs.addWorksheet('Data')
+  ws.getCell('A1').value = 'finalizeToReadable'
+  ws.getCell('B1').value = 99
+  const buf = Buffer.from(await wbjs.xlsx.writeBuffer())
+
+  // Stream through StreamReader -> StreamWriter incrementally.
+  const reader = new StreamReader(buf)
+  const writer = new StreamWriter()
+  for await (const sheet of reader as unknown as AsyncIterable<JsStreamSheet>) {
+    writer.writeSheet(sheet)
+  }
+
+  const tmpDir = join(dirname(fileURLToPath(import.meta.url)), '__tmp_test__')
+  mkdirSync(tmpDir, { recursive: true })
+  const tmpPath = join(tmpDir, 'test-readable.xlsx')
+
+  // Drive the Web ReadableStream (from finalizeToReadable) to a file via its
+  // reader API, honoring the stream's natural backpressure.
+  const readable = writer.finalizeToReadable()
+  const fileHandle = await open(tmpPath, 'w')
+  const webReader = readable.getReader()
+  let step = await webReader.read()
+  while (!step.done) {
+    await fileHandle.write(step.value)
+    step = await webReader.read()
+  }
+  await fileHandle.close()
+
+  // Read back via StreamReader and verify values match what was written.
+  const fileBuf = await import('node:fs/promises').then(m => m.readFile(tmpPath))
+  const reader2 = new StreamReader(Buffer.from(fileBuf))
+  const sheets: JsStreamSheet[] = []
+  for await (const s of reader2 as unknown as AsyncIterable<JsStreamSheet>) sheets.push(s)
+
+  expect(sheets).toHaveLength(1)
+  expect(sheets[0].name).toBe('Data')
+  expect(sheets[0].rows[0].cells[0].value.text).toBe('finalizeToReadable')
+  expect(sheets[0].rows[0].cells[1].value.number).toBe(99)
+
+  rmSync(tmpDir, { recursive: true })
+})
+
+// ---------------------------------------------------------------------------
+// 6.3 Memory bounding: finalizeToFile streams output; heap growth bounded (input buffered). See docs/adr/005-streaming-write-buffering.md
+// ---------------------------------------------------------------------------
+
+test('6.3 finalizeToFile bounded output-phase heap growth (input buffered)', async () => {
+  const wbjs = new ExcelJS.Workbook()
+  for (let i = 0; i < 50; i++) {
+    const ws = wbjs.addWorksheet(`Sheet${i}`)
+    for (let r = 1; r <= 1000; r++) {
+      ws.getCell(`A${r}`).value = `row-${r}`
+    }
+  }
+  const buf = Buffer.from(await wbjs.xlsx.writeBuffer())
+
+  const tmpDir = join(dirname(fileURLToPath(import.meta.url)), '__tmp_test__')
+  mkdirSync(tmpDir, { recursive: true })
+  const tmpPath = join(tmpDir, 'test-memory.xlsx')
+
+  const reader = new StreamReader(buf)
+  const writer = new StreamWriter()
+  for await (const sheet of reader as unknown as AsyncIterable<JsStreamSheet>) {
+    writer.writeSheet(sheet)
+  }
+
+  // Force GC for a deterministic measurement when --expose-gc is active.
+  // Without it heapUsed is nondeterministic (V8 arenas / CI timing), so the
+  // gate below soft-skips rather than red-green-flipping a green build.
+  const g = globalThis as unknown as { gc?: () => void }
+  const maybeGc = () => { if (g.gc) { g.gc(); g.gc() } }
+  const gcAvailable = typeof g.gc === 'function'
+  maybeGc()
+  const before = process.memoryUsage().heapUsed
+  await writer.finalizeToFile(tmpPath)
+  maybeGc()
+  const after = process.memoryUsage().heapUsed
+
+  // Output is streamed (bounded mpsc channel); only input was buffered.
+  // See docs/adr/005-streaming-write-buffering.md.
+  // (heuristic: less than 50MB increase for 50 sheets x 1000 rows)
+  const delta = after - before
+  if (gcAvailable) {
+    expect(delta).toBeLessThan(50 * 1024 * 1024)
+  } else {
+    console.warn('[6.3] heap assertion skipped: --expose-gc not enabled (non-deterministic without forced GC)')
+  }
+
+  // Verify file is valid by reading it back
+  const fileBuf = await import('node:fs/promises').then(m => m.readFile(tmpPath))
+  const reader2 = new StreamReader(Buffer.from(fileBuf))
+  const sheets: JsStreamSheet[] = []
+  for await (const s of reader2 as unknown as AsyncIterable<JsStreamSheet>) sheets.push(s)
+  expect(sheets).toHaveLength(50)
+
+  rmSync(tmpDir, { recursive: true })
+})
+
+// ---------------------------------------------------------------------------
+// 6.4 cancel() on finalizeToReadable settles promptly (no 55-60s GC park)
+//
+// Regression guard for openspec change `worker-cancellation-guard-finalize-readable`.
+// JS surface: `writeToWritable`'s finally calls releaseLock()+cancel(). Here we
+// assert the ReadableStream cancels promptly and cleanup does not throw.
+// NOTE the native worker-thread unwind is guarded by the Rust unit (3.3);
+// JS cannot observe native thread count, so 1.2 guards the cancel-propagation
+// path, not the thread lifetime. A closed channel + try_send unwinds the worker
+// on receiver-drop (B1), deterministic per 3.3.
+// ---------------------------------------------------------------------------
+
+test('6.4 cancel() on finalizeToReadable settles within 2s (no 55-60s leak)', async () => {
+  const writer = new StreamWriter()
+  const rows: { r: number; cells: Array<{ col: number; value: { text: string } }> }[] = []
+  for (let r = 1; r <= 4000; r++) rows.push({ r, cells: [{ col: 1, value: { text: `row-${r}` } }] })
+  writer.writeSheet({ name: 'S', rows })
+
+  const readable = writer.finalizeToReadable()
+  const reader = readable.getReader()
+
+  // Start draining so the worker produces into (and eventually fills) cap-16.
+  for (let i = 0; i < 3; i++) {
+    const res = await reader.read()
+    if (res.done) break
+  }
+
+  // Per the Web Streams spec, cancel() requires an unlocked stream, so release
+  // the reader first (no read is in flight here), then cancel. Mirrors the
+  // writeToWritable finally-cleanup. cancel() resolving ≤2s asserts the
+  // prompt-lever signal path; the worker-thread unwind itself is guarded by
+  // the Rust unit (3.3), since JS cannot observe native thread count.
+  reader.releaseLock()
+  const t0 = Date.now()
+  await readable.cancel('abandoned')
+  expect(Date.now() - t0).toBeLessThan(2000)
+})

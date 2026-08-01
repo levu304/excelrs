@@ -223,6 +223,192 @@ pub fn build_style_table(styles: &[Option<Style>]) -> StyleTable {
 }
 
 // ---------------------------------------------------------------------------
+// StyleAccumulator — incremental, single-style-at-a-time dedup
+// ---------------------------------------------------------------------------
+
+/// Incremental style dedup that produces byte-identical output to
+/// [`build_style_table`] when fed the same styles in the same order.
+///
+/// Mirrors the dedup logic of `build_style_table` but processes one
+/// style at a time via [`register`], assigning xf IDs inline. Call
+/// [`into_style_table`] at the end to produce the final [`StyleTable`].
+pub struct StyleAccumulator {
+    font_map: BTreeMap<String, u32>,
+    fill_map: BTreeMap<String, u32>,
+    border_map: BTreeMap<String, u32>,
+    numfmt_map: BTreeMap<String, u32>,
+    alignment_map: BTreeMap<String, u32>,
+
+    fonts: Vec<Font>,
+    fills: Vec<Fill>,
+    borders: Vec<Border>,
+    num_fmts: Vec<(u32, String)>,
+    alignments: Vec<Alignment>,
+
+    next_numfmt_id: u32,
+
+    /// Dedup map for cellXfs entries. Key is the canonical CellXf tuple.
+    xf_set: BTreeMap<CellXf, u32>,
+    cell_xfs: Vec<CellXf>,
+    cell_indices: Vec<u32>,
+}
+
+impl Default for StyleAccumulator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl StyleAccumulator {
+    /// Create an empty accumulator pre-seeded with Normal entries.
+    pub fn new() -> Self {
+        let normal_font = Font::default();
+        let normal_fill = Fill::default();
+        let normal_border = Border::default();
+        let normal_alignment = Alignment::default();
+
+        let mut font_map = BTreeMap::new();
+        let mut fill_map = BTreeMap::new();
+        let mut border_map = BTreeMap::new();
+        let mut alignment_map = BTreeMap::new();
+
+        font_map.insert(canonical_key(&normal_font), 0);
+        fill_map.insert(canonical_key(&normal_fill), 0);
+        border_map.insert(canonical_key(&normal_border), 0);
+        alignment_map.insert(canonical_key(&normal_alignment), 0);
+
+        Self {
+            font_map,
+            fill_map,
+            border_map,
+            numfmt_map: BTreeMap::new(),
+            fonts: vec![normal_font],
+            fills: vec![normal_fill],
+            borders: vec![normal_border],
+            num_fmts: Vec::new(),
+            alignments: vec![normal_alignment],
+            next_numfmt_id: 164,
+            alignment_map,
+            xf_set: {
+                let mut m = BTreeMap::new();
+                m.insert(
+                    CellXf {
+                        num_fmt_id: 0,
+                        font_id: 0,
+                        fill_id: 0,
+                        border_id: 0,
+                        alignment_id: 0,
+                    },
+                    0,
+                );
+                m
+            },
+            cell_xfs: vec![CellXf {
+                num_fmt_id: 0,
+                font_id: 0,
+                fill_id: 0,
+                border_id: 0,
+                alignment_id: 0,
+            }],
+            cell_indices: Vec::new(),
+        }
+    }
+
+    /// Register one style, returning its unique cellXfs index.
+    ///
+    /// `None` / empty style maps to Normal (index 0).
+    pub fn register(&mut self, style: &Option<Style>) -> u32 {
+        let xf = if is_normal(style) {
+            CellXf {
+                num_fmt_id: 0,
+                font_id: 0,
+                fill_id: 0,
+                border_id: 0,
+                alignment_id: 0,
+            }
+        } else {
+            let style = style.as_ref().unwrap();
+
+            let font_id = match &style.font {
+                Some(f) => *self.font_map.entry(canonical_key(f)).or_insert_with(|| {
+                    let id = self.fonts.len() as u32;
+                    self.fonts.push(f.clone());
+                    id
+                }),
+                None => 0,
+            };
+
+            let fill_id = match &style.fill {
+                Some(f) => *self.fill_map.entry(canonical_key(f)).or_insert_with(|| {
+                    let id = self.fills.len() as u32;
+                    self.fills.push(f.clone());
+                    id
+                }),
+                None => 0,
+            };
+
+            let border_id = match &style.border {
+                Some(b) => *self.border_map.entry(canonical_key(b)).or_insert_with(|| {
+                    let id = self.borders.len() as u32;
+                    self.borders.push(b.clone());
+                    id
+                }),
+                None => 0,
+            };
+
+            let num_fmt_id = match &style.num_fmt {
+                Some(fmt) => *self.numfmt_map.entry(fmt.clone()).or_insert_with(|| {
+                    let id = self.next_numfmt_id;
+                    self.next_numfmt_id += 1;
+                    self.num_fmts.push((id, fmt.clone()));
+                    id
+                }),
+                None => 0,
+            };
+
+            let alignment_id = match &style.alignment {
+                Some(a) => *self.alignment_map.entry(canonical_key(a)).or_insert_with(|| {
+                    let id = self.alignments.len() as u32;
+                    self.alignments.push(a.clone());
+                    id
+                }),
+                None => 0,
+            };
+
+            CellXf {
+                num_fmt_id,
+                font_id,
+                fill_id,
+                border_id,
+                alignment_id,
+            }
+        };
+
+        let idx = *self.xf_set.entry(xf).or_insert_with(|| {
+            let id = self.cell_xfs.len() as u32;
+            self.cell_xfs.push(xf);
+            id
+        });
+        self.cell_indices.push(idx);
+        idx
+    }
+
+    /// Consume the accumulator and produce the final [`StyleTable`].
+    pub fn into_style_table(self) -> StyleTable {
+        StyleTable {
+            fonts: self.fonts,
+            fills: self.fills,
+            borders: self.borders,
+            num_fmts: self.num_fmts,
+            alignments: self.alignments,
+            cell_xfs: self.cell_xfs,
+            cell_indices: self.cell_indices,
+            dxfs: Vec::new(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // XML emission
 // ---------------------------------------------------------------------------
 
@@ -1463,5 +1649,191 @@ mod tests {
         );
         assert!(xml.contains("vertical=\"center\""), "middle must map to center: {xml}");
         assert!(!xml.contains("vertical=\"middle\""), "must not emit raw middle: {xml}");
+    }
+
+    // StyleAccumulator unit tests — must produce identical output to build_style_table
+
+    fn styles_to_accumulator(styles: &[Option<Style>]) -> StyleAccumulator {
+        let mut acc = StyleAccumulator::new();
+        for s in styles {
+            acc.register(s);
+        }
+        acc
+    }
+
+    fn assert_tables_eq(table: &StyleTable, batch: &StyleTable) {
+        assert_eq!(table.cell_xfs, batch.cell_xfs);
+        assert_eq!(table.cell_indices, batch.cell_indices);
+        assert_eq!(table.fonts.len(), batch.fonts.len());
+        assert_eq!(table.fills.len(), batch.fills.len());
+        assert_eq!(table.borders.len(), batch.borders.len());
+        assert_eq!(table.num_fmts.len(), batch.num_fmts.len());
+        assert_eq!(table.alignments.len(), batch.alignments.len());
+    }
+
+    #[test]
+    fn accumulator_empty_matches_batch() {
+        let styles: Vec<Option<Style>> = vec![];
+        let acc = styles_to_accumulator(&styles);
+        let table = acc.into_style_table();
+        let batch = build_style_table(&styles);
+        assert_tables_eq(&table, &batch);
+    }
+
+    #[test]
+    fn accumulator_normal_style_matches_batch() {
+        let styles = vec![None, None, Some(Style::default())];
+        let acc = styles_to_accumulator(&styles);
+        let table = acc.into_style_table();
+        let batch = build_style_table(&styles);
+        assert_tables_eq(&table, &batch);
+    }
+
+    #[test]
+    fn accumulator_with_fonts_matches_batch() {
+        let styles = vec![
+            Some(Style {
+                font: Some(Font {
+                    bold: Some(true),
+                    color: Some("FF0000".to_string()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            Some(Style {
+                font: Some(Font {
+                    bold: Some(true),
+                    color: Some("FF0000".to_string()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            Some(Style {
+                font: Some(Font {
+                    italic: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        ];
+        let acc = styles_to_accumulator(&styles);
+        let table = acc.into_style_table();
+        let batch = build_style_table(&styles);
+        assert_tables_eq(&table, &batch);
+    }
+
+    #[test]
+    fn accumulator_with_num_fmts_matches_batch() {
+        let styles = vec![
+            Some(Style {
+                num_fmt: Some("0.00%".to_string()),
+                ..Default::default()
+            }),
+            Some(Style {
+                num_fmt: Some("0.00%".to_string()),
+                ..Default::default()
+            }),
+            Some(Style {
+                num_fmt: Some("yyyy-mm-dd".to_string()),
+                ..Default::default()
+            }),
+        ];
+        let acc = styles_to_accumulator(&styles);
+        let table = acc.into_style_table();
+        let batch = build_style_table(&styles);
+        assert_tables_eq(&table, &batch);
+    }
+
+    #[test]
+    fn accumulator_with_alignments_matches_batch() {
+        let styles = vec![
+            Some(Style {
+                alignment: Some(Alignment {
+                    horizontal: Some(AlignmentHorizontal::Center),
+                    vertical: Some(AlignmentVertical::Middle),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            Some(Style {
+                alignment: Some(Alignment {
+                    horizontal: Some(AlignmentHorizontal::Center),
+                    vertical: Some(AlignmentVertical::Middle),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            Some(Style {
+                alignment: Some(Alignment {
+                    horizontal: Some(AlignmentHorizontal::Left),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        ];
+        let acc = styles_to_accumulator(&styles);
+        let table = acc.into_style_table();
+        let batch = build_style_table(&styles);
+        assert_tables_eq(&table, &batch);
+    }
+
+    #[test]
+    fn accumulator_full_style_matches_batch() {
+        let styles = vec![
+            Some(Style {
+                font: Some(Font {
+                    bold: Some(true),
+                    color: Some("FF0000".to_string()),
+                    ..Default::default()
+                }),
+                fill: Some(Fill {
+                    kind: FillKind::Solid,
+                    foreground: Some("00FF00".to_string()),
+                    ..Default::default()
+                }),
+                border: Some(Border {
+                    left: Some(BorderStyle {
+                        style: BorderStyleStyle::Thin,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                num_fmt: Some("0.00".to_string()),
+                alignment: Some(Alignment {
+                    horizontal: Some(AlignmentHorizontal::Right),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            Some(Style {
+                font: Some(Font {
+                    bold: Some(true),
+                    color: Some("FF0000".to_string()),
+                    ..Default::default()
+                }),
+                fill: Some(Fill {
+                    kind: FillKind::Solid,
+                    foreground: Some("00FF00".to_string()),
+                    ..Default::default()
+                }),
+                border: Some(Border {
+                    left: Some(BorderStyle {
+                        style: BorderStyleStyle::Thin,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                num_fmt: Some("0.00".to_string()),
+                alignment: Some(Alignment {
+                    horizontal: Some(AlignmentHorizontal::Right),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        ];
+        let acc = styles_to_accumulator(&styles);
+        let table = acc.into_style_table();
+        let batch = build_style_table(&styles);
+        assert_tables_eq(&table, &batch);
     }
 }

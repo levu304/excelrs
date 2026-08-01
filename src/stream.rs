@@ -21,8 +21,12 @@
 //!   the in-memory reader/writer). See `design.md` D5.
 
 use std::collections::HashMap;
+use std::fs::File;
 use std::io::{Cursor, Read, Seek, Write};
 use std::sync::Arc;
+
+use futures_core::Stream;
+use tokio::sync::mpsc::{Receiver, Sender};
 
 use quick_xml::escape::escape;
 use quick_xml::events::{BytesStart, Event};
@@ -75,28 +79,283 @@ pub struct StreamSheet {
     pub rows: Vec<StreamRow>,
 }
 
-/// Per-cell emission record used by the streaming writer.
-struct CellEmit {
-    col: u32,
-    kind: u8, // 0 number, 1 text(idx), 2 bool, 3 formula
-    num: f64,
-    str_idx: u32,
-    bool_val: bool,
-    formula: String,
-    style_pos: usize,
+/// Streaming write session — processes sheets incrementally without
+/// double-buffering. Holds the zip writer plus per-session accumulators
+/// for strings and styles.
+pub struct StreamSession<W: Write + Seek> {
+    zip: zip::ZipWriter<W>,
+    string_table: Vec<String>,
+    string_indices: HashMap<String, u32>,
+    style_acc: writer_styles::StyleAccumulator,
+    current_sheet_index: usize,
 }
 
-/// Per-row emission record used by the streaming writer.
-struct RowEmit {
-    r: u32,
-    cells: Vec<CellEmit>,
-    style_pos: usize,
+impl<W: Write + Seek> StreamSession<W> {
+    /// Create a new session from a `ZipWriter` and sheet definitions.
+    pub fn new(mut zip: zip::ZipWriter<W>, sheets: &[StreamSheet]) -> Self {
+        let sheets: Vec<StreamSheet> = if sheets.is_empty() {
+            vec![StreamSheet {
+                name: "Sheet1".into(),
+                rows: Vec::new(),
+            }]
+        } else {
+            sheets.to_vec()
+        };
+        let sheet_count = sheets.len();
+        let sheet_names: Vec<String> = sheets.iter().map(|s| s.name.clone()).collect();
+
+        // Write fixed OOXML parts.
+        start_file(&mut zip, "[Content_Types].xml").unwrap();
+        write_content_types(&mut zip, sheet_count).unwrap();
+        start_file(&mut zip, "_rels/.rels").unwrap();
+        write_rels_rels(&mut zip).unwrap();
+        start_file(&mut zip, "xl/workbook.xml").unwrap();
+        write_workbook_xml(&mut zip, &sheet_names).unwrap();
+        start_file(&mut zip, "xl/_rels/workbook.xml.rels").unwrap();
+        write_workbook_rels(&mut zip, sheet_count).unwrap();
+
+        Self {
+            zip,
+            string_table: Vec::new(),
+            string_indices: HashMap::new(),
+            style_acc: writer_styles::StyleAccumulator::new(),
+            current_sheet_index: 0,
+        }
+    }
+
+    /// Write one sheet's XML directly into the zip, interning strings
+    /// and registering styles inline. No double-buffering.
+    pub fn write_sheet_xml(&mut self, sheet: &StreamSheet) -> Result<(), ExcelrsError> {
+        let path = format!("xl/worksheets/sheet{}.xml", self.current_sheet_index + 1);
+        start_file(&mut self.zip, &path)?;
+        write_str(
+            &mut self.zip,
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+        )?;
+        write_str(
+            &mut self.zip,
+            r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"#,
+        )?;
+        write_str(&mut self.zip, "<sheetData>")?;
+        for row in sheet.rows.iter() {
+            let row_attr = if let Some(ref _style) = row.style {
+                let xf = self.style_acc.register(&row.style);
+                if xf != 0 {
+                    format!(" r=\"{}\" s=\"{}\"", row.r, xf)
+                } else {
+                    format!(" r=\"{}\"", row.r)
+                }
+            } else {
+                format!(" r=\"{}\"", row.r)
+            };
+            write_str(&mut self.zip, &format!("<row{row_attr}>"))?;
+            for cell in row.cells.iter() {
+                let xf = self.style_acc.register(&cell.style);
+                let cell_ref = format_cell_ref(cell.col, row.r);
+                let (t_attr, body) = match &cell.value {
+                    StreamValue::Number(n) => ("".to_string(), format!("<v>{}</v>", n)),
+                    StreamValue::Text(s) => {
+                        let idx = *self.string_indices.entry(s.clone()).or_insert_with(|| {
+                            let i = self.string_table.len() as u32;
+                            self.string_table.push(s.clone());
+                            i
+                        });
+                        (" t=\"s\"".to_string(), format!("<v>{}</v>", idx))
+                    }
+                    StreamValue::Bool(b) => (" t=\"b\"".to_string(), format!("<v>{}</v>", if *b { 1 } else { 0 })),
+                    StreamValue::Formula(f) => (" t=\"str\"".to_string(), format!("<f>{}</f><v>0</v>", escape(f))),
+                    StreamValue::Empty => ("".to_string(), String::new()),
+                };
+                let s_attr = if xf != 0 {
+                    format!(" s=\"{}\"", xf)
+                } else {
+                    String::new()
+                };
+                write_str(
+                    &mut self.zip,
+                    &format!("<c r=\"{cell_ref}\"{t_attr}{s_attr}>{body}</c>"),
+                )?;
+            }
+            write_str(&mut self.zip, "</row>")?;
+        }
+        write_str(&mut self.zip, "</sheetData>")?;
+        write_str(&mut self.zip, "</worksheet>")?;
+        self.current_sheet_index += 1;
+        Ok(())
+    }
+
+    /// Finish the zip, writing metadata parts (sharedStrings, styles)
+    /// and the central directory. Consumes the session.
+    pub fn finalize(mut self) -> Result<W, ExcelrsError> {
+        let style_table = self.style_acc.into_style_table();
+        start_file(&mut self.zip, "xl/sharedStrings.xml")?;
+        write_shared_strings(&mut self.zip, &self.string_table)?;
+        start_file(&mut self.zip, "xl/styles.xml")?;
+        writer_styles::emit_styles_xml(&mut self.zip, &style_table)?;
+        let writer = self
+            .zip
+            .finish()
+            .map_err(|e| ExcelrsError::Write(format!("Failed to finalise zip: {e}")))?;
+        Ok(writer)
+    }
+
+    /// Finish the zip, writing metadata parts (sharedStrings, styles) and the
+    /// central directory, into the bounded channel owned by the session's
+    /// `ChannelWriter`. Consumes the session.
+    ///
+    /// The channel's sender lives inside the `ChannelWriter`; `finish()`
+    /// drains the final bytes through it and the returned zip writer is dropped
+    /// with it. The *caller* (which kept a sender clone from
+    /// `stream_session_to_readable`) drops its clone afterwards to signal EOF;
+    /// terminal errors are sent as `Err` items by the caller's drive task (see
+    /// `design.md` scenario 4.3).
+    pub fn finalize_to_channel(mut self) -> Result<(), ExcelrsError> {
+        let style_table = self.style_acc.into_style_table();
+        start_file(&mut self.zip, "xl/sharedStrings.xml")?;
+        write_shared_strings(&mut self.zip, &self.string_table)?;
+        start_file(&mut self.zip, "xl/styles.xml")?;
+        writer_styles::emit_styles_xml(&mut self.zip, &style_table)?;
+        self.zip
+            .finish()
+            .map_err(|e| ExcelrsError::Write(format!("Failed to finalise zip: {e}")))?;
+        Ok(())
+    }
 }
 
 /// Max bytes read from a single zip entry on the streaming path. Bounds the
 /// *actual* decompressed bytes (via `take`), not just the declared size, so a
 /// part that declares a small size but decompresses large cannot exhaust memory.
 pub const MAX_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Create a streaming write session that pipes output through a
+/// bounded mpsc channel. Returns the session and the receiver
+/// side of the channel. The caller bridges the receiver into a
+/// JS `ReadableStream` via `ReadableStream::create_with_stream_bytes`.
+/// A chunk of compressed zip bytes (or a terminal write error) sent down
+/// the bounded channel bridging the Rust zip writer to the JS `ReadableStream`.
+pub type StreamChunk = Result<Vec<u8>, ExcelrsError>;
+
+pub type ReadableStreamSession = StreamSession<zip::write::StreamWriter<ChannelWriter>>;
+
+pub fn stream_session_to_readable(
+    sheets: &[StreamSheet],
+) -> Result<(ReadableStreamSession, Sender<StreamChunk>, Receiver<StreamChunk>), ExcelrsError> {
+    let (sender, receiver) = tokio::sync::mpsc::channel(16);
+    // One clone feeds the `ChannelWriter` inside the streaming `ZipWriter`; the
+    // other is returned to the caller so it can surface terminal `Err` items.
+    let channel_writer = ChannelWriter::new(sender.clone());
+    let zip = zip::ZipWriter::new_stream(channel_writer);
+    let session = StreamSession::new(zip, sheets);
+    Ok((session, sender, receiver))
+}
+
+// ---------------------------------------------------------------------------
+// ChannelWriter — bridges a bounded mpsc channel into std::io::Write
+// ---------------------------------------------------------------------------
+
+/// Implements `std::io::Write` by sending bytes through a bounded
+/// `tokio::sync::mpsc::Sender`. Used by `finalize_to_readable` to
+/// pipe zip output into a JS `ReadableStream` with backpressure.
+pub struct ChannelWriter {
+    sender: Sender<StreamChunk>,
+}
+
+impl ChannelWriter {
+    pub fn new(sender: Sender<Result<Vec<u8>, ExcelrsError>>) -> Self {
+        Self { sender }
+    }
+}
+
+impl std::io::Write for ChannelWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let chunk = buf.to_vec();
+        loop {
+            match self.sender.try_send(Ok(chunk.clone())) {
+                Ok(()) => return Ok(buf.len()),
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                    // Receiver dropped (JS consumer gone) => channel closed.
+                    // tokio wakes closed senders (B1); we must NOT park here.
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        "stream consumer gone",
+                    ));
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                    // cap-16 backpressure: yield the worker thread (no runtime
+                    // here) and retry. A dropped receiver closes the channel
+                    // => the Closed arm exits, so this never parks forever.
+                    // (ponytail: 5ms fixed backoff; swap for crossbeam park/unpark
+                    // signaled by receiver-drop if perf proven.)
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+            }
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Manual `futures_core::Stream` over `tokio::sync::mpsc::Receiver`
+// ---------------------------------------------------------------------------
+
+/// A `futures_core::Stream` that yields chunks from a tokio mpsc receiver.
+/// Replaces the `tokio-stream` crate dependency.
+pub struct ReceiverStream<T> {
+    receiver: Receiver<T>,
+}
+
+impl<T> ReceiverStream<T> {
+    pub fn new(receiver: Receiver<T>) -> Self {
+        Self { receiver }
+    }
+
+    /// Map `Item` with `F` (stand-in for `StreamExt::map`; this crate avoids
+    /// pulling in `futures-util` / `tokio-stream`).
+    pub fn map<U, F: FnMut(T) -> U>(self, f: F) -> MapStream<Self, F> {
+        MapStream { inner: self, f }
+    }
+}
+
+impl<T: Unpin> Stream for ReceiverStream<T> {
+    type Item = T;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.receiver.poll_recv(cx)
+    }
+}
+
+impl<T> Unpin for ReceiverStream<T> {}
+
+/// Minimal `Stream` adapter (stand-in for `StreamExt::map`), matching the
+/// hand-rolled `Stream` impls in this module so we avoid the `futures-util`
+/// / `tokio-stream` dependency.
+pub struct MapStream<S, F> {
+    inner: S,
+    f: F,
+}
+
+impl<S: Unpin, F: Unpin> Unpin for MapStream<S, F> {}
+
+impl<S, F, T, U> Stream for MapStream<S, F>
+where
+    S: Stream<Item = T> + Unpin,
+    F: FnMut(T) -> U + Unpin,
+{
+    type Item = U;
+
+    fn poll_next(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<U>> {
+        let this = &mut *self;
+        std::pin::Pin::new(&mut this.inner)
+            .poll_next(cx)
+            .map(|opt| opt.map(&mut this.f))
+    }
+}
 /// Max SAX events per sheet (anti-billion-row / entity-expansion guard).
 pub const MAX_EVENTS: usize = 5_000_000;
 /// Max number of zip entries a streaming reader will accept. Bounds the
@@ -886,137 +1145,38 @@ fn resolve_shared_member(table: &SharedFormulaTable, si: u32, pos: (u32, u32)) -
 /// writer's minimal valid structure (content types, rels, workbook, shared
 /// strings, styles, sheet parts) so the result is readable by Excel / ExcelJS
 /// / the `excelrs` in-memory reader.
+/// Serialize streamed sheets into an in-memory `.xlsx` buffer.
+///
+/// Constant-memory for intermediate buffers: each sheet's XML is
+/// written directly to the zip writer as it arrives, with no
+/// per-cell emit collection. Shared strings and style tables are
+/// accumulated inline and emitted once at finalize.
 pub fn stream_write(sheets: &[StreamSheet]) -> Result<Vec<u8>, ExcelrsError> {
-    let sheets: Vec<StreamSheet> = if sheets.is_empty() {
-        vec![StreamSheet {
-            name: "Sheet1".into(),
-            rows: Vec::new(),
-        }]
-    } else {
-        sheets.to_vec()
-    };
-    let sheet_count = sheets.len();
-
-    let mut out = Vec::new();
-    {
-        let mut zip = zip::ZipWriter::new(Cursor::new(&mut out));
-
-        // --- Pass 1: shared strings + style collection (row-major) ---
-        let mut string_table: Vec<String> = Vec::new();
-        let mut string_indices: HashMap<String, u32> = HashMap::new();
-        let mut cell_styles: Vec<Option<Style>> = Vec::new();
-        let mut row_styles: Vec<Option<Style>> = Vec::new();
-        let mut sheet_emits: Vec<Vec<RowEmit>> = Vec::with_capacity(sheet_count);
-
-        for sh in sheets.iter() {
-            let mut row_emits = Vec::with_capacity(sh.rows.len());
-            for row in sh.rows.iter() {
-                let mut cell_emits = Vec::with_capacity(row.cells.len());
-                for cell in row.cells.iter() {
-                    let style_pos = cell_styles.len();
-                    cell_styles.push(cell.style.clone());
-                    let emit = match &cell.value {
-                        StreamValue::Number(n) => CellEmit {
-                            col: cell.col,
-                            kind: 0,
-                            num: *n,
-                            str_idx: 0,
-                            bool_val: false,
-                            formula: String::new(),
-                            style_pos,
-                        },
-                        StreamValue::Text(s) => {
-                            let idx = *string_indices.entry(s.clone()).or_insert_with(|| {
-                                let i = string_table.len() as u32;
-                                string_table.push(s.clone());
-                                i
-                            });
-                            CellEmit {
-                                col: cell.col,
-                                kind: 1,
-                                num: 0.0,
-                                str_idx: idx,
-                                bool_val: false,
-                                formula: String::new(),
-                                style_pos,
-                            }
-                        }
-                        StreamValue::Bool(b) => CellEmit {
-                            col: cell.col,
-                            kind: 2,
-                            num: 0.0,
-                            str_idx: 0,
-                            bool_val: *b,
-                            formula: String::new(),
-                            style_pos,
-                        },
-                        StreamValue::Formula(f) => CellEmit {
-                            col: cell.col,
-                            kind: 3,
-                            num: 0.0,
-                            str_idx: 0,
-                            bool_val: false,
-                            formula: f.clone(),
-                            style_pos,
-                        },
-                        StreamValue::Empty => CellEmit {
-                            col: cell.col,
-                            kind: 4,
-                            num: 0.0,
-                            str_idx: 0,
-                            bool_val: false,
-                            formula: String::new(),
-                            style_pos,
-                        },
-                    };
-                    cell_emits.push(emit);
-                }
-                let row_style_pos = row_styles.len();
-                row_styles.push(row.style.clone());
-                row_emits.push(RowEmit {
-                    r: row.r,
-                    cells: cell_emits,
-                    style_pos: row_style_pos,
-                });
-            }
-            sheet_emits.push(row_emits);
-        }
-
-        let cell_count = cell_styles.len();
-        let mut all_styles: Vec<Option<Style>> = cell_styles;
-        all_styles.extend(row_styles);
-        let style_table = writer_styles::build_style_table(&all_styles);
-
-        // --- Write OOXML parts ---
-        start_file(&mut zip, "[Content_Types].xml")?;
-        write_content_types(&mut zip, sheet_count)?;
-
-        start_file(&mut zip, "_rels/.rels")?;
-        write_rels_rels(&mut zip)?;
-
-        start_file(&mut zip, "xl/workbook.xml")?;
-        write_workbook_xml(&mut zip, &sheets)?;
-
-        start_file(&mut zip, "xl/_rels/workbook.xml.rels")?;
-        write_workbook_rels(&mut zip, sheet_count)?;
-
-        start_file(&mut zip, "xl/sharedStrings.xml")?;
-        write_shared_strings(&mut zip, &string_table)?;
-
-        start_file(&mut zip, "xl/styles.xml")?;
-        writer_styles::emit_styles_xml(&mut zip, &style_table)?;
-
-        for (i, row_emits) in sheet_emits.iter().enumerate() {
-            let path = format!("xl/worksheets/sheet{}.xml", i + 1);
-            start_file(&mut zip, &path)?;
-            write_sheet_xml(&mut zip, row_emits, &style_table, cell_count)?;
-        }
-
-        zip.finish()
-            .map_err(|e| ExcelrsError::Write(format!("Failed to finalise zip: {e}")))?;
+    let mut session = StreamSession::new(zip::ZipWriter::new(Cursor::new(Vec::new())), sheets);
+    for sheet in sheets.iter() {
+        session.write_sheet_xml(sheet)?;
     }
+    let cursor = session.finalize()?;
+    Ok(cursor.into_inner())
+}
 
-    Ok(out)
+/// Serialize streamed sheets directly to a file on disk.
+///
+/// Constant-memory: sheets are written incrementally to disk as they
+/// arrive, with only the string/style accumulators and one sheet's
+/// XML buffered in RAM. Uses `set_flush_on_finish_file(true)` for
+/// incremental zip entry flushing.
+pub fn stream_write_to_file(sheets: &[StreamSheet], path: &str) -> Result<(), ExcelrsError> {
+    let file = File::create(path).map_err(|e| ExcelrsError::Write(format!("Failed to create '{path}': {e}")))?;
+    let mut zip = zip::ZipWriter::new(file);
+    zip.set_flush_on_finish_file(true);
+
+    let mut session = StreamSession::new(zip, sheets);
+    for sheet in sheets.iter() {
+        session.write_sheet_xml(sheet)?;
+    }
+    session.finalize()?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1079,17 +1239,20 @@ fn write_rels_rels<W: Write>(w: &mut W) -> Result<(), ExcelrsError> {
     Ok(())
 }
 
-fn write_workbook_xml<W: Write>(w: &mut W, sheets: &[StreamSheet]) -> Result<(), ExcelrsError> {
+fn write_workbook_xml<W: Write>(w: &mut W, sheet_names: &[String]) -> Result<(), ExcelrsError> {
     write_str(w, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#)?;
     write_str(
         w,
         r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
     )?;
     write_str(w, "<sheets>")?;
-    for (i, sh) in sheets.iter().enumerate() {
-        let name = escape(&sh.name);
+    for (i, name) in sheet_names.iter().enumerate() {
+        let escaped = escape(name);
         let rid = i + 3;
-        write_str(w, &format!(r#"<sheet name="{name}" sheetId="{rid}" r:id="rId{rid}"/>"#))?;
+        write_str(
+            w,
+            &format!(r#"<sheet name="{escaped}" sheetId="{rid}" r:id="rId{rid}"/>"#),
+        )?;
     }
     write_str(w, "</sheets>")?;
     write_str(w, "</workbook>")?;
@@ -1143,50 +1306,9 @@ fn write_shared_strings<W: Write>(w: &mut W, table: &[String]) -> Result<(), Exc
     Ok(())
 }
 
-fn write_sheet_xml<W: Write>(
-    w: &mut W,
-    row_emits: &[RowEmit],
-    style_table: &writer_styles::StyleTable,
-    cell_count: usize,
-) -> Result<(), ExcelrsError> {
-    write_str(w, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#)?;
-    write_str(
-        w,
-        r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"#,
-    )?;
-    write_str(w, "<sheetData>")?;
-    for re in row_emits {
-        let row_xf = style_table.cell_indices[cell_count + re.style_pos];
-        let row_attr = if row_xf != 0 {
-            format!(" r=\"{}\" s=\"{row_xf}\"", re.r)
-        } else {
-            format!(" r=\"{}\"", re.r)
-        };
-        write_str(w, &format!("<row{row_attr}>"))?;
-        for ce in &re.cells {
-            let xf = style_table.cell_indices[ce.style_pos];
-            let cell_ref = format!("{}{}", col_to_letter(ce.col), re.r);
-            let (t_attr, body) = match ce.kind {
-                0 => ("".to_string(), format!("<v>{}</v>", ce.num)),
-                1 => (" t=\"s\"".to_string(), format!("<v>{}</v>", ce.str_idx)),
-                2 => (
-                    " t=\"b\"".to_string(),
-                    format!("<v>{}</v>", if ce.bool_val { 1 } else { 0 }),
-                ),
-                3 => (
-                    " t=\"str\"".to_string(),
-                    format!("<f>{}</f><v>0</v>", escape(&ce.formula)),
-                ),
-                _ => ("".to_string(), String::new()),
-            };
-            let s_attr = if xf != 0 { format!(" s=\"{xf}\"") } else { String::new() };
-            write_str(w, &format!("<c r=\"{cell_ref}\"{t_attr}{s_attr}>{body}</c>"))?;
-        }
-        write_str(w, "</row>")?;
-    }
-    write_str(w, "</sheetData>")?;
-    write_str(w, "</worksheet>")?;
-    Ok(())
+/// Format a cell reference (e.g. column 1, row 1 → "A1").
+fn format_cell_ref(col: u32, row: u32) -> String {
+    format!("{}{}", col_to_letter(col), row)
 }
 
 /// 1-indexed column number → Excel column letters.
@@ -1214,6 +1336,110 @@ mod tests {
     }
     fn txt(s: &str) -> StreamValue {
         StreamValue::Text(s.to_string())
+    }
+
+    #[test]
+    fn stream_write_dedups_shared_strings_across_sheets() {
+        // The shared-string interner is session-scoped (src/stream.rs `string_indices`:
+        // `HashMap<String, u32>`), so a value appearing in two sheets MUST collapse to one
+        // sharedStrings entry and both sheets MUST resolve to it (streaming spec Scenario).
+        let sheets = vec![
+            StreamSheet {
+                name: "One".into(),
+                rows: vec![StreamRow {
+                    r: 1,
+                    cells: vec![
+                        StreamCell {
+                            col: 1,
+                            value: txt("dup"),
+                            style: None,
+                        },
+                        StreamCell {
+                            col: 2,
+                            value: txt("onlyA"),
+                            style: None,
+                        },
+                    ],
+                    style: None,
+                }],
+            },
+            StreamSheet {
+                name: "Two".into(),
+                rows: vec![StreamRow {
+                    r: 1,
+                    cells: vec![
+                        StreamCell {
+                            col: 1,
+                            value: txt("dup"),
+                            style: None,
+                        },
+                        StreamCell {
+                            col: 2,
+                            value: txt("onlyB"),
+                            style: None,
+                        },
+                    ],
+                    style: None,
+                }],
+            },
+        ];
+        let bytes = stream_write(&sheets).expect("write");
+
+        // sharedStrings.xml holds exactly one <si> per distinct string value.
+        let cursor = std::io::Cursor::new(std::sync::Arc::from(&bytes[..]));
+        let mut archive = zip::ZipArchive::new(cursor).expect("archive");
+        let strings = parse_shared_strings(&mut archive).expect("parse sst");
+        assert_eq!(
+            strings.len(),
+            3,
+            "expected 3 distinct shared strings: dup, onlyA, onlyB"
+        );
+        assert_eq!(
+            strings.iter().filter(|s| **s == "dup").count(),
+            1,
+            "dup must appear exactly once in sharedStrings.xml"
+        );
+
+        // Both sheets resolve the same shared string (same index) via round-trip read.
+        let read = stream_read(&bytes).expect("read back");
+        assert_eq!(read.len(), 2);
+        assert!(read[0].rows[0].cells.iter().any(|c| c.value == txt("dup")));
+        assert!(read[1].rows[0].cells.iter().any(|c| c.value == txt("dup")));
+    }
+
+    #[test]
+    fn stream_write_dedups_shared_strings_within_sheet() {
+        // Duplicate string value within a single sheet MUST collapse to one <si>.
+        let sheets = vec![StreamSheet {
+            name: "One".into(),
+            rows: vec![StreamRow {
+                r: 1,
+                cells: vec![
+                    StreamCell {
+                        col: 1,
+                        value: txt("dup"),
+                        style: None,
+                    },
+                    StreamCell {
+                        col: 2,
+                        value: txt("dup"),
+                        style: None,
+                    },
+                ],
+                style: None,
+            }],
+        }];
+        let bytes = stream_write(&sheets).expect("write");
+
+        let cursor = std::io::Cursor::new(std::sync::Arc::from(&bytes[..]));
+        let mut archive = zip::ZipArchive::new(cursor).expect("archive");
+        let strings = parse_shared_strings(&mut archive).expect("parse sst");
+        assert_eq!(
+            strings.len(),
+            1,
+            "within-sheet duplicate must yield a single sharedStrings entry"
+        );
+        assert_eq!(strings[0], "dup");
     }
 
     #[test]
@@ -1944,5 +2170,30 @@ mod shared_formula_tests {
         // Bare row reference (`5`) shifts with the row offset, matching calamine.
         assert_eq!(replace_cell_names("=A1*5", (1, 0)), "=A2*6");
         assert_eq!(replace_cell_names("=A1*A5", (1, 0)), "=A2*A6");
+    }
+}
+
+#[cfg(test)]
+mod channel_writer_cancel_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    // Regression guard for worker-cancellation-guard-finalize-readable.
+    // A detached std worker MUST NOT park forever inside `write` when the JS
+    // consumer abandons the ReadableStream. With try_send + is_closed, a
+    // dropped receiver closes the channel and write() returns Err promptly,
+    // no tokio runtime, no park. tokio wakes closed senders (B1, Oxide
+    // RFD #609) => this is deterministic and runtime-free. (B2 napi
+    // cancel->Rust-drop timing is validated separately via the JS repro 1.2;)
+    // JS cannot observe native thread count, so the park-forever guard lives here.
+    #[test]
+    fn write_returns_err_when_receiver_dropped_no_park() {
+        let (tx, rx) = tokio::sync::mpsc::channel::<StreamChunk>(16);
+        drop(rx); // consumer gone -> channel closed
+        let mut w = ChannelWriter::new(tx);
+        let t0 = Instant::now();
+        let res = w.write(b"x");
+        assert!(res.is_err(), "write must error once the consumer (receiver) is gone");
+        assert!(t0.elapsed() < Duration::from_millis(50), "write must not park");
     }
 }

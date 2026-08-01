@@ -190,6 +190,33 @@ export declare class StreamWriter {
    * Consumes the internal sheet list and returns the complete .xlsx bytes.
    */
   finalize(): Buffer
+  /**
+   * Finalize the streaming writer and write the .xlsx directly to a file.
+   *
+   * Output is streamed incrementally to disk (one sheet's XML buffered in RAM
+   * at a time); input is NOT constant-memory — sheets are accumulated in the
+   * writer handle before writing begins, so peak memory is O(all sheets).
+   * True constant-memory `writeSheet()` is tracked as a follow-up; see
+   * `openspec/specs/streaming-write-incremental/spec.md`.
+   */
+  finalizeToFile(path: string): Promise<void>
+  /**
+   * Finalize the streaming writer into a JS `ReadableStream` of `.xlsx`
+   * bytes.
+   *
+   * Emits compressed zip chunks onto a bounded channel (cap 16) drained by the
+   * stream's pull callback, so the *emitter* side is backpressured (the worker
+   * parks if the consumer falls behind; peak output memory = channel fill +
+   * one sheet's XML). Input is NOT constant-memory — sheets are accumulated in
+   * the writer handle before this call, so peak memory is O(all sheets).
+   * True constant-memory `writeSheet()` is tracked as a follow-up; see
+   * `openspec/specs/streaming-write-incremental/spec.md`.
+   *
+   * Terminal write errors are sent as `Err` channel items, which the stream
+   * adapter rejects on (rather than closing silently) — see
+   * `docs/adr/005-streaming-write-buffering.md`.
+   */
+  finalizeToReadable(): ReadableStream<Buffer>
 }
 
 /**
