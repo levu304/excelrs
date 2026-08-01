@@ -197,7 +197,22 @@ export declare class StreamWriter {
    * arrive, with only the string/style accumulators and one sheet's
    * XML buffered in RAM.
    */
-  finalizeToFile(path: string): void
+  finalizeToFile(path: string): Promise<void>
+  /**
+   * Finalize the streaming writer into a JS `ReadableStream` of `.xlsx`
+   * bytes — constant-memory, no intermediate buffer.
+   *
+   * Sheets are written incrementally on a blocking worker thread and pushed
+   * through a bounded mpsc channel (capacity 16) that the `ReadableStream`'s
+   * pull callback drains. Backpressure is therefore enforced: the worker
+   * parks whenever the consumer falls behind, so peak memory is bounded by
+   * channel fill plus one sheet's XML — never the full workbook.
+   *
+   * Terminal write errors are sent as `Err` channel items, which the stream
+   * adapter rejects on (rather than closing silently) — see `design.md`
+   * scenario 4.3.
+   */
+  finalizeToReadable(): ReadableStream<Buffer>
 }
 
 /**

@@ -19,9 +19,9 @@ use napi_derive::napi;
 use crate::model::workbook_inner::WorkbookInner;
 use crate::reader::styles::{self as reader_styles, StyleTableRead};
 use crate::stream::{
-    parse_shared_strings, parse_sheet_rows, parse_workbook_sheet_targets, stream_read, stream_write,
-    stream_write_to_file, StreamCell, StreamRow, StreamSheet, StreamValue, MAX_ARCHIVE_BYTES, MAX_ARCHIVE_ENTRIES,
-    MAX_ENTRY_BYTES,
+    parse_shared_strings, parse_sheet_rows, parse_workbook_sheet_targets, stream_read, stream_session_to_readable,
+    stream_write, stream_write_to_file, ReceiverStream, StreamCell, StreamRow, StreamSheet, StreamValue,
+    MAX_ARCHIVE_BYTES, MAX_ARCHIVE_ENTRIES, MAX_ENTRY_BYTES,
 };
 
 /// Cross-FFI cell value. Exactly one variant is populated per cell.
@@ -427,5 +427,67 @@ impl StreamWriter {
             Ok(Err(e)) => Err(napi::Error::from_reason(e.to_string())),
             Err(e) => Err(napi::Error::from_reason(e.to_string())),
         }
+    }
+
+    /// Finalize the streaming writer into a JS `ReadableStream` of `.xlsx`
+    /// bytes — constant-memory, no intermediate buffer.
+    ///
+    /// Sheets are written incrementally on a blocking worker thread and pushed
+    /// through a bounded mpsc channel (capacity 16) that the `ReadableStream`'s
+    /// pull callback drains. Backpressure is therefore enforced: the worker
+    /// parks whenever the consumer falls behind, so peak memory is bounded by
+    /// channel fill plus one sheet's XML — never the full workbook.
+    ///
+    /// Terminal write errors are sent as `Err` channel items, which the stream
+    /// adapter rejects on (rather than closing silently) — see `design.md`
+    /// scenario 4.3.
+    #[napi]
+    pub fn finalize_to_readable(&self, env: Env) -> Result<ReadableStream<'_, BufferSlice<'_>>> {
+        let sheets = self.sheets.clone();
+        let (mut session, sender, receiver) =
+            stream_session_to_readable(&sheets).map_err(|e| Error::from_reason(e.to_string()))?;
+
+        // Drive the zip writer on a dedicated worker thread so the JS event loop
+        // is never blocked. This fn is `#[napi]` *sync*: there is no napi tokio
+        // runtime on the JS thread, so `spawn_blocking` (which borrows the
+        // ambient runtime) panics here ("no reactor running"). `std::thread::spawn`
+        // is the right primitive: the handle is intentionally NOT awaited; the
+        // `ReadableStream`'s pull callback drains `receiver` concurrently, and
+        // the bounded channel (cap 16) enforces backpressure — `blocking_send`
+        // self-parks (no runtime needed) when the channel is full.
+        let _drive = std::thread::spawn(move || {
+            for sheet in &sheets {
+                if let Err(e) = session.write_sheet_xml(sheet) {
+                    // Surface write errors through the channel so the JS
+                    // ReadableStream rejects instead of closing silently.
+                    let _ = sender.blocking_send(Err(e));
+                    return;
+                }
+            }
+            if let Err(e) = session.finalize_to_channel() {
+                let _ = sender.blocking_send(Err(e));
+            }
+            // `session` (with its inner sender, consumed by finish() inside
+            // finalize_to_channel) and the caller's sender clone both drop
+            // here -> receiver sees EOF once the last byte + None is sent.
+        });
+
+        // `ReceiverStream<Result<Vec<u8>, ExcelrsError>>` ->
+        // `Stream<Item = napi::Result<Vec<u8>>>` via the manual `MapStream`
+        // adapter (this crate avoids `futures-util` / `tokio-stream`).
+        let chunks = ReceiverStream::new(receiver).map(|item| match item {
+            Ok(bytes) => Ok(bytes),
+            Err(e) => Err(Error::from_reason(e.to_string())),
+        });
+
+        // `ReadableStream` wraps a raw `*mut napi_env__` (via `BufferSlice` and
+        // the borrowed `Env`) and is therefore `!Send`, so it cannot cross a
+        // `#[napi]` *async* boundary (the generated future requires
+        // `Data: Send`). A *sync* `#[napi]` fn returns it directly on the JS
+        // thread: `to_napi_value` materializes the JS ReadableStream before the
+        // call returns, so no Rust `ReadableStream` ever crosses an await. The
+        // zip writer is driven by the detached worker thread above,
+        // fed through the bounded channel; the JS event loop is never blocked.
+        ReadableStream::create_with_stream_bytes(&env, chunks).map_err(|e| Error::from_reason(e.to_string()))
     }
 }

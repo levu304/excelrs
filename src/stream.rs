@@ -199,10 +199,17 @@ impl<W: Write + Seek> StreamSession<W> {
         Ok(writer)
     }
 
-    /// Finish the zip into a bounded mpsc channel, returning the
-    /// receiver side. The caller can bridge this into a JS
-    /// `ReadableStream` via `ReadableStream::create_with_stream_bytes`.
-    pub fn finalize_to_channel(mut self, sender: Sender<Result<Vec<u8>, ExcelrsError>>) -> Result<(), ExcelrsError> {
+    /// Finish the zip, writing metadata parts (sharedStrings, styles) and the
+    /// central directory, into the bounded channel owned by the session's
+    /// `ChannelWriter`. Consumes the session.
+    ///
+    /// The channel's sender lives inside the `ChannelWriter`; `finish()`
+    /// drains the final bytes through it and the returned zip writer is dropped
+    /// with it. The *caller* (which kept a sender clone from
+    /// `stream_session_to_readable`) drops its clone afterwards to signal EOF;
+    /// terminal errors are sent as `Err` items by the caller's drive task (see
+    /// `design.md` scenario 4.3).
+    pub fn finalize_to_channel(mut self) -> Result<(), ExcelrsError> {
         let style_table = self.style_acc.into_style_table();
         start_file(&mut self.zip, "xl/sharedStrings.xml")?;
         write_shared_strings(&mut self.zip, &self.string_table)?;
@@ -211,8 +218,6 @@ impl<W: Write + Seek> StreamSession<W> {
         self.zip
             .finish()
             .map_err(|e| ExcelrsError::Write(format!("Failed to finalise zip: {e}")))?;
-        // Drop sender to signal EOF to the receiver.
-        drop(sender);
         Ok(())
     }
 }
@@ -226,16 +231,22 @@ pub const MAX_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
 /// bounded mpsc channel. Returns the session and the receiver
 /// side of the channel. The caller bridges the receiver into a
 /// JS `ReadableStream` via `ReadableStream::create_with_stream_bytes`.
+/// A chunk of compressed zip bytes (or a terminal write error) sent down
+/// the bounded channel bridging the Rust zip writer to the JS `ReadableStream`.
+pub type StreamChunk = Result<Vec<u8>, ExcelrsError>;
+
 pub type ReadableStreamSession = StreamSession<zip::write::StreamWriter<ChannelWriter>>;
 
 pub fn stream_session_to_readable(
     sheets: &[StreamSheet],
-) -> Result<(ReadableStreamSession, Receiver<Result<Vec<u8>, ExcelrsError>>), ExcelrsError> {
+) -> Result<(ReadableStreamSession, Sender<StreamChunk>, Receiver<StreamChunk>), ExcelrsError> {
     let (sender, receiver) = tokio::sync::mpsc::channel(16);
-    let channel_writer = ChannelWriter::new(sender);
+    // One clone feeds the `ChannelWriter` inside the streaming `ZipWriter`; the
+    // other is returned to the caller so it can surface terminal `Err` items.
+    let channel_writer = ChannelWriter::new(sender.clone());
     let zip = zip::ZipWriter::new_stream(channel_writer);
     let session = StreamSession::new(zip, sheets);
-    Ok((session, receiver))
+    Ok((session, sender, receiver))
 }
 
 // ---------------------------------------------------------------------------
@@ -246,7 +257,7 @@ pub fn stream_session_to_readable(
 /// `tokio::sync::mpsc::Sender`. Used by `finalize_to_readable` to
 /// pipe zip output into a JS `ReadableStream` with backpressure.
 pub struct ChannelWriter {
-    sender: Sender<Result<Vec<u8>, ExcelrsError>>,
+    sender: Sender<StreamChunk>,
 }
 
 impl ChannelWriter {
@@ -283,6 +294,12 @@ impl<T> ReceiverStream<T> {
     pub fn new(receiver: Receiver<T>) -> Self {
         Self { receiver }
     }
+
+    /// Map `Item` with `F` (stand-in for `StreamExt::map`; this crate avoids
+    /// pulling in `futures-util` / `tokio-stream`).
+    pub fn map<U, F: FnMut(T) -> U>(self, f: F) -> MapStream<Self, F> {
+        MapStream { inner: self, f }
+    }
 }
 
 impl<T: Unpin> Stream for ReceiverStream<T> {
@@ -297,6 +314,31 @@ impl<T: Unpin> Stream for ReceiverStream<T> {
 }
 
 impl<T> Unpin for ReceiverStream<T> {}
+
+/// Minimal `Stream` adapter (stand-in for `StreamExt::map`), matching the
+/// hand-rolled `Stream` impls in this module so we avoid the `futures-util`
+/// / `tokio-stream` dependency.
+pub struct MapStream<S, F> {
+    inner: S,
+    f: F,
+}
+
+impl<S: Unpin, F: Unpin> Unpin for MapStream<S, F> {}
+
+impl<S, F, T, U> Stream for MapStream<S, F>
+where
+    S: Stream<Item = T> + Unpin,
+    F: FnMut(T) -> U + Unpin,
+{
+    type Item = U;
+
+    fn poll_next(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<U>> {
+        let this = &mut *self;
+        std::pin::Pin::new(&mut this.inner)
+            .poll_next(cx)
+            .map(|opt| opt.map(&mut this.f))
+    }
+}
 /// Max SAX events per sheet (anti-billion-row / entity-expansion guard).
 pub const MAX_EVENTS: usize = 5_000_000;
 /// Max number of zip entries a streaming reader will accept. Bounds the

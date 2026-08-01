@@ -194,11 +194,10 @@ test('4.1 writeToWritable ends the destination stream', async () => {
 // 6.1 finalizeToFile round-trip test
 // ---------------------------------------------------------------------------
 
-import { tmpfile } from 'node:fs'
 import { open } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmSync } from 'node:fs'
 
 test('6.1 finalizeToFile round-trips through StreamReader', async () => {
   const wbjs = new ExcelJS.Workbook()
@@ -222,13 +221,61 @@ test('6.1 finalizeToFile round-trips through StreamReader', async () => {
 
   // Read back via StreamReader and verify
   const fileBuf = await import('node:fs/promises').then(m => m.readFile(tmpPath))
-  const reader2 = new StreamReader(Buffer.from(fileBuf as ArrayBuffer))
+  const reader2 = new StreamReader(Buffer.from(fileBuf))
   const sheets: JsStreamSheet[] = []
   for await (const s of reader2 as unknown as AsyncIterable<JsStreamSheet>) sheets.push(s)
 
   expect(sheets).toHaveLength(1)
   expect(sheets[0].name).toBe('Data')
   expect(sheets[0].rows[0].cells[0].value.text).toBe('finalizeToFile')
+  expect(sheets[0].rows[0].cells[1].value.number).toBe(99)
+
+  rmSync(tmpDir, { recursive: true })
+})
+
+// ---------------------------------------------------------------------------
+// 6.2 finalizeToReadable round-trips when consumed to a file
+// ---------------------------------------------------------------------------
+
+test('6.2 finalizeToReadable round-trips through a file', async () => {
+  const wbjs = new ExcelJS.Workbook()
+  const ws = wbjs.addWorksheet('Data')
+  ws.getCell('A1').value = 'finalizeToReadable'
+  ws.getCell('B1').value = 99
+  const buf = Buffer.from(await wbjs.xlsx.writeBuffer())
+
+  // Stream through StreamReader -> StreamWriter incrementally.
+  const reader = new StreamReader(buf)
+  const writer = new StreamWriter()
+  for await (const sheet of reader as unknown as AsyncIterable<JsStreamSheet>) {
+    writer.writeSheet(sheet)
+  }
+
+  const tmpDir = join(dirname(fileURLToPath(import.meta.url)), '__tmp_test__')
+  mkdirSync(tmpDir, { recursive: true })
+  const tmpPath = join(tmpDir, 'test-readable.xlsx')
+
+  // Drive the Web ReadableStream (from finalizeToReadable) to a file via its
+  // reader API, honoring the stream's natural backpressure.
+  const readable = writer.finalizeToReadable()
+  const fileHandle = await open(tmpPath, 'w')
+  const webReader = readable.getReader()
+  let step = await webReader.read()
+  while (!step.done) {
+    await fileHandle.write(step.value)
+    step = await webReader.read()
+  }
+  await fileHandle.close()
+
+  // Read back via StreamReader and verify values match what was written.
+  const fileBuf = await import('node:fs/promises').then(m => m.readFile(tmpPath))
+  const reader2 = new StreamReader(Buffer.from(fileBuf))
+  const sheets: JsStreamSheet[] = []
+  for await (const s of reader2 as unknown as AsyncIterable<JsStreamSheet>) sheets.push(s)
+
+  expect(sheets).toHaveLength(1)
+  expect(sheets[0].name).toBe('Data')
+  expect(sheets[0].rows[0].cells[0].value.text).toBe('finalizeToReadable')
   expect(sheets[0].rows[0].cells[1].value.number).toBe(99)
 
   rmSync(tmpDir, { recursive: true })
@@ -269,7 +316,7 @@ test('6.3 finalizeToFile constant-memory for large workbook', async () => {
 
   // Verify file is valid by reading it back
   const fileBuf = await import('node:fs/promises').then(m => m.readFile(tmpPath))
-  const reader2 = new StreamReader(Buffer.from(fileBuf as ArrayBuffer))
+  const reader2 = new StreamReader(Buffer.from(fileBuf))
   const sheets: JsStreamSheet[] = []
   for await (const s of reader2 as unknown as AsyncIterable<JsStreamSheet>) sheets.push(s)
   expect(sheets).toHaveLength(50)

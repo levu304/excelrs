@@ -93,9 +93,27 @@ export async function writeToWritable(
   }
   if (typeof writer.finalizeToReadable === 'function') {
     const readable = writer.finalizeToReadable()
-    return new Promise((resolve, reject) => {
-      readable.on('error', reject)
-      readable.pipe(writable).on('finish', resolve)
+    // `finalizeToReadable()` yields a Web `ReadableStream` of compressed zip
+    // chunks. Drain it via the reader API and feed chunks into the Node
+    // `Writable`, honoring backpressure (pause when `write` returns false).
+    return new Promise<void>((resolve, reject) => {
+      const reader = readable.getReader()
+      const pump = () => {
+        reader.read().then(({ done, value }) => {
+          if (done) {
+            writable.end()
+            return
+          }
+          if (!writable.write(value)) {
+            writable.once('drain', pump)
+          } else {
+            pump()
+          }
+        }, reject)
+      }
+      writable.once('error', reject)
+      writable.once('close', resolve)
+      pump()
     })
   }
   const buf = await writer.finalize()

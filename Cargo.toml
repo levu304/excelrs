@@ -12,6 +12,7 @@ napi = { version = "3", features = [
   "serde-json",
   "napi5",
   "tokio_rt",
+  "web_stream",
 ] }
 napi-derive = "3"
 calamine = { version = "0.35", features = ["dates"] }
