@@ -1,6 +1,43 @@
 # Changelog
 <!-- Release process: tag-driven from main. `git tag -a vX.Y.Z -m "..."` then push the tag. -->
 
+## [2.6.0] - 2026-08-02
+
+### Added
+
+- **`StreamWriter.finalizeToFile(path)`** — writes `.xlsx` directly to a file on
+  disk via incremental zip file-entry flushing. Output is streamed with backpressure
+  (per ADR-005: input sheets are buffered in the handle, so peak write memory is
+  O(all sheets); true incremental `writeSheet()` remains deferred — see
+  `openspec/specs/streaming-write-incremental/spec.md`).
+- **`StreamWriter.finalizeToReadable()`** — emits `.xlsx` as a JS `ReadableStream`
+  of compressed chunks with cap-16 backpressure between the Rust zip-writer thread
+  and the JS event loop.
+
+### Changed
+
+- **`Cell.value` setter type tightened** — `Partial<CellValue>` replaced with a flat
+  `CellValueInput` interface, preventing cross-variant field leakage (e.g.
+  `{ valueType: "Number", string: "x" }` no longer compiles) while remaining
+  backward-compatible with `cell.value = { number: 42 }`.
+
+### Fixed
+
+- **`finalizeToReadable` worker self-terminates on consumer abandon** —
+  `ChannelWriter::write` now uses `try_send` with a `Full`-backoff and a `Closed`-
+  arm instead of `blocking_send`, so the detached zip-writer thread exits
+  promptly (≤2 s) when the JS consumer drops/cancels the `ReadableStream`
+  instead of waiting for GC (~55–60 s).
+
+### Internal
+
+- Centralize `CellType` tag matching via `from_tag()` (behavior-neutral refactor).
+- Add unit tests for `CellType::from_tag` round-trip (all 10 tags + unknown → `None`).
+- Add shared-string dedup test coverage for the streaming writer (cross-sheet dedup,
+  already implemented, now asserted).
+- Stabilize flaky streaming memory test; enable `--expose-gc` in the `test` script.
+- Remove duplicate doc-comment on `stream_write_to_file` in `src/stream.rs`.
+
 ## [2.5.1] - 2026-07-30
 
 ### Added
@@ -714,6 +751,8 @@ first fully working release; v0.2.0 and v0.2.1 are superseded.
 [2.3.1]: https://github.com/levu304/excelrs/compare/v2.3.0...v2.3.1
 [2.3.0]: https://github.com/levu304/excelrs/compare/v2.2.1...v2.3.0
 [2.2.1]: https://github.com/levu304/excelrs/compare/v2.2.0...v2.2.1
+[2.5.1]: https://github.com/levu304/excelrs/compare/v2.5.0...v2.5.1
+[2.6.0]: https://github.com/levu304/excelrs/compare/v2.5.1...v2.6.0
 [2.5.0]: https://github.com/levu304/excelrs/compare/v2.4.4...v2.5.0
 [2.2.0]: https://github.com/levu304/excelrs/compare/v2.1.1...v2.2.0
 [2.1.1]: https://github.com/levu304/excelrs/compare/v2.1.0...v2.1.1
