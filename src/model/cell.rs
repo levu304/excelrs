@@ -30,7 +30,7 @@ use crate::types;
 
 /// Discriminant for cell value variants. Mirrors the `value_type` string values.
 #[napi(string_enum)]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum CellType {
     Null,
     Number,
@@ -805,5 +805,60 @@ mod tests {
         assert_eq!(date_format_for_serial(45458.5), "yyyy-mm-dd hh:mm:ss");
         // Edge: exactly at noon
         assert_eq!(date_format_for_serial(25569.5), "yyyy-mm-dd hh:mm:ss");
+    }
+
+    // ---------------------------------------------------------------------------
+    // from_tag round-trip tests
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn test_cell_type_from_tag_all_tags() {
+        // Each CellType variant must have a corresponding arm in from_tag.
+        // When adding a new variant, add it to this array.
+        // No compile-time exhaustiveness: from_tag has a `_ => return None` arm.
+        let cases = [
+            ("Null", CellType::Null),
+            ("Number", CellType::Number),
+            ("String", CellType::String),
+            ("Boolean", CellType::Boolean),
+            ("Date", CellType::Date),
+            ("Formula", CellType::Formula),
+            ("Error", CellType::Error),
+            ("Hyperlink", CellType::Hyperlink),
+            ("RichText", CellType::RichText),
+            ("Merge", CellType::Merge),
+        ];
+        for (tag, expected) in &cases {
+            assert_eq!(
+                CellType::from_tag(tag),
+                Some(expected.clone()),
+                "from_tag({tag:?}) should be Some({expected:?})"
+            );
+        }
+        assert_eq!(CellType::from_tag("Unknown"), None);
+        assert_eq!(CellType::from_tag(""), None);
+    }
+
+    #[test]
+    fn test_cell_type_from_tag_round_trip_via_cell_value() {
+        // CellValue constructors set value_type strings that from_tag must parse.
+        // This tests the real coupling between construction and parsing.
+        let cases = [
+            (CellValue::default(), CellType::Null),
+            (CellValue::number(0.0), CellType::Number),
+            (CellValue::string(""), CellType::String),
+            (CellValue::boolean(false), CellType::Boolean),
+            (CellValue::formula(""), CellType::Formula),
+            (CellValue::hyperlink("", None), CellType::Hyperlink),
+            (CellValue::rich_text(vec![]), CellType::RichText),
+            (CellValue::date(0.0), CellType::Date),
+        ];
+        for (cv, expected) in &cases {
+            assert_eq!(
+                CellType::from_tag(&cv.value_type),
+                Some(expected.clone()),
+                "round-trip via {expected:?} failed"
+            );
+        }
     }
 }
