@@ -78,12 +78,27 @@ export function readAsReadable(buffer: Buffer): Readable {
 
 /**
  * Write an async iterable of sheets to a Node `Writable`.
+ *
+ * Uses `finalizeToReadable()` for constant-memory streaming
+ * when available; falls back to buffering via `write()`.
  */
 export async function writeToWritable(
   sheets: AsyncIterable<JsStreamSheet>,
   writable: Writable,
 ): Promise<void> {
-  const buf = await write(sheets)
+  const native = require('../index') as typeof import('../index')
+  const writer = new native.StreamWriter()
+  for await (const sheet of sheets) {
+    writer.writeSheet(sheet)
+  }
+  if (typeof writer.finalizeToReadable === 'function') {
+    const readable = writer.finalizeToReadable()
+    return new Promise((resolve, reject) => {
+      readable.on('error', reject)
+      readable.pipe(writable).on('finish', resolve)
+    })
+  }
+  const buf = await writer.finalize()
   return new Promise((resolve, reject) => {
     writable.once('error', reject)
     writable.once('finish', resolve)

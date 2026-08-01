@@ -418,9 +418,14 @@ impl StreamWriter {
     /// arrive, with only the string/style accumulators and one sheet's
     /// XML buffered in RAM.
     #[napi]
-    pub fn finalize_to_file(&mut self, path: String) -> Result<()> {
-        let sheets = std::mem::take(&mut self.sheets);
-        stream_write_to_file(&sheets, &path).map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        Ok(())
+    pub async fn finalize_to_file(&self, path: String) -> Result<()> {
+        let sheets = self.sheets.clone();
+        let path = path.clone();
+        let result = napi::tokio::task::spawn_blocking(move || stream_write_to_file(&sheets, &path)).await;
+        match result {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(napi::Error::from_reason(e.to_string())),
+            Err(e) => Err(napi::Error::from_reason(e.to_string())),
+        }
     }
 }

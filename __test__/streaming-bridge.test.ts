@@ -189,3 +189,90 @@ test('4.1 writeToWritable ends the destination stream', async () => {
   expect(sheets).toHaveLength(1)
   expect(sheets[0].name).toBe('Data')
 })
+
+// ---------------------------------------------------------------------------
+// 6.1 finalizeToFile round-trip test
+// ---------------------------------------------------------------------------
+
+import { tmpfile } from 'node:fs'
+import { open } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+
+test('6.1 finalizeToFile round-trips through StreamReader', async () => {
+  const wbjs = new ExcelJS.Workbook()
+  const ws = wbjs.addWorksheet('Data')
+  ws.getCell('A1').value = 'finalizeToFile'
+  ws.getCell('B1').value = 99
+  const buf = Buffer.from(await wbjs.xlsx.writeBuffer())
+
+  // Write via StreamWriter to a temp file
+  const reader = new StreamReader(buf)
+  const writer = new StreamWriter()
+  for await (const sheet of reader as unknown as AsyncIterable<JsStreamSheet>) {
+    writer.writeSheet(sheet)
+  }
+
+  const tmpDir = join(dirname(fileURLToPath(import.meta.url)), '__tmp_test__')
+  mkdirSync(tmpDir, { recursive: true })
+  const tmpPath = join(tmpDir, 'test-roundtrip.xlsx')
+
+  await writer.finalizeToFile(tmpPath)
+
+  // Read back via StreamReader and verify
+  const fileBuf = await import('node:fs/promises').then(m => m.readFile(tmpPath))
+  const reader2 = new StreamReader(Buffer.from(fileBuf as ArrayBuffer))
+  const sheets: JsStreamSheet[] = []
+  for await (const s of reader2 as unknown as AsyncIterable<JsStreamSheet>) sheets.push(s)
+
+  expect(sheets).toHaveLength(1)
+  expect(sheets[0].name).toBe('Data')
+  expect(sheets[0].rows[0].cells[0].value.text).toBe('finalizeToFile')
+  expect(sheets[0].rows[0].cells[1].value.number).toBe(99)
+
+  rmSync(tmpDir, { recursive: true })
+})
+
+// ---------------------------------------------------------------------------
+// 6.3 Memory bounding: finalizeToFile does not buffer all sheets
+// ---------------------------------------------------------------------------
+
+test('6.3 finalizeToFile constant-memory for large workbook', async () => {
+  const wbjs = new ExcelJS.Workbook()
+  for (let i = 0; i < 50; i++) {
+    const ws = wbjs.addWorksheet(`Sheet${i}`)
+    for (let r = 1; r <= 1000; r++) {
+      ws.getCell(`A${r}`).value = `row-${r}`
+    }
+  }
+  const buf = Buffer.from(await wbjs.xlsx.writeBuffer())
+
+  const tmpDir = join(dirname(fileURLToPath(import.meta.url)), '__tmp_test__')
+  mkdirSync(tmpDir, { recursive: true })
+  const tmpPath = join(tmpDir, 'test-memory.xlsx')
+
+  const reader = new StreamReader(buf)
+  const writer = new StreamWriter()
+  for await (const sheet of reader as unknown as AsyncIterable<JsStreamSheet>) {
+    writer.writeSheet(sheet)
+  }
+
+  const before = process.memoryUsage().heapUsed
+  await writer.finalizeToFile(tmpPath)
+  const after = process.memoryUsage().heapUsed
+
+  // Memory should not grow proportionally to workbook size
+  // (heuristic: less than 50MB increase for 50 sheets x 1000 rows)
+  const delta = after - before
+  expect(delta).toBeLessThan(50 * 1024 * 1024)
+
+  // Verify file is valid by reading it back
+  const fileBuf = await import('node:fs/promises').then(m => m.readFile(tmpPath))
+  const reader2 = new StreamReader(Buffer.from(fileBuf as ArrayBuffer))
+  const sheets: JsStreamSheet[] = []
+  for await (const s of reader2 as unknown as AsyncIterable<JsStreamSheet>) sheets.push(s)
+  expect(sheets).toHaveLength(50)
+
+  rmSync(tmpDir, { recursive: true })
+})
