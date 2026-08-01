@@ -41,6 +41,11 @@ SHALL be emitted once at finalize time, after all sheet XML has been written.
 - **WHEN** the same string appears in sheet 1 and sheet 2
 - **THEN** `sharedStrings.xml` contains that string exactly once and both sheet XML files reference it via the same index
 
+#### Scenario: Incremental string interning deduplicates within a sheet
+
+- **WHEN** the same string value appears in two cells of a single sheet
+- **THEN** `sharedStrings.xml` contains that string exactly once and both cells reference the same `<v>` index
+
 #### Scenario: Incremental style accumulation produces correct styles.xml
 
 - **WHEN** the same cell style appears in sheet 1 and sheet 2

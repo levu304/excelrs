@@ -1322,6 +1322,78 @@ mod tests {
     }
 
     #[test]
+    fn stream_write_dedups_shared_strings_across_sheets() {
+        // The shared-string interner is session-scoped (src/stream.rs `string_indices`:
+        // `HashMap<String, u32>`), so a value appearing in two sheets MUST collapse to one
+        // sharedStrings entry and both sheets MUST resolve to it (streaming spec Scenario).
+        let sheets = vec![
+            StreamSheet {
+                name: "One".into(),
+                rows: vec![StreamRow {
+                    r: 1,
+                    cells: vec![
+                        StreamCell { col: 1, value: txt("dup"), style: None },
+                        StreamCell { col: 2, value: txt("onlyA"), style: None },
+                    ],
+                    style: None,
+                }],
+            },
+            StreamSheet {
+                name: "Two".into(),
+                rows: vec![StreamRow {
+                    r: 1,
+                    cells: vec![
+                        StreamCell { col: 1, value: txt("dup"), style: None },
+                        StreamCell { col: 2, value: txt("onlyB"), style: None },
+                    ],
+                    style: None,
+                }],
+            },
+        ];
+        let bytes = stream_write(&sheets).expect("write");
+
+        // sharedStrings.xml holds exactly one <si> per distinct string value.
+        let cursor = std::io::Cursor::new(std::sync::Arc::from(&bytes[..]));
+        let mut archive = zip::ZipArchive::new(cursor).expect("archive");
+        let strings = parse_shared_strings(&mut archive).expect("parse sst");
+        assert_eq!(strings.len(), 3, "expected 3 distinct shared strings: dup, onlyA, onlyB");
+        assert_eq!(
+            strings.iter().filter(|s| **s == "dup").count(),
+            1,
+            "dup must appear exactly once in sharedStrings.xml"
+        );
+
+        // Both sheets resolve the same shared string (same index) via round-trip read.
+        let read = stream_read(&bytes).expect("read back");
+        assert_eq!(read.len(), 2);
+        assert!(read[0].rows[0].cells.iter().any(|c| c.value == txt("dup")));
+        assert!(read[1].rows[0].cells.iter().any(|c| c.value == txt("dup")));
+    }
+
+    #[test]
+    fn stream_write_dedups_shared_strings_within_sheet() {
+        // Duplicate string value within a single sheet MUST collapse to one <si>.
+        let sheets = vec![StreamSheet {
+            name: "One".into(),
+            rows: vec![StreamRow {
+                r: 1,
+                cells: vec![
+                    StreamCell { col: 1, value: txt("dup"), style: None },
+                    StreamCell { col: 2, value: txt("dup"), style: None },
+                ],
+                style: None,
+            }],
+        }];
+        let bytes = stream_write(&sheets).expect("write");
+
+        let cursor = std::io::Cursor::new(std::sync::Arc::from(&bytes[..]));
+        let mut archive = zip::ZipArchive::new(cursor).expect("archive");
+        let strings = parse_shared_strings(&mut archive).expect("parse sst");
+        assert_eq!(strings.len(), 1, "within-sheet duplicate must yield a single sharedStrings entry");
+        assert_eq!(strings[0], "dup");
+    }
+
+    #[test]
     fn stream_write_then_read_roundtrip() {
         let sheets = vec![StreamSheet {
             name: "Data".into(),
