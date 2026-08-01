@@ -79,8 +79,11 @@ export function readAsReadable(buffer: Buffer): Readable {
 /**
  * Write an async iterable of sheets to a Node `Writable`.
  *
- * Uses `finalizeToReadable()` for constant-memory streaming
- * when available; falls back to buffering via `write()`.
+ * Uses `finalizeToReadable()` to emit the archive with backpressure (a
+ * bounded channel drained by the consumer), then pipes chunks into the
+ * `Writable`. Input sheets are still buffered in the writer handle first, so
+ * the write path is not fully constant-memory — see `finalizeToReadable` and
+ * `openspec/specs/streaming-write-incremental/spec.md`.
  */
 export async function writeToWritable(
   sheets: AsyncIterable<JsStreamSheet>,

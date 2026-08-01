@@ -414,9 +414,13 @@ impl StreamWriter {
 
     /// Finalize the streaming writer and write the .xlsx directly to a file.
     ///
-    /// Constant-memory: sheets are written incrementally to disk as they
-    /// arrive, with only the string/style accumulators and one sheet's
-    /// XML buffered in RAM.
+    /// Output is streamed incrementally to disk: the zip writer flushes one
+    /// sheet's entry at a time, so only one sheet's XML is buffered in RAM.
+    /// Input is NOT constant-memory — sheets are accumulated in the handle's
+    /// `sheets` buffer before writing begins, so peak memory is O(all sheets).
+    /// True constant-memory `writeSheet()` (each sheet written to the zip as it
+    /// arrives, before finalize) is tracked as a follow-up — see
+    /// `openspec/specs/streaming-write-incremental/spec.md`.
     #[napi]
     pub async fn finalize_to_file(&self, path: String) -> Result<()> {
         let sheets = self.sheets.clone();
@@ -430,17 +434,21 @@ impl StreamWriter {
     }
 
     /// Finalize the streaming writer into a JS `ReadableStream` of `.xlsx`
-    /// bytes — constant-memory, no intermediate buffer.
+    /// bytes.
     ///
-    /// Sheets are written incrementally on a blocking worker thread and pushed
-    /// through a bounded mpsc channel (capacity 16) that the `ReadableStream`'s
-    /// pull callback drains. Backpressure is therefore enforced: the worker
-    /// parks whenever the consumer falls behind, so peak memory is bounded by
-    /// channel fill plus one sheet's XML — never the full workbook.
+    /// Output is streamed: sheets are written on a blocking worker thread and
+    /// pushed through a bounded mpsc channel (cap 16) that the `ReadableStream`'s
+    /// pull callback drains, so the *emitter* side has backpressure (the worker
+    /// parks if the consumer falls behind; peak output memory is bounded by
+    /// channel fill + one sheet's XML). Input is NOT constant-memory — sheets
+    /// are accumulated in the handle's `sheets` buffer before this is called,
+    /// so peak memory is O(all sheets). True constant-memory `writeSheet()`
+    /// (each sheet written to the zip as it arrives) is tracked as a follow-up —
+    /// see `openspec/specs/streaming-write-incremental/spec.md`.
     ///
     /// Terminal write errors are sent as `Err` channel items, which the stream
-    /// adapter rejects on (rather than closing silently) — see `design.md`
-    /// scenario 4.3.
+    /// adapter rejects on (rather than closing silently) — see
+    /// `docs/adr/005-streaming-write-buffering.md`.
     #[napi]
     pub fn finalize_to_readable(&self, env: Env) -> Result<ReadableStream<'_, BufferSlice<'_>>> {
         let sheets = self.sheets.clone();

@@ -1,9 +1,27 @@
 # streaming-write-incremental Specification
 
+## Status
+
+> ⚠️ **Deferred (not yet implemented).** The v2.2.0 streaming writer
+> (`src/stream_handle.rs` `StreamWriter`) does **not** satisfy this spec: its
+> `writeSheet()` accumulates every sheet into a `sheets: Vec<StreamSheet>`
+> buffer, and each `finalize*` clones that buffer before writing. Peak write
+> memory is therefore **O(all sheets)**, and the "constant-memory" claims on
+> `finalizeToFile`/`finalizeToReadable`/`writeToWritable` are inaccurate for the
+> write path (they hold only for *output* emission).
+>
+> This spec remains the **target** for a future change (true incremental
+> `writeSheet`, with the handle owning an open `ZipWriter` across FFI calls).
+> Decision rationale: see `docs/adr/005-streaming-write-buffering.md`.
+> See also issue #25.1 and the reverted prior attempt (commit `c19a4fc`).
+
 ## Purpose
+
 Defines the incremental sheet-writing behavior that makes the streaming XLSX
 writer truly constant-memory for its internal intermediate buffers.
+
 ## Requirements
+
 ### Requirement: Streaming writer emits sheet XML directly without collecting all sheets first
 
 The streaming writer SHALL write each sheet's XML directly to the zip writer as
@@ -45,4 +63,3 @@ the next sheet.
 
 - **WHEN** sheet 1 has 3 rows and sheet 2 has 5 rows
 - **THEN** sheet 2's XML starts row indexing from 1 and its string/style references resolve against the global (cross-sheet) tables
-
