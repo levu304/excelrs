@@ -22,7 +22,7 @@
   "scripts": {
     "build": "napi build --platform --no-const-enum --runtime-string-enum --js native.js --dts native.d.ts --pipe \"node scripts/apply-glue.cjs\"",
     "build:release": "napi build --platform --release --no-const-enum --runtime-string-enum --js native.js --dts native.d.ts --pipe \"node scripts/apply-glue.cjs\"",
-    "test": "NODE_OPTIONS=--expose-gc vitest run",
+    "test": "node -e \"process.env.NODE_OPTIONS=(process.env.NODE_OPTIONS||'')+' --expose-gc';require('child_process').execFileSync(process.execPath,['./node_modules/vitest/vitest.mjs','run'],{stdio:'inherit'})\"",
     "typecheck": "tsc --noEmit",
     "format": "cargo fmt --",
     "lint": "cargo clippy -- -D warnings",
