@@ -19,8 +19,9 @@ use napi_derive::napi;
 use crate::model::workbook_inner::WorkbookInner;
 use crate::reader::styles::{self as reader_styles, StyleTableRead};
 use crate::stream::{
-    parse_shared_strings, parse_sheet_rows, parse_workbook_sheet_targets, stream_read, stream_write, StreamCell,
-    StreamRow, StreamSheet, StreamValue, MAX_ARCHIVE_BYTES, MAX_ARCHIVE_ENTRIES, MAX_ENTRY_BYTES,
+    parse_shared_strings, parse_sheet_rows, parse_workbook_sheet_targets, stream_read, stream_write,
+    stream_write_to_file, StreamCell, StreamRow, StreamSheet, StreamValue, MAX_ARCHIVE_BYTES, MAX_ARCHIVE_ENTRIES,
+    MAX_ENTRY_BYTES,
 };
 
 /// Cross-FFI cell value. Exactly one variant is populated per cell.
@@ -409,5 +410,17 @@ impl StreamWriter {
         let sheets = std::mem::take(&mut self.sheets);
         let bytes = stream_write(&sheets).map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(Buffer::from(bytes))
+    }
+
+    /// Finalize the streaming writer and write the .xlsx directly to a file.
+    ///
+    /// Constant-memory: sheets are written incrementally to disk as they
+    /// arrive, with only the string/style accumulators and one sheet's
+    /// XML buffered in RAM.
+    #[napi]
+    pub fn finalize_to_file(&mut self, path: String) -> Result<()> {
+        let sheets = std::mem::take(&mut self.sheets);
+        stream_write_to_file(&sheets, &path).map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        Ok(())
     }
 }

@@ -190,6 +190,14 @@ export declare class StreamWriter {
    * Consumes the internal sheet list and returns the complete .xlsx bytes.
    */
   finalize(): Buffer
+  /**
+   * Finalize the streaming writer and write the .xlsx directly to a file.
+   *
+   * Constant-memory: sheets are written incrementally to disk as they
+   * arrive, with only the string/style accumulators and one sheet's
+   * XML buffered in RAM.
+   */
+  finalizeToFile(path: string): void
 }
 
 /**

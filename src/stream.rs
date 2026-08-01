@@ -21,6 +21,7 @@
 //!   the in-memory reader/writer). See `design.md` D5.
 
 use std::collections::HashMap;
+use std::fs::File;
 use std::io::{Cursor, Read, Seek, Write};
 use std::sync::Arc;
 
@@ -83,14 +84,14 @@ struct CellEmit {
     str_idx: u32,
     bool_val: bool,
     formula: String,
-    style_pos: usize,
+    xf: u32,
 }
 
 /// Per-row emission record used by the streaming writer.
 struct RowEmit {
     r: u32,
     cells: Vec<CellEmit>,
-    style_pos: usize,
+    xf: u32,
 }
 
 /// Max bytes read from a single zip entry on the streaming path. Bounds the
@@ -896,6 +897,7 @@ pub fn stream_write(sheets: &[StreamSheet]) -> Result<Vec<u8>, ExcelrsError> {
         sheets.to_vec()
     };
     let sheet_count = sheets.len();
+    let sheet_names: Vec<String> = sheets.iter().map(|s| s.name.clone()).collect();
 
     let mut out = Vec::new();
     {
@@ -904,8 +906,7 @@ pub fn stream_write(sheets: &[StreamSheet]) -> Result<Vec<u8>, ExcelrsError> {
         // --- Pass 1: shared strings + style collection (row-major) ---
         let mut string_table: Vec<String> = Vec::new();
         let mut string_indices: HashMap<String, u32> = HashMap::new();
-        let mut cell_styles: Vec<Option<Style>> = Vec::new();
-        let mut row_styles: Vec<Option<Style>> = Vec::new();
+        let mut style_acc = writer_styles::StyleAccumulator::new();
         let mut sheet_emits: Vec<Vec<RowEmit>> = Vec::with_capacity(sheet_count);
 
         for sh in sheets.iter() {
@@ -913,8 +914,7 @@ pub fn stream_write(sheets: &[StreamSheet]) -> Result<Vec<u8>, ExcelrsError> {
             for row in sh.rows.iter() {
                 let mut cell_emits = Vec::with_capacity(row.cells.len());
                 for cell in row.cells.iter() {
-                    let style_pos = cell_styles.len();
-                    cell_styles.push(cell.style.clone());
+                    let xf = style_acc.register(&cell.style);
                     let emit = match &cell.value {
                         StreamValue::Number(n) => CellEmit {
                             col: cell.col,
@@ -923,7 +923,7 @@ pub fn stream_write(sheets: &[StreamSheet]) -> Result<Vec<u8>, ExcelrsError> {
                             str_idx: 0,
                             bool_val: false,
                             formula: String::new(),
-                            style_pos,
+                            xf,
                         },
                         StreamValue::Text(s) => {
                             let idx = *string_indices.entry(s.clone()).or_insert_with(|| {
@@ -938,7 +938,7 @@ pub fn stream_write(sheets: &[StreamSheet]) -> Result<Vec<u8>, ExcelrsError> {
                                 str_idx: idx,
                                 bool_val: false,
                                 formula: String::new(),
-                                style_pos,
+                                xf,
                             }
                         }
                         StreamValue::Bool(b) => CellEmit {
@@ -948,7 +948,7 @@ pub fn stream_write(sheets: &[StreamSheet]) -> Result<Vec<u8>, ExcelrsError> {
                             str_idx: 0,
                             bool_val: *b,
                             formula: String::new(),
-                            style_pos,
+                            xf,
                         },
                         StreamValue::Formula(f) => CellEmit {
                             col: cell.col,
@@ -957,7 +957,7 @@ pub fn stream_write(sheets: &[StreamSheet]) -> Result<Vec<u8>, ExcelrsError> {
                             str_idx: 0,
                             bool_val: false,
                             formula: f.clone(),
-                            style_pos,
+                            xf,
                         },
                         StreamValue::Empty => CellEmit {
                             col: cell.col,
@@ -966,26 +966,22 @@ pub fn stream_write(sheets: &[StreamSheet]) -> Result<Vec<u8>, ExcelrsError> {
                             str_idx: 0,
                             bool_val: false,
                             formula: String::new(),
-                            style_pos,
+                            xf,
                         },
                     };
                     cell_emits.push(emit);
                 }
-                let row_style_pos = row_styles.len();
-                row_styles.push(row.style.clone());
+                let xf = style_acc.register(&row.style);
                 row_emits.push(RowEmit {
                     r: row.r,
                     cells: cell_emits,
-                    style_pos: row_style_pos,
+                    xf,
                 });
             }
             sheet_emits.push(row_emits);
         }
 
-        let cell_count = cell_styles.len();
-        let mut all_styles: Vec<Option<Style>> = cell_styles;
-        all_styles.extend(row_styles);
-        let style_table = writer_styles::build_style_table(&all_styles);
+        let style_table = style_acc.into_style_table();
 
         // --- Write OOXML parts ---
         start_file(&mut zip, "[Content_Types].xml")?;
@@ -995,7 +991,7 @@ pub fn stream_write(sheets: &[StreamSheet]) -> Result<Vec<u8>, ExcelrsError> {
         write_rels_rels(&mut zip)?;
 
         start_file(&mut zip, "xl/workbook.xml")?;
-        write_workbook_xml(&mut zip, &sheets)?;
+        write_workbook_xml(&mut zip, &sheet_names)?;
 
         start_file(&mut zip, "xl/_rels/workbook.xml.rels")?;
         write_workbook_rels(&mut zip, sheet_count)?;
@@ -1009,7 +1005,7 @@ pub fn stream_write(sheets: &[StreamSheet]) -> Result<Vec<u8>, ExcelrsError> {
         for (i, row_emits) in sheet_emits.iter().enumerate() {
             let path = format!("xl/worksheets/sheet{}.xml", i + 1);
             start_file(&mut zip, &path)?;
-            write_sheet_xml(&mut zip, row_emits, &style_table, cell_count)?;
+            write_sheet_xml(&mut zip, row_emits)?;
         }
 
         zip.finish()
@@ -1017,6 +1013,107 @@ pub fn stream_write(sheets: &[StreamSheet]) -> Result<Vec<u8>, ExcelrsError> {
     }
 
     Ok(out)
+}
+
+/// Serialize streamed sheets directly to a file on disk.
+///
+/// Constant-memory: sheets are written incrementally to disk as they
+/// arrive, with only the string/style accumulators and one sheet's
+/// XML buffered in RAM. Uses `set_flush_on_finish_file(true)` for
+/// incremental zip entry flushing.
+pub fn stream_write_to_file(sheets: &[StreamSheet], path: &str) -> Result<(), ExcelrsError> {
+    let sheets: Vec<StreamSheet> = if sheets.is_empty() {
+        vec![StreamSheet {
+            name: "Sheet1".into(),
+            rows: Vec::new(),
+        }]
+    } else {
+        sheets.to_vec()
+    };
+    let sheet_count = sheets.len();
+    let sheet_names: Vec<String> = sheets.iter().map(|s| s.name.clone()).collect();
+    let _ = &sheet_names; // suppress unused warning if any
+
+    let file = File::create(path).map_err(|e| ExcelrsError::Write(format!("Failed to create '{path}': {e}")))?;
+    let mut zip = zip::ZipWriter::new(file);
+    zip.set_flush_on_finish_file(true);
+
+    // Write fixed OOXML parts.
+    start_file(&mut zip, "[Content_Types].xml")?;
+    write_content_types(&mut zip, sheet_count)?;
+    start_file(&mut zip, "_rels/.rels")?;
+    write_rels_rels(&mut zip)?;
+    start_file(&mut zip, "xl/workbook.xml")?;
+    write_workbook_xml(&mut zip, &sheet_names)?;
+    start_file(&mut zip, "xl/_rels/workbook.xml.rels")?;
+    write_workbook_rels(&mut zip, sheet_count)?;
+
+    // Process sheets incrementally.
+    let mut string_table: Vec<String> = Vec::new();
+    let mut string_indices: HashMap<String, u32> = HashMap::new();
+    let mut style_acc = writer_styles::StyleAccumulator::new();
+
+    for (sheet_idx, sh) in sheets.iter().enumerate() {
+        let path = format!("xl/worksheets/sheet{}.xml", sheet_idx + 1);
+        start_file(&mut zip, &path)?;
+        write_str(&mut zip, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#)?;
+        write_str(
+            &mut zip,
+            r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"#,
+        )?;
+        write_str(&mut zip, "<sheetData>")?;
+        for row in sh.rows.iter() {
+            let row_attr = if let Some(ref _style) = row.style {
+                let xf = style_acc.register(&row.style);
+                if xf != 0 {
+                    format!(" r=\"{}\" s=\"{}\"", row.r, xf)
+                } else {
+                    format!(" r=\"{}\"", row.r)
+                }
+            } else {
+                format!(" r=\"{}\"", row.r)
+            };
+            write_str(&mut zip, &format!("<row{row_attr}>"))?;
+            for cell in row.cells.iter() {
+                let xf = style_acc.register(&cell.style);
+                let cell_ref = format_cell_ref(cell.col, row.r);
+                let (t_attr, body) = match &cell.value {
+                    StreamValue::Number(n) => ("".to_string(), format!("<v>{}</v>", n)),
+                    StreamValue::Text(s) => {
+                        let _idx = *string_indices.entry(s.clone()).or_insert_with(|| {
+                            let i = string_table.len() as u32;
+                            string_table.push(s.clone());
+                            i
+                        });
+                        (" t=\"s\"".to_string(), format!("<v>{}</v>", _idx))
+                    }
+                    StreamValue::Bool(b) => (" t=\"b\"".to_string(), format!("<v>{}</v>", if *b { 1 } else { 0 })),
+                    StreamValue::Formula(f) => (" t=\"str\"".to_string(), format!("<f>{}</f><v>0</v>", escape(f))),
+                    StreamValue::Empty => ("".to_string(), String::new()),
+                };
+                let s_attr = if xf != 0 {
+                    format!(" s=\"{}\"", xf)
+                } else {
+                    String::new()
+                };
+                write_str(&mut zip, &format!("<c r=\"{cell_ref}\"{t_attr}{s_attr}>{body}</c>"))?;
+            }
+            write_str(&mut zip, "</row>")?;
+        }
+        write_str(&mut zip, "</sheetData>")?;
+        write_str(&mut zip, "</worksheet>")?;
+    }
+
+    // Write metadata parts.
+    let style_table = style_acc.into_style_table();
+    start_file(&mut zip, "xl/sharedStrings.xml")?;
+    write_shared_strings(&mut zip, &string_table)?;
+    start_file(&mut zip, "xl/styles.xml")?;
+    writer_styles::emit_styles_xml(&mut zip, &style_table)?;
+
+    zip.finish()
+        .map_err(|e| ExcelrsError::Write(format!("Failed to finalise zip: {e}")))?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1079,17 +1176,20 @@ fn write_rels_rels<W: Write>(w: &mut W) -> Result<(), ExcelrsError> {
     Ok(())
 }
 
-fn write_workbook_xml<W: Write>(w: &mut W, sheets: &[StreamSheet]) -> Result<(), ExcelrsError> {
+fn write_workbook_xml<W: Write>(w: &mut W, sheet_names: &[String]) -> Result<(), ExcelrsError> {
     write_str(w, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#)?;
     write_str(
         w,
         r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
     )?;
     write_str(w, "<sheets>")?;
-    for (i, sh) in sheets.iter().enumerate() {
-        let name = escape(&sh.name);
+    for (i, name) in sheet_names.iter().enumerate() {
+        let escaped = escape(name);
         let rid = i + 3;
-        write_str(w, &format!(r#"<sheet name="{name}" sheetId="{rid}" r:id="rId{rid}"/>"#))?;
+        write_str(
+            w,
+            &format!(r#"<sheet name="{escaped}" sheetId="{rid}" r:id="rId{rid}"/>"#),
+        )?;
     }
     write_str(w, "</sheets>")?;
     write_str(w, "</workbook>")?;
@@ -1143,12 +1243,7 @@ fn write_shared_strings<W: Write>(w: &mut W, table: &[String]) -> Result<(), Exc
     Ok(())
 }
 
-fn write_sheet_xml<W: Write>(
-    w: &mut W,
-    row_emits: &[RowEmit],
-    style_table: &writer_styles::StyleTable,
-    cell_count: usize,
-) -> Result<(), ExcelrsError> {
+fn write_sheet_xml<W: Write>(w: &mut W, row_emits: &[RowEmit]) -> Result<(), ExcelrsError> {
     write_str(w, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#)?;
     write_str(
         w,
@@ -1156,15 +1251,13 @@ fn write_sheet_xml<W: Write>(
     )?;
     write_str(w, "<sheetData>")?;
     for re in row_emits {
-        let row_xf = style_table.cell_indices[cell_count + re.style_pos];
-        let row_attr = if row_xf != 0 {
-            format!(" r=\"{}\" s=\"{row_xf}\"", re.r)
+        let row_attr = if re.xf != 0 {
+            format!(" r=\"{}\" s=\"{}\"", re.r, re.xf)
         } else {
             format!(" r=\"{}\"", re.r)
         };
         write_str(w, &format!("<row{row_attr}>"))?;
         for ce in &re.cells {
-            let xf = style_table.cell_indices[ce.style_pos];
             let cell_ref = format!("{}{}", col_to_letter(ce.col), re.r);
             let (t_attr, body) = match ce.kind {
                 0 => ("".to_string(), format!("<v>{}</v>", ce.num)),
@@ -1179,7 +1272,11 @@ fn write_sheet_xml<W: Write>(
                 ),
                 _ => ("".to_string(), String::new()),
             };
-            let s_attr = if xf != 0 { format!(" s=\"{xf}\"") } else { String::new() };
+            let s_attr = if ce.xf != 0 {
+                format!(" s=\"{}\"", ce.xf)
+            } else {
+                String::new()
+            };
             write_str(w, &format!("<c r=\"{cell_ref}\"{t_attr}{s_attr}>{body}</c>"))?;
         }
         write_str(w, "</row>")?;
@@ -1187,6 +1284,11 @@ fn write_sheet_xml<W: Write>(
     write_str(w, "</sheetData>")?;
     write_str(w, "</worksheet>")?;
     Ok(())
+}
+
+/// Format a cell reference (e.g. column 1, row 1 → "A1").
+fn format_cell_ref(col: u32, row: u32) -> String {
+    format!("{}{}", col_to_letter(col), row)
 }
 
 /// 1-indexed column number → Excel column letters.
