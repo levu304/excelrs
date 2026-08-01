@@ -1856,9 +1856,6 @@ fn write_cell_xml<W: Write>(
                     write_str(w, "<r>")?;
                     if let Some(ref font) = run.font {
                         write_str(w, "<rPr>")?;
-                        if let Some(sz) = font.size {
-                            write_str(w, &format!("<sz val=\"{}\"/>", sz))?;
-                        }
                         if let Some(ref name) = font.name {
                             write_str(w, &format!("<rFont val=\"{}\"/>", escape(name)))?;
                         }
@@ -1868,8 +1865,14 @@ fn write_cell_xml<W: Write>(
                         if let Some(true) = font.italic {
                             write_str(w, "<i/>")?;
                         }
+                        if let Some(true) = font.underline {
+                            write_str(w, "<u/>")?;
+                        }
                         if let Some(ref color) = font.color {
                             write_str(w, &format!("<color rgb=\"{}\"/>", escape(color)))?;
+                        }
+                        if let Some(sz) = font.size {
+                            write_str(w, &format!("<sz val=\"{}\"/>", sz))?;
                         }
                         write_str(w, "</rPr>")?;
                     }

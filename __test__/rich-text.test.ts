@@ -65,6 +65,35 @@ test('cell.value = { richText: ... } with full font (user reproduction)', async 
   expect(cell2.richText![1].text).toBe('S: (11) = (7) - (8) - (10)')
 })
 
+test('cell.value = { richText: ... } with full font including underline round-trips', async () => {
+  const wb = makeWorkbook()
+  const ws = wb.getWorksheet('S')!
+  const cell = ws.getCell('A1')
+
+  cell.value = {
+    richText: [
+      {
+        text: 'Underline me',
+        font: { name: 'Arial', size: 12, bold: true, italic: true, underline: true, color: 'FFFF0000' },
+      },
+    ],
+  }
+
+  const buf = await wb.xlsx.write()
+  const wb2 = new Workbook()
+  await wb2.xlsx.read(buf)
+  const cell2 = wb2.getWorksheet('S')!.getCell('A1')
+
+  expect(cell2.richText!.length).toBe(1)
+  const font = cell2.richText![0].font!
+  expect(font.name).toBe('Arial')
+  expect(font.size).toBeCloseTo(12)
+  expect(font.bold).toBe(true)
+  expect(font.italic).toBe(true)
+  expect(font.underline).toBe(true)
+  expect(font.color).toBe('FFFF0000')
+})
+
 test('cell.value = { hyperlink: ... } writes and round-trips', async () => {
   const wb = makeWorkbook()
   const ws = wb.getWorksheet('S')!
