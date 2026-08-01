@@ -1149,12 +1149,6 @@ pub fn stream_write(sheets: &[StreamSheet]) -> Result<Vec<u8>, ExcelrsError> {
 /// arrive, with only the string/style accumulators and one sheet's
 /// XML buffered in RAM. Uses `set_flush_on_finish_file(true)` for
 /// incremental zip entry flushing.
-/// Serialize streamed sheets directly to a file on disk.
-///
-/// Constant-memory: sheets are written incrementally to disk as they
-/// arrive, with only the string/style accumulators and one sheet's
-/// XML buffered in RAM. Uses `set_flush_on_finish_file(true)` for
-/// incremental zip entry flushing.
 pub fn stream_write_to_file(sheets: &[StreamSheet], path: &str) -> Result<(), ExcelrsError> {
     let file = File::create(path).map_err(|e| ExcelrsError::Write(format!("Failed to create '{path}': {e}")))?;
     let mut zip = zip::ZipWriter::new(file);
