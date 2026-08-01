@@ -1,8 +1,5 @@
-# streaming-write-to-file Specification
+## MODIFIED Requirements
 
-## Purpose
-Allows the streaming XLSX writer to emit a constant-memory `.xlsx` directly to disk.
-## Requirements
 ### Requirement: Streaming writer can finalize directly to a file path
 
 The streaming writer SHALL provide a `finalizeToFile(file_path: string)` method
@@ -40,4 +37,3 @@ and `docs/adr/005-streaming-write-buffering.md`.
 
 - **WHEN** `finalizeToFile` is called with a path in a non-existent directory or an unwritable location
 - **THEN** the call rejects with an error and the file is not created (or left incomplete)
-

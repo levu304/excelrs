@@ -1,8 +1,5 @@
-# streaming-write-to-readable Specification
+## MODIFIED Requirements
 
-## Purpose
-Lets the streaming XLSX writer emit a constant-memory `.xlsx` as a JS ReadableStream.
-## Requirements
 ### Requirement: Streaming writer can produce a JS ReadableStream of chunks
 
 The streaming writer SHALL provide a `finalizeToReadable()` method that returns a
@@ -47,4 +44,3 @@ is deferred — see `openspec/specs/streaming-write-incremental/spec.md` and
 
 - **WHEN** an error occurs during zip writing (e.g., I/O failure on the internal channel)
 - **THEN** the returned `ReadableStream` errors (the JS `reader.read()` promise rejects) and the stream terminates
-
