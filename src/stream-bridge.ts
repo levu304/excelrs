@@ -101,6 +101,21 @@ export async function writeToWritable(
     // `Writable`, honoring backpressure (pause when `write` returns false).
     return new Promise<void>((resolve, reject) => {
       const reader = readable.getReader()
+      const ignoreErr = () => undefined
+      const cleanup = () => {
+        // Abort the Web ReadableStream so the native Rust stream source drops
+        // promptly (without this it lingers until JS GC — the ~55-60s leak).
+        // Per the Web Streams spec: cancel() throws "Invalid state: locked"
+        // while a reader holds the lock, and releaseLock() throws while a
+        // read() is in flight. Both are best-effort here: in the happy path a
+        // read is already settled, so releaseLock() succeeds and cancel()
+        // drops the source promptly (B2). If a read is in flight (abandon
+        // mid-read), both throw → fall back to GC, and the Rust layer's
+        // try_send + is_closed reaps the worker once collected (B1, no
+        // park-forever). Idempotent across double-cleanup.
+        try { reader.releaseLock() } catch { ignoreErr() }
+        try { void readable.cancel().catch(ignoreErr) } catch { ignoreErr() }
+      }
       const pump = () => {
         reader.read().then(({ done, value }) => {
           if (done) {
@@ -112,10 +127,13 @@ export async function writeToWritable(
           } else {
             pump()
           }
-        }, reject)
+        }, (err) => {
+          cleanup()
+          reject(err)
+        })
       }
-      writable.once('error', reject)
-      writable.once('close', resolve)
+      writable.once('error', (err) => { cleanup(); reject(err) })
+      writable.once('close', () => { cleanup(); resolve() })
       pump()
     })
   }

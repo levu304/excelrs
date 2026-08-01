@@ -269,10 +269,27 @@ impl ChannelWriter {
 impl std::io::Write for ChannelWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let chunk = buf.to_vec();
-        self.sender
-            .blocking_send(Ok(chunk))
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::BrokenPipe, e))?;
-        Ok(buf.len())
+        loop {
+            match self.sender.try_send(Ok(chunk.clone())) {
+                Ok(()) => return Ok(buf.len()),
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                    // Receiver dropped (JS consumer gone) => channel closed.
+                    // tokio wakes closed senders (B1); we must NOT park here.
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        "stream consumer gone",
+                    ));
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                    // cap-16 backpressure: yield the worker thread (no runtime
+                    // here) and retry. A dropped receiver closes the channel
+                    // => the Closed arm exits, so this never parks forever.
+                    // (ponytail: 5ms fixed backoff; swap for crossbeam park/unpark
+                    // signaled by receiver-drop if perf proven.)
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+            }
+        }
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
@@ -1332,8 +1349,16 @@ mod tests {
                 rows: vec![StreamRow {
                     r: 1,
                     cells: vec![
-                        StreamCell { col: 1, value: txt("dup"), style: None },
-                        StreamCell { col: 2, value: txt("onlyA"), style: None },
+                        StreamCell {
+                            col: 1,
+                            value: txt("dup"),
+                            style: None,
+                        },
+                        StreamCell {
+                            col: 2,
+                            value: txt("onlyA"),
+                            style: None,
+                        },
                     ],
                     style: None,
                 }],
@@ -1343,8 +1368,16 @@ mod tests {
                 rows: vec![StreamRow {
                     r: 1,
                     cells: vec![
-                        StreamCell { col: 1, value: txt("dup"), style: None },
-                        StreamCell { col: 2, value: txt("onlyB"), style: None },
+                        StreamCell {
+                            col: 1,
+                            value: txt("dup"),
+                            style: None,
+                        },
+                        StreamCell {
+                            col: 2,
+                            value: txt("onlyB"),
+                            style: None,
+                        },
                     ],
                     style: None,
                 }],
@@ -1356,7 +1389,11 @@ mod tests {
         let cursor = std::io::Cursor::new(std::sync::Arc::from(&bytes[..]));
         let mut archive = zip::ZipArchive::new(cursor).expect("archive");
         let strings = parse_shared_strings(&mut archive).expect("parse sst");
-        assert_eq!(strings.len(), 3, "expected 3 distinct shared strings: dup, onlyA, onlyB");
+        assert_eq!(
+            strings.len(),
+            3,
+            "expected 3 distinct shared strings: dup, onlyA, onlyB"
+        );
         assert_eq!(
             strings.iter().filter(|s| **s == "dup").count(),
             1,
@@ -1378,8 +1415,16 @@ mod tests {
             rows: vec![StreamRow {
                 r: 1,
                 cells: vec![
-                    StreamCell { col: 1, value: txt("dup"), style: None },
-                    StreamCell { col: 2, value: txt("dup"), style: None },
+                    StreamCell {
+                        col: 1,
+                        value: txt("dup"),
+                        style: None,
+                    },
+                    StreamCell {
+                        col: 2,
+                        value: txt("dup"),
+                        style: None,
+                    },
                 ],
                 style: None,
             }],
@@ -1389,7 +1434,11 @@ mod tests {
         let cursor = std::io::Cursor::new(std::sync::Arc::from(&bytes[..]));
         let mut archive = zip::ZipArchive::new(cursor).expect("archive");
         let strings = parse_shared_strings(&mut archive).expect("parse sst");
-        assert_eq!(strings.len(), 1, "within-sheet duplicate must yield a single sharedStrings entry");
+        assert_eq!(
+            strings.len(),
+            1,
+            "within-sheet duplicate must yield a single sharedStrings entry"
+        );
         assert_eq!(strings[0], "dup");
     }
 
@@ -2121,5 +2170,30 @@ mod shared_formula_tests {
         // Bare row reference (`5`) shifts with the row offset, matching calamine.
         assert_eq!(replace_cell_names("=A1*5", (1, 0)), "=A2*6");
         assert_eq!(replace_cell_names("=A1*A5", (1, 0)), "=A2*A6");
+    }
+}
+
+#[cfg(test)]
+mod channel_writer_cancel_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    // Regression guard for worker-cancellation-guard-finalize-readable.
+    // A detached std worker MUST NOT park forever inside `write` when the JS
+    // consumer abandons the ReadableStream. With try_send + is_closed, a
+    // dropped receiver closes the channel and write() returns Err promptly,
+    // no tokio runtime, no park. tokio wakes closed senders (B1, Oxide
+    // RFD #609) => this is deterministic and runtime-free. (B2 napi
+    // cancel->Rust-drop timing is validated separately via the JS repro 1.2;)
+    // JS cannot observe native thread count, so the park-forever guard lives here.
+    #[test]
+    fn write_returns_err_when_receiver_dropped_no_park() {
+        let (tx, rx) = tokio::sync::mpsc::channel::<StreamChunk>(16);
+        drop(rx); // consumer gone -> channel closed
+        let mut w = ChannelWriter::new(tx);
+        let t0 = Instant::now();
+        let res = w.write(b"x");
+        assert!(res.is_err(), "write must error once the consumer (receiver) is gone");
+        assert!(t0.elapsed() < Duration::from_millis(50), "write must not park");
     }
 }

@@ -336,3 +336,41 @@ test('6.3 finalizeToFile bounded output-phase heap growth (input buffered)', asy
 
   rmSync(tmpDir, { recursive: true })
 })
+
+// ---------------------------------------------------------------------------
+// 6.4 cancel() on finalizeToReadable settles promptly (no 55-60s GC park)
+//
+// Regression guard for openspec change `worker-cancellation-guard-finalize-readable`.
+// JS surface: `writeToWritable`'s finally calls releaseLock()+cancel(). Here we
+// assert the ReadableStream cancels promptly and cleanup does not throw.
+// NOTE the native worker-thread unwind is guarded by the Rust unit (3.3);
+// JS cannot observe native thread count, so 1.2 guards the cancel-propagation
+// path, not the thread lifetime. A closed channel + try_send unwinds the worker
+// on receiver-drop (B1), deterministic per 3.3.
+// ---------------------------------------------------------------------------
+
+test('6.4 cancel() on finalizeToReadable settles within 2s (no 55-60s leak)', async () => {
+  const writer = new StreamWriter()
+  const rows: { r: number; cells: Array<{ col: number; value: { text: string } }> }[] = []
+  for (let r = 1; r <= 4000; r++) rows.push({ r, cells: [{ col: 1, value: { text: `row-${r}` } }] })
+  writer.writeSheet({ name: 'S', rows })
+
+  const readable = writer.finalizeToReadable()
+  const reader = readable.getReader()
+
+  // Start draining so the worker produces into (and eventually fills) cap-16.
+  for (let i = 0; i < 3; i++) {
+    const res = await reader.read()
+    if (res.done) break
+  }
+
+  // Per the Web Streams spec, cancel() requires an unlocked stream, so release
+  // the reader first (no read is in flight here), then cancel. Mirrors the
+  // writeToWritable finally-cleanup. cancel() resolving ≤2s asserts the
+  // prompt-lever signal path; the worker-thread unwind itself is guarded by
+  // the Rust unit (3.3), since JS cannot observe native thread count.
+  reader.releaseLock()
+  const t0 = Date.now()
+  await readable.cancel('abandoned')
+  expect(Date.now() - t0).toBeLessThan(2000)
+})

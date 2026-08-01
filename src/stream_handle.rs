@@ -468,12 +468,12 @@ impl StreamWriter {
                 if let Err(e) = session.write_sheet_xml(sheet) {
                     // Surface write errors through the channel so the JS
                     // ReadableStream rejects instead of closing silently.
-                    let _ = sender.blocking_send(Err(e));
+                    let _ = sender.try_send(Err(e));
                     return;
                 }
             }
             if let Err(e) = session.finalize_to_channel() {
-                let _ = sender.blocking_send(Err(e));
+                let _ = sender.try_send(Err(e));
             }
             // `session` (with its inner sender, consumed by finish() inside
             // finalize_to_channel) and the caller's sender clone both drop
