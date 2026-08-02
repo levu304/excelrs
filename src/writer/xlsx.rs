@@ -1863,8 +1863,7 @@ fn write_cell_xml<W: Write>(
             } else if let Some(b) = cv.boolean {
                 let v = if b { "1" } else { "0" };
                 write_str(w, &format!("<v>{}</v>", v))?;
-            }
-            if let Some(e) = &cv.error_value {
+            } else if let Some(e) = &cv.error_value {
                 write_str(w, &format!("<v>{}</v>", escape(e)))?;
             }
         }

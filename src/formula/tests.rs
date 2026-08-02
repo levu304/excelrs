@@ -325,3 +325,79 @@ fn test_recalculate_chained_formulas() {
     let b3 = ws.get_cell_by_rc(3, 2);
     assert_eq!(b3.cached_value().unwrap().number, Some(6.0));
 }
+// === 7.1 Date handling ===
+
+#[test]
+fn test_date_in_arithmetic() {
+    let ws = Worksheet::new("Sheet1".into());
+    ws.insert_cell_value(1, 1, CellValue::date(45000.0));
+    let mut ev = FormulaEvaluator::new(&ws, "Sheet1".into(), None);
+    let result = ev.evaluate("=A1+1", 0, 0).unwrap().unwrap();
+    assert_eq!(result, Value::Number(45001.0));
+}
+
+#[test]
+fn test_sum_with_dates() {
+    let ws = Worksheet::new("Sheet1".into());
+    ws.insert_cell_value(1, 1, CellValue::date(45000.0));
+    ws.insert_cell_value(1, 2, CellValue::date(45001.0));
+    ws.insert_cell_value(1, 3, CellValue::date(45002.0));
+    let mut ev = FormulaEvaluator::new(&ws, "Sheet1".into(), None);
+    let result = ev.evaluate("=SUM(A1:C1)", 0, 0).unwrap().unwrap();
+    assert_eq!(result, Value::Number(135003.0));
+}
+
+#[test]
+fn test_min_with_dates() {
+    let ws = Worksheet::new("Sheet1".into());
+    ws.insert_cell_value(1, 1, CellValue::date(45002.0));
+    ws.insert_cell_value(1, 2, CellValue::date(45000.0));
+    ws.insert_cell_value(1, 3, CellValue::date(45001.0));
+    let mut ev = FormulaEvaluator::new(&ws, "Sheet1".into(), None);
+    let result = ev.evaluate("=MIN(A1:C1)", 0, 0).unwrap().unwrap();
+    assert_eq!(result, Value::Number(45000.0));
+}
+
+// === 7.2 MIN/MAX empty-args semantics (Excel returns 0) ===
+
+#[test]
+fn test_min_empty_args_returns_zero() {
+    let ws = Worksheet::new("Sheet1".into());
+    let mut ev = FormulaEvaluator::new(&ws, "Sheet1".into(), None);
+    let result = ev.evaluate("=MIN()", 0, 0).unwrap().unwrap();
+    assert_eq!(result, Value::Number(0.0));
+}
+
+#[test]
+fn test_max_empty_args_returns_zero() {
+    let ws = Worksheet::new("Sheet1".into());
+    let mut ev = FormulaEvaluator::new(&ws, "Sheet1".into(), None);
+    let result = ev.evaluate("=MAX()", 0, 0).unwrap().unwrap();
+    assert_eq!(result, Value::Number(0.0));
+}
+
+// === 7.3 Parse-error isolation in recalculate ===
+
+#[test]
+fn test_recalculate_parse_error_isolation() {
+    let ws = Worksheet::new("Sheet1".into());
+    // Cell A1: parse-error formula (1++ is invalid syntax)
+    ws.insert_cell_formula(1, 1, "1++".to_string());
+    // Cell B1: valid formula = 2+2
+    ws.insert_cell_formula(1, 2, "2+2".to_string());
+
+    let result = ws.recalculate();
+    assert!(result.is_ok(), "recalculate should not abort on parse error");
+
+    // Valid cell should have cached value
+    let b1 = ws.get_cell_by_rc(1, 2);
+    let cached = b1.cached_value();
+    assert!(cached.is_some());
+    assert_eq!(cached.unwrap().number, Some(4.0));
+
+    // Parse-error cell should have error cached
+    let a1 = ws.get_cell_by_rc(1, 1);
+    let cached_a1 = a1.cached_value();
+    assert!(cached_a1.is_some());
+    assert_eq!(cached_a1.unwrap().value_type, "Error");
+}

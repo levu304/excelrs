@@ -424,6 +424,7 @@ impl<'ws> FormulaEvaluator<'ws> {
                 Outcome::Value(Value::Number(n)) => nums.push(*n),
                 Outcome::Value(Value::Integer(i)) => nums.push(*i as f64),
                 Outcome::Value(Value::Bool(b)) => nums.push(if *b { 1.0 } else { 0.0 }),
+                Outcome::Value(Value::Date(d)) => nums.push(d.serial),
                 Outcome::Value(Value::Text(s)) => {
                     if let Ok(n) = s.parse::<f64>() {
                         nums.push(n);
@@ -437,6 +438,7 @@ impl<'ws> FormulaEvaluator<'ws> {
                                 Value::Number(n) => nums.push(*n),
                                 Value::Integer(i) => nums.push(*i as f64),
                                 Value::Bool(b) => nums.push(if *b { 1.0 } else { 0.0 }),
+                                Value::Date(d) => nums.push(d.serial),
                                 _ => {}
                             }
                         }
@@ -454,6 +456,7 @@ impl<'ws> FormulaEvaluator<'ws> {
             Value::Number(n) => Ok(*n),
             Value::Integer(i) => Ok(*i as f64),
             Value::Bool(b) => Ok(if *b { 1.0 } else { 0.0 }),
+            Value::Date(d) => Ok(d.serial),
             Value::Text(s) => s.parse::<f64>().map_err(|_| CellError::Value),
             Value::Error(e) => Err(*e),
             _ => Err(CellError::Value),
@@ -549,7 +552,7 @@ impl<'ws> FormulaEvaluator<'ws> {
     }
     fn arith_div(l: Value, r: Value) -> Outcome {
         match (Self::as_f64(&l), Self::as_f64(&r)) {
-            (Ok(_), Ok(b)) if b == 0.0 => Outcome::Error(CellError::Div0),
+            (Ok(_), Ok(0.0)) => Outcome::Error(CellError::Div0),
             (Ok(a), Ok(b)) => Outcome::Value(Value::Number(a / b)),
             (Err(e), _) | (_, Err(e)) => Outcome::Error(e),
         }
@@ -559,7 +562,7 @@ impl<'ws> FormulaEvaluator<'ws> {
     }
     fn arith_mod(l: Value, r: Value) -> Outcome {
         match (Self::as_f64(&l), Self::as_f64(&r)) {
-            (Ok(_), Ok(b)) if b == 0.0 => Outcome::Error(CellError::Div0),
+            (Ok(_), Ok(0.0)) => Outcome::Error(CellError::Div0),
             (Ok(a), Ok(b)) => Outcome::Value(Value::Number(a % b)),
             (Err(e), _) | (_, Err(e)) => Outcome::Error(e),
         }
@@ -652,7 +655,7 @@ impl<'ws> FormulaEvaluator<'ws> {
 
     fn fn_min_max(args: Vec<Outcome>, is_min: bool) -> Outcome {
         match Self::collect_numbers(&args) {
-            Ok(nums) if nums.is_empty() => Outcome::Error(CellError::Div0),
+            Ok(nums) if nums.is_empty() => Outcome::Value(Value::Number(0.0)),
             Ok(nums) => {
                 let result = if is_min {
                     nums.iter().copied().fold(f64::INFINITY, f64::min)
@@ -761,7 +764,7 @@ impl<'ws> FormulaEvaluator<'ws> {
     }
 
     fn fn_round(args: Vec<Outcome>) -> Outcome {
-        if args.len() < 1 || args.len() > 2 {
+        if args.is_empty() || args.len() > 2 {
             return Outcome::Error(CellError::Value);
         }
         let val = match &args[0] {
@@ -888,7 +891,7 @@ impl<'ws> FormulaEvaluator<'ws> {
     }
 
     fn fn_iferror(args: Vec<Outcome>) -> Outcome {
-        if args.len() < 1 || args.len() > 2 {
+        if args.is_empty() || args.len() > 2 {
             return Outcome::Error(CellError::Value);
         }
         match &args[0] {

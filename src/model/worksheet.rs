@@ -196,7 +196,14 @@ impl Worksheet {
                     if let Some(ref formula) = cv.formula {
                         let mut evaluator =
                             FormulaEvaluator::new(self, self.name.clone(), None);
-                        let result = evaluator.evaluate(formula, cell.row(), cell.col())?;
+                        // Per-cell error isolation: a parse error in one formula caches
+                        // #VALUE! on that cell and continues, rather than aborting the
+                        // entire recalculation batch (matches Excel semantics).
+                        let result = match evaluator.evaluate(formula, cell.row(), cell.col()) {
+                            Ok(Some(scalar)) => Some(scalar),
+                            Ok(None) => None,
+                            Err(_) => Some(xlstream_core::Value::Error(xlstream_core::CellError::Value)),
+                        };
                         if let Some(scalar) = result {
                             let cached_cv = value_to_cell_value(&scalar);
                             cell.set_cached_value_raw(cached_cv);

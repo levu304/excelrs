@@ -472,10 +472,11 @@ impl Cell {
             return Some(CellValue::boolean(b));
         }
         if let Some(ref e) = cv.error_value {
-            let mut result = CellValue::default();
-            result.value_type = "Error".to_string();
-            result.error_value = Some(e.clone());
-            return Some(result);
+            return Some(CellValue {
+                value_type: "Error".to_string(),
+                error_value: Some(e.clone()),
+                ..Default::default()
+            });
         }
         if let Some(serial) = cv.date_serial {
             let result = CellValue::date(serial);
