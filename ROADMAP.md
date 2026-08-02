@@ -28,7 +28,7 @@
 | Page breaks | targeted | v1.3.0 | `rowBreaks`/`colBreaks` — targeted for v1.3.0 |
 | **Cell values & types** | | | |
 | Number, String, Bool, Error | shipped | v0.1.0 | |
-| Formula (read/write) | shipped | v0.1.0 | Stored as string formula + cached value |
+| Formula (read/write) | shipped | v0.1.0 | Stored as string formula + cached value. `cachedValue` getter + `worksheet.recalculate()` behind `formula-eval` feature (v1.4.0) |
 | Shared formula | shipped | v2.0.0 | Expanded on write; streaming read resolves member cells (#25.2, #32 closed) |
 | Array formula | n-a | — | Rare; deferred |
 | Date/DateTime | shipped | v0.13.0 | Full round-trip; Date cell values preserved as JS Date via napi bridge (was ISO-8601 string) |
@@ -68,7 +68,7 @@
 | Conditional formatting | shipped | v1.2.0 | `<conditionalFormatting>` + `dxfs`; rule types `cellIs`, `expression`, `colorScale`, `dataBar`, `iconSet`, `top10`, `unique`/`duplicate`, `containsText`, `timePeriod`, blanks/errors/nonBlanks; priority ordering |
 | Charts | planned (distant) | — | Major subsystem; chart XML is very complex |
 | Pivot tables | planned (distant) | — | Major subsystem; extremely complex |
-| Formula evaluation | n-a | — | Separate interpreter; deferred v1+ |
+| Formula evaluation | partial | v1.4.0 | Behind `formula-eval` Cargo feature: SUM/AVERAGE/MIN/MAX/COUNT/IF/etc. (20 functions). Cross-sheet refs, shared formulas supported. Not default-build (opt-in) |
 
 **Status legend:**
 

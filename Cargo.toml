@@ -24,6 +24,15 @@ zip = { version = "7", default-features = false, features = ["deflate"] }
 quick-xml = "0.36"
 futures-core = "0.3"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync"] }
+# ponytail: formula evaluation is opt-in behind `formula-eval` feature.
+# xlstream-parse provides Excel formula parsing (wraps formularizer-parse).
+# xlstream-core provides Value/CellError/ExcelDate value types.
+# formularizer-eval was yanked/unpublished from crates.io (see docs/formula-engine-research.md).
+xlstream-parse = { version = "0.4", optional = true }
+xlstream-core = { version = "0.4", optional = true }
+
+[features]
+formula-eval = ["dep:xlstream-parse", "dep:xlstream-core"]
 
 [build-dependencies]
 napi-build = "2"

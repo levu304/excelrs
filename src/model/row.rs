@@ -151,6 +151,17 @@ impl Row {
         self.cells = Arc::new(Mutex::new(cloned));
     }
 
+    /// Internal: get all cells in this row (for recalculation).
+    #[cfg(feature = "formula-eval")]
+    pub(crate) fn cells_vec(&self) -> Vec<Cell> {
+        self.cells
+            .lock()
+            .expect("Row cells lock poisoned")
+            .values()
+            .cloned()
+            .collect()
+    }
+
     /// Internal: clear the row-level style and every cell's style. Used by
     /// `Worksheet.duplicateRow` when `includeStyle` is false.
     pub fn clear_styles(&mut self) {

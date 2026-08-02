@@ -1293,7 +1293,7 @@ worksheet only — CSV is single-sheet).
 - Image read/write. (shipped v1.0.0)
 - Cell comments/notes. (shipped v1.0.0)
 - Conditional formatting.
-- Formula evaluation (integration with a Rust formula engine).
+- Formula evaluation (behind `formula-eval` Cargo feature; v1.4.0).
 - Multi-sheet copy/move.
 - Worksheet protection. (shipped v0.11.0)
 - XLSB binary format support.
@@ -1325,7 +1325,7 @@ These are capabilities that excelrs will **not** implement, now or in the future
 
 - **Graphical rendering** — excelrs is a data library, not a spreadsheet viewer. No HTML, canvas, or image rendering of cells/grids.
 - **Excel application automation** — excelrs does not control Microsoft Excel, Excel Online, or Google Sheets. It reads and writes files.
-- **Formula evaluation engine** — formula strings are preserved, not evaluated. Excel formula evaluation is a separate, massive undertaking (Excel supports 500+ functions with complex semantics). If evaluation is ever added, it will be via integration with an existing Rust formula engine, not built from scratch.
+- **Formula evaluation engine** — formula strings are preserved by default. Full Excel formula evaluation (500+ functions) is a separate, massive undertaking. opt-in evaluation for a subset of common functions (SUM, AVERAGE, IF, etc.) is available behind the `formula-eval` Cargo feature (v1.4.0), using the `xlstream-parse` parser and a custom evaluator.
 - **XLS format (BIFF)** — excelrs targets XLSX (OOXML) only. The legacy XLS binary format (BIFF) is out of scope. Use a conversion tool for XLS files.
 - **Browser/WASM target** — excelrs targets Node.js native addons via napi-rs. WebAssembly is a different build target with different constraints. Not planned.
 - **Python/Ruby/other language bindings** — excelrs is a Node.js package. The Rust core could theoretically support other bindings, but the maintainer will not build or maintain them.

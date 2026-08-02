@@ -172,6 +172,42 @@ impl Worksheet {
         ws_row.get_or_create_cell(col)
     }
 
+    /// Recalculate all formula cells in this worksheet, caching computed values.
+    ///
+    /// For cells whose value type is "Formula", the formula string is evaluated
+    /// through `FormulaEvaluator` and the result stores on the cell's `cachedValue`
+    /// fields. Cross-sheet references return `#REF!` when no workbook context available.
+    #[cfg(feature = "formula-eval")]
+    pub fn recalculate(&self) -> Result<(), crate::error::ExcelrsError> {
+        use crate::formula::{FormulaEvaluator, value_to_cell_value};
+
+        let rows_snapshot: Vec<Row> = self
+            .rows
+            .lock()
+            .expect("Worksheet rows lock poisoned")
+            .values()
+            .cloned()
+            .collect();
+
+        for row in &rows_snapshot {
+            for mut cell in row.cells_vec() {
+                let cv = cell.value_raw();
+                if cv.value_type == "Formula" {
+                    if let Some(ref formula) = cv.formula {
+                        let mut evaluator =
+                            FormulaEvaluator::new(self, self.name.clone(), None);
+                        let result = evaluator.evaluate(formula, cell.row(), cell.col())?;
+                        if let Some(scalar) = result {
+                            let cached_cv = value_to_cell_value(&scalar);
+                            cell.set_cached_value_raw(cached_cv);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     // -- get_row --
 
     /// Get row by 1-indexed row number. Creates the row if it doesn't exist.
@@ -1023,7 +1059,15 @@ impl Worksheet {
 
     /// Set a formula string on a cell at (row, col) — used by the reader.
     pub fn insert_cell_formula(&self, row: u32, col: u32, formula: String) {
-        self.with_cell_mut(row, col, |cell| cell.set_formula(Some(formula)));
+        self.with_cell_mut(row, col, |cell| {
+            cell.set_formula(Some(formula.clone()));
+            // Ensure the CellValue reflects Formula type so the evaluator,
+            // cached-value getter, and writer all detect this as a formula cell.
+            let mut cv = cell.value_raw();
+            cv.value_type = "Formula".to_string();
+            cv.formula = Some(formula);
+            cell.set_value_raw(cv);
+        });
     }
 
     /// Set the style on a cell at (row, col) — used by the reader.

@@ -400,6 +400,16 @@ fn build_shared_strings(worksheets: &[Worksheet]) -> (Vec<String>, HashMap<Strin
                             });
                         }
                     }
+                    "Formula" => {
+                        // Collect cached string result from evaluated formula cells
+                        if let Some(s) = &cv.string {
+                            string_indices.entry(s.clone()).or_insert_with(|| {
+                                let idx = string_table.len() as u32;
+                                string_table.push(s.clone());
+                                idx
+                            });
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1843,10 +1853,19 @@ fn write_cell_xml<W: Write>(
             }
         }
         "Formula" => {
-            // The value was already written as the <f> element above
-            // If there's also a cached value, write it
+            // Formula cell: <f> written above. Emit <v> for cached result if present.
             if let Some(n) = cv.number {
                 write_str(w, &format!("<v>{}</v>", n))?;
+            } else if let Some(s) = &cv.string {
+                if let Some(idx) = string_indices.get(s) {
+                    write_str(w, &format!("<v>{}</v>", idx))?;
+                }
+            } else if let Some(b) = cv.boolean {
+                let v = if b { "1" } else { "0" };
+                write_str(w, &format!("<v>{}</v>", v))?;
+            }
+            if let Some(e) = &cv.error_value {
+                write_str(w, &format!("<v>{}</v>", escape(e)))?;
             }
         }
         "RichText" => {
