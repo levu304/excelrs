@@ -450,6 +450,41 @@ impl Cell {
         self.inner.lock().expect("Cell lock poisoned").formula.clone()
     }
 
+    /// Cached computed value for formula cells.
+    ///
+    /// Returns a typed `CellValue` (number, string, boolean, or error)
+    /// when the formula has been evaluated via `Worksheet::recalculate()`,
+    /// or `null` when the cell is not a formula or hasn't been evaluated.
+    #[napi(getter, js_name = "cachedValue")]
+    pub fn cached_value(&self) -> Option<CellValue> {
+        let inner = self.inner.lock().expect("Cell lock poisoned");
+        let cv = &inner.value;
+        if cv.value_type != "Formula" {
+            return None;
+        }
+        if let Some(n) = cv.number {
+            return Some(CellValue::number(n));
+        }
+        if let Some(ref s) = cv.string {
+            return Some(CellValue::string(s));
+        }
+        if let Some(b) = cv.boolean {
+            return Some(CellValue::boolean(b));
+        }
+        if let Some(ref e) = cv.error_value {
+            return Some(CellValue {
+                value_type: "Error".to_string(),
+                error_value: Some(e.clone()),
+                ..Default::default()
+            });
+        }
+        if let Some(serial) = cv.date_serial {
+            let result = CellValue::date(serial);
+            return Some(result);
+        }
+        None
+    }
+
     // -- comment / note (v1.0.0) --
     /// Convenience getter for the comment text (ExcelJS `cell.note`).
     /// Returns `None` when the cell has no comment.
@@ -554,6 +589,21 @@ impl Cell {
     /// Internal: set the formula string (used by reader).
     pub fn set_formula(&mut self, formula: Option<String>) {
         self.inner.lock().expect("Cell lock poisoned").formula = formula;
+    }
+
+    /// Internal: store a computed formula result on the cell's `CellValue`.
+    /// Called by `Worksheet::recalculate()` after evaluating a formula.
+    /// Preserves `value_type = "Formula"` and the existing `formula` string;
+    /// only populates the cached scalar fields (`number`, `string`, etc.).
+    #[cfg(feature = "formula-eval")]
+    pub fn set_cached_value_raw(&mut self, value: CellValue) {
+        let mut inner = self.inner.lock().expect("Cell lock poisoned");
+        inner.value.number = value.number;
+        inner.value.string = value.string;
+        inner.value.boolean = value.boolean;
+        inner.value.error_value = value.error_value;
+        inner.value.date_serial = value.date_serial;
+        inner.value.rich_text = value.rich_text;
     }
 
     /// Internal: renumber this cell to a new row, updating its cached `row`

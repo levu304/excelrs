@@ -28,7 +28,7 @@
 | Page breaks | targeted | v1.3.0 | `rowBreaks`/`colBreaks` — targeted for v1.3.0 |
 | **Cell values & types** | | | |
 | Number, String, Bool, Error | shipped | v0.1.0 | |
-| Formula (read/write) | shipped | v0.1.0 | Stored as string formula + cached value |
+| Formula (read/write) | shipped | v0.1.0 | Stored as string formula + cached value. `cachedValue` getter + `worksheet.recalculate()` behind the `formula-eval` Cargo feature (unreleased) |
 | Shared formula | shipped | v2.0.0 | Expanded on write; streaming read resolves member cells (#25.2, #32 closed) |
 | Array formula | n-a | — | Rare; deferred |
 | Date/DateTime | shipped | v0.13.0 | Full round-trip; Date cell values preserved as JS Date via napi bridge (was ISO-8601 string) |
@@ -68,7 +68,7 @@
 | Conditional formatting | shipped | v1.2.0 | `<conditionalFormatting>` + `dxfs`; rule types `cellIs`, `expression`, `colorScale`, `dataBar`, `iconSet`, `top10`, `unique`/`duplicate`, `containsText`, `timePeriod`, blanks/errors/nonBlanks; priority ordering |
 | Charts | planned (distant) | — | Major subsystem; chart XML is very complex |
 | Pivot tables | planned (distant) | — | Major subsystem; extremely complex |
-| Formula evaluation | n-a | — | Separate interpreter; deferred v1+ |
+| Formula evaluation | partial | unreleased | Behind `formula-eval` Cargo feature: SUM/AVERAGE/MIN/MAX/COUNT/IF/etc. (20 functions). Cross-sheet refs, shared formulas supported. Full 500+ funcs deferred to v3+. Not default-build (opt-in) |
 
 **Status legend:**
 
@@ -126,7 +126,7 @@ The v1.0.0 drop-in compatibility milestone is complete. Post-v1 work ships as a 
 | **v1.1.0** | **Tables** | high | shipped | `ws.addTable` / `ws.getTable(s)` / `ws.removeTable`; `Table` / `TableColumn` / `TableRow` model; `xl/tables/tableN.xml` + relationship; `autoFilter` integration; header/totals rows; header styling |
 | **v1.2.0** | **Conditional formatting** | high | targeted | read/write `<conditionalFormatting>` + `dxfs`; rule types `cellIs`, `expression`/formula, `colorScale`, `dataBar`, `iconSet`, `top10`, `unique`/`duplicate`, `containsText`, `timePeriod`, blanks/errors/nonBlanks; priority ordering |
 | **v1.3.0** | **Worksheet-structure parity finish** | medium | targeted | `insertRow(s)` / `spliceRows` / `duplicateRow`; row/col `outlineLevel` (grouping); `rowBreaks` / `colBreaks` page breaks — closes the remaining "planned" v1.x parity-matrix rows |
-| **v2.0.0** | **Streaming XLSX + parity capstone** | high | shipped | streaming reader/writer architecture for large files (SAX-based); **declares the ExcelJS-4.4.0 v1.x drop-in parity program complete** (exclusions: charts, pivot tables, formula evaluation, themes-write, sheet state, tab color, default properties); streaming surface is non-breaking (new `stream` namespace only) |
+| **v2.0.0** | **Streaming XLSX + parity capstone** | high | shipped | streaming reader/writer architecture for large files (SAX-based); **declares the ExcelJS-4.4.0 v1.x drop-in parity program complete** (exclusions: charts, pivot tables, themes-write, sheet state, tab color, default properties; formula evaluation is a moat, not a parity gap — ExcelJS evaluates nothing — so the 20-function `formula-eval` subset ships opt-in, full 500+ deferred v3+); streaming surface is non-breaking (new `stream` namespace only) |
 
 **Deferred to v3+ (distant, unchanged):**
 
@@ -134,7 +134,7 @@ The v1.0.0 drop-in compatibility milestone is complete. Post-v1 work ships as a 
 | --- | --- | --- |
 | Charts | very high | Entire chart engine; chart XML is extremely verbose and version-specific |
 | Pivot tables | very high | Complex OOXML with pivotCache, pivotTable, multiple axis types |
-| Formula evaluation | very high | Spreadsheet formula interpreter; CLO=n (not a trivial project) |
+| Full formula evaluation (500+ functions) | very high | Beyond the 20-function `formula-eval` subset (shipped opt-in, unreleased); standalone interpreter is a separate product (ADR-9) |
 
 **Deferred minor-parity (not in v2.0.0; triage after the v2.0.0 capstone):** `Themes (write)`, `State (visible/hidden)`, `Tab color`, `Properties (defaultRowHeight, etc.)`. Smaller ExcelJS API gaps, explicitly out of v2.0.0 scope but tracked for post-v2.0.0 triage.
 

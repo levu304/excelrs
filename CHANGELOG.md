@@ -1,6 +1,33 @@
 # Changelog
 <!-- Release process: tag-driven from main. `git tag -a vX.Y.Z -m "..."` then push the tag. -->
 
+## [Unreleased]
+
+### Added
+
+- **`formula-eval` Cargo feature** — opt-in formula evaluation behind a feature
+  flag. Adds `xlstream-parse` + `xlstream-core` dependencies (~850KB source,
+  not included in default build). `FormulaEvaluator` walks the parsed AST,
+  resolves cell/range references through the excelrs model, applies operators
+  with sticky error propagation, and dispatches 20 built-in functions
+  (SUM, AVERAGE, MIN, MAX, COUNT, COUNTA, IF, AND, OR, NOT, ABS, ROUND,
+  CONCAT, LEFT, RIGHT, MID, LEN, IFERROR).
+
+- **`Worksheet.recalculate(&self)`** — evaluates all formula cells in a worksheet
+  and caches computed scalars on the cell's `CellValue` fields, enabling the XLSX
+  writer to emit `<f>formula</f><v>cached_value</v>` for evaluated cells.
+
+- **`Cell.cachedValue` (JS getter)** — read-only accessor returning the cached
+  computed value for formula cells (`null` if not yet evaluated, or for cells
+  from the streaming read path which keeps formula strings only).
+
+### Changed
+
+- **`Worksheet.insert_cell_formula`** — now also sets `CellValue.value_type` to
+  `"Formula"` and syncs the formula string onto the `CellValue`, so the
+  evaluator, cached-value getter, and writer all consistently detect formula
+  cells.
+
 ## [2.6.0] - 2026-08-02
 
 ### Added
