@@ -1,5 +1,7 @@
 # Research: Rust Formula Engines for excelrs
 
+> ⚠️ **STATUS UPDATE — STALE.** This research (written ~July 2026) recommends `formularizer-eval` as "the single candidate." That crate family — and its GitHub repo `psu3d0/formularizer` — have since been **yanked/removed from crates.io (404) and the repo is gone (404)**. Do *not* follow this doc's engine recommendation. The shipped outcome (commit `82b7753`, branch `feat/formula-eval-integration`) **diverges**: it uses `xlstream-parse` (wrapping the surviving `formulizer-parse` parser) + `xlstream-core` + a **handwritten** `FormulaEvaluator` (`src/formula/bridge.rs`, ~560 lines, 20 built-ins, no Arrow). See `CHANGELOG.md` (`[Unreleased]`) and `openspec` `add-cached-formula-evaluation/design.md`. The analysis of *integration shape* (resolver-injection, the data-model seam) remains accurate; only the *crate recommendation* is dead.
+
 Status: **exploratory** — not a commitment to implement. Maps the ecosystem against
 excelrs's existing architecture and ADR-9 (`docs/spec.md` §10 / Appendix A #9).
 
@@ -136,9 +138,15 @@ integration shape.
 
 The decisive open question is not "which engine" but **"when"**: evaluation is
 explicitly deferred and large (500+ functions / dep graph / dynamic arrays /
-model bridge). `formualizer-eval` de-risks the "build scratch" fear; the
+model bridge). `formularizer-eval` de-risks the "build scratch" fear; the
 remaining cost is the translator + model bridge, which ADR-9 already scoped as a
 *separate product* decision, not a v2.0.0 capstone item.
+
+> **Update (post-shipped):** `formularizer-eval` was yanked, so the "which
+> engine" question resolved itself — excelrs shipped a minimal `bridge.rs`
+> evaluator over `xlstream-parse` instead (commit `82b7753`,
+> `feat/formula-eval-integration`). This doc's engine recommendation is obsolete;
+> the integration-shape analysis above still holds.
 
 ## Integration feasibility check (excelrs side)
 

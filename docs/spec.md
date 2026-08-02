@@ -1293,7 +1293,7 @@ worksheet only — CSV is single-sheet).
 - Image read/write. (shipped v1.0.0)
 - Cell comments/notes. (shipped v1.0.0)
 - Conditional formatting.
-- Formula evaluation (behind `formula-eval` Cargo feature; v1.4.0).
+- Formula evaluation — opt-in subset (SUM/AVERAGE/IF/etc., 20 functions) ships behind the `formula-eval` Cargo feature (unreleased); full Excel evaluation (500+ functions) remains deferred to v3+ (see §10).
 - Multi-sheet copy/move.
 - Worksheet protection. (shipped v0.11.0)
 - XLSB binary format support.
@@ -1311,7 +1311,7 @@ The v1.0.0 drop-in compatibility milestone is complete (§9.2.4). Post-v1 work s
 | **v1.3.0** | **Worksheet-structure parity finish** | medium | targeted | `insertRow(s)` / `spliceRows` / `duplicateRow`; row/col `outlineLevel` (grouping); `rowBreaks` / `colBreaks` page breaks — closes the remaining "planned" v1.x parity-matrix rows |
 | **v2.0.0** | **Streaming XLSX + parity capstone** | high | targeted | streaming reader/writer architecture for large files (SAX-based); **declare the ExcelJS-4.4.0 parity program complete**; reserve v2.0.0 for any breaking API cleanup required by the above |
 
-**Deferred to v3+ (distant, unchanged):** Charts, Pivot tables, Formula evaluation — see §9.3 and the Non-Goals (§10) for rationale.
+**Deferred to v3+ (distant):** Charts, Pivot tables; full Excel formula evaluation (500+ functions, beyond the 20-function `formula-eval` subset shipped unreleased — see §10.3).
 
 **Deferred minor-parity (not in v2.0.0; triage after the v2.0.0 capstone):** `Themes (write)`, `State (visible/hidden)`, `Tab color`, `Properties (defaultRowHeight, etc.)`. Smaller ExcelJS API gaps, explicitly out of v2.0.0 scope but tracked for post-v2.0.0 triage.
 
@@ -1325,7 +1325,7 @@ These are capabilities that excelrs will **not** implement, now or in the future
 
 - **Graphical rendering** — excelrs is a data library, not a spreadsheet viewer. No HTML, canvas, or image rendering of cells/grids.
 - **Excel application automation** — excelrs does not control Microsoft Excel, Excel Online, or Google Sheets. It reads and writes files.
-- **Formula evaluation engine** — formula strings are preserved by default. Full Excel formula evaluation (500+ functions) is a separate, massive undertaking. opt-in evaluation for a subset of common functions (SUM, AVERAGE, IF, etc.) is available behind the `formula-eval` Cargo feature (v1.4.0), using the `xlstream-parse` parser and a custom evaluator.
+- **Formula evaluation engine** — formula strings are preserved by default. Full Excel formula evaluation (500+ functions) is a separate, massive undertaking. opt-in evaluation for a subset of common functions (SUM, AVERAGE, IF, etc.) is available behind the `formula-eval` Cargo feature (unreleased; ~20 functions), using the `xlstream-parse` parser and a handwritten evaluator (`src/formula/bridge.rs`).
 - **XLS format (BIFF)** — excelrs targets XLSX (OOXML) only. The legacy XLS binary format (BIFF) is out of scope. Use a conversion tool for XLS files.
 - **Browser/WASM target** — excelrs targets Node.js native addons via napi-rs. WebAssembly is a different build target with different constraints. Not planned.
 - **Python/Ruby/other language bindings** — excelrs is a Node.js package. The Rust core could theoretically support other bindings, but the maintainer will not build or maintain them.
