@@ -1,6 +1,17 @@
 # Changelog
 <!-- Release process: tag-driven from main. `git tag -a vX.Y.Z -m "..."` then push the tag. -->
 
+## [2.8.0] - 2026-08-02
+
+### Added
+
+- **`linux-arm64-gnu` prebuilt native binary** — release build matrix gains an
+  `aarch64-unknown-linux-gnu` entry on `ubuntu-22.04-arm`, producing
+  `excelrs.linux-arm64-gnu.node`. npm resolves
+  `@levu304/exceljs-linux-arm64-gnu` via `optionalDependencies` on arm64 Linux
+  hosts (AWS Graviton, Apple Silicon in arm64 containers, Raspberry Pi 4/5),
+  fixing `Cannot find native binding` on those platforms.
+
 ## [2.7.0] - 2026-08-02
 
 ### Added
