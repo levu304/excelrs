@@ -147,7 +147,8 @@ styling for Font, Fill, Border, Alignment, and number formats (write only).
 - Cell-level interior mutability shipped in v0.4.0 — `ws.getCell('A1').style = {...}` and `ws.getCell('A1').value = x` now persist into the worksheet automatically (via `Arc<Mutex<CellInner>>`)
 - Alignment emission shipped in v0.3.0 (accepted in `Style` JS object, emitted on write).
 - CSV via `wb.csv` — single-sheet only on write (CSV cannot represent multiple worksheets); numbers are inferred on read, all other CSV values are strings; no formula evaluation (cached value is emitted when available)
-- No formula evaluation, no XLS / XLSB (merged cells, data validation, freeze panes, CSV, headers/footers, page setup, comments, images: shipped).
+- **Formula evaluation** available via the `formula-eval` Cargo feature (built into release binaries since v2.7.0). Provides `FormulaEvaluator` with 20 built-in functions (SUM, AVERAGE, MIN, MAX, etc.), Excel-spec error propagation, and `Worksheet::recalculate()` (Rust-only for now — JS exposure deferred). `Cell.cachedValue` JS getter returns cached computed values from formula cells.
+- **No XLS / XLSB** support (merged cells, data validation, freeze panes, CSV, headers/footers, page setup, comments, images: shipped).
 - Theme color references are **preserved on write** (v0.13.0): `<color theme="N"/>` (+`tint`) is emitted instead of a flattened ARGB; the public `color` value remains the resolved ARGB string
 - Date cell values are **preserved as JS `Date`** (v0.13.0): `Cell.value` returns `Date | CellValue` from Date cells; the setter accepts a JS `Date`, storing it as the Excel serial number and injecting an appropriate date `numFmt` (if none is set) so the value survives read→write round-trip as a true Date
 

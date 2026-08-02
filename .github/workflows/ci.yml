@@ -54,8 +54,14 @@ jobs:
       - name: Lint types (Biome)
         run: pnpm lint:js
 
+      - name: Run Rust clippy (formula-eval)
+        run: cargo clippy --features formula-eval -- -D warnings
+
       - name: Run Rust tests
         run: cargo test
+
+      - name: Run Rust tests (formula-eval)
+        run: cargo test --features formula-eval
 
       - name: Run JS tests
         run: pnpm test

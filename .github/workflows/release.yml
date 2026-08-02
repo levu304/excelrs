@@ -55,10 +55,18 @@ jobs:
         run: pnpm typecheck
 
       - name: Build native addon
-        run: npx napi build --platform --release --js native.js
+        run: >-
+          npx napi build --platform --release --features formula-eval
+          --js native.js
+
+      - name: Run Rust clippy (formula-eval)
+        run: cargo clippy --features formula-eval -- -D warnings
 
       - name: Run Rust tests
         run: cargo test
+
+      - name: Run Rust tests (formula-eval)
+        run: cargo test --features formula-eval
 
       - name: Run JS tests
         run: pnpm test

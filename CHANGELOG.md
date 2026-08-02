@@ -1,13 +1,14 @@
 # Changelog
 <!-- Release process: tag-driven from main. `git tag -a vX.Y.Z -m "..."` then push the tag. -->
 
-## [Unreleased]
+## [2.7.0] - 2026-08-02
 
 ### Added
 
 - **`formula-eval` Cargo feature** — opt-in formula evaluation behind a feature
   flag. Adds `xlstream-parse` + `xlstream-core` dependencies (~850KB source,
-  not included in default build). `FormulaEvaluator` walks the parsed AST,
+  not included in default build; **now built into release binaries** so npm
+  packages include formula evaluation). `FormulaEvaluator` walks the parsed AST,
   resolves cell/range references through the excelrs model, applies operators
   with sticky error propagation, and dispatches 20 built-in functions
   (SUM, AVERAGE, MIN, MAX, COUNT, COUNTA, IF, AND, OR, NOT, ABS, ROUND,
@@ -27,6 +28,18 @@
   `"Formula"` and syncs the formula string onto the `CellValue`, so the
   evaluator, cached-value getter, and writer all consistently detect formula
   cells.
+- Formula-eval correctness: `recalculate()` caches `#VALUE!` on parse errors
+  per-cell instead of aborting the batch (Excel error isolation); `fn_min_max`
+  returns `0` for empty args (matches Excel; `fn_average` still returns
+  `#DIV/0!`); `collect_numbers` and `as_f64` handle `Value::Date(d)` in both
+  scalar and array arms; `cached_value()` uses `..Default::default()` (fixes
+  `field_reassign_with_default`); `arith_div`/`arith_mod` replace redundant
+  guards with pattern matches (fixes `redundant_guards`); `fn_round`/
+  `fn_iferror` use `args.is_empty()` (fixes `len_zero`); `write_cell_xml`
+  uses `else if` for `error_value`.
+- Release build compiles with `--features formula-eval` (prebuilt npm binaries
+  include formula evaluation); CI now runs `cargo clippy --features
+  formula-eval -- -D warnings` and `cargo test --features formula-eval`.
 
 ## [2.6.0] - 2026-08-02
 
