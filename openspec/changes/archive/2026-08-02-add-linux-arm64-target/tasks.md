@@ -18,7 +18,7 @@
 
 ## 5. npm trusted publisher
 
-- [ ] 5.1 Add a GitHub-trusted-publisher entry on npmjs.com for `@levu304/excelrs-linux-arm64-gnu` (workflow: `release.yml`, owner/repo: `levu304/excelrs`, publish access) — *external registry step, not a repo edit.*
+- [x] 5.1 Add a GitHub-trusted-publisher entry on npmjs.com for `@levu304/excelrs-linux-arm64-gnu` (workflow: `release.yml`, owner/repo: `levu304/excelrs`, publish access) — *external registry step, not a repo edit.*
 
 ## 6. Smoke + regression
 
