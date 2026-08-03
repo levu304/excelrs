@@ -284,7 +284,29 @@ impl Cell {
                 Ok(d.to_unknown())
             }
             "Null" => Ok(env.to_js_value(&serde_json::Value::Null)?),
-            _ => Ok(env.to_js_value(cv)?), // Formula, RichText, Hyperlink, Error, Merge
+            "Formula" => {
+                // Formula cells carry an optional cached scalar (Excel-authored
+                // `<f>..</f><v>..</v>` or JS-authored `cell.value = { formula, number, .. }`).
+                // Return the cached scalar so it round-trips as a bare value; null
+                // when no cache is present (formula authored without a result).
+                if let Some(n) = cv.number {
+                    Ok(env.to_js_value(&n)?)
+                } else if let Some(ref s) = cv.string {
+                    Ok(env.to_js_value(s)?)
+                } else if let Some(b) = cv.boolean {
+                    Ok(env.to_js_value(&b)?)
+                } else if let Some(ref e) = &cv.error_value {
+                    Ok(env.to_js_value(e)?)
+                } else if let Some(serial) = cv.date_serial {
+                    let ms = serial_to_millis(serial) as f64;
+                    let d = env.create_date(ms)?;
+                    let d: napi::JsDate<'static> = unsafe { std::mem::transmute(d) };
+                    Ok(d.to_unknown())
+                } else {
+                    Ok(env.to_js_value(&serde_json::Value::Null)?)
+                }
+            }
+            _ => Ok(env.to_js_value(cv)?), // RichText, Hyperlink, Error, Merge
         }
     }
 
@@ -389,7 +411,13 @@ impl Cell {
                     let text = obj.get("hyperlinkText").and_then(|v| v.as_str()).map(|s| s.to_string());
                     CellValue::hyperlink(url.to_string(), text)
                 } else if let Some(f) = obj.get("formula").and_then(|v| v.as_str()) {
-                    CellValue::formula(f.to_string())
+                    let mut cv = CellValue::formula(f.to_string());
+                    cv.number = obj.get("number").and_then(|v| v.as_f64());
+                    cv.string = obj.get("string").and_then(|v| v.as_str()).map(str::to_string);
+                    cv.boolean = obj.get("boolean").and_then(|v| v.as_bool());
+                    cv.error_value = obj.get("errorValue").and_then(|v| v.as_str()).map(str::to_string);
+                    cv.date_serial = obj.get("dateSerial").and_then(|v| v.as_f64());
+                    cv
                 } else if let Some(vt) = obj.get("valueType").and_then(|v| v.as_str()) {
                     if CellType::from_tag(vt).is_none() {
                         return Err(napi::Error::from_reason(format!("Unknown valueType discriminant: '{vt}'. Expected one of: Number, String, Boolean, Formula, Error, Hyperlink, RichText, Date, Null, Merge")));
@@ -910,5 +938,29 @@ mod tests {
                 "round-trip via {expected:?} failed"
             );
         }
+    }
+
+    #[test]
+    fn test_cached_value_getter_r4() {
+        // R4: cachedValue is null for non-Formula-typed cells.
+        let mut cell = Cell::new("A1".into(), 1, 1);
+        cell.set_value_raw(CellValue::number(42.0));
+        assert_eq!(cell.value_raw().value_type, "Number");
+        assert!(cell.cached_value().is_none());
+
+        // Formula cell with a cached scalar returns it (unchanged behavior).
+        let mut cell = Cell::new("B1".into(), 1, 2);
+        let mut cv = CellValue::formula("A1+B1");
+        cv.number = Some(3.0);
+        cell.set_value_raw(cv);
+        assert_eq!(cell.value_raw().value_type, "Formula");
+        let cached = cell.cached_value().expect("should have cached value");
+        assert_eq!(cached.value_type, "Number");
+        assert_eq!(cached.number, Some(3.0));
+
+        // Formula cell without a cached scalar returns None.
+        let mut cell = Cell::new("C1".into(), 1, 3);
+        cell.set_value_raw(CellValue::formula("SUM(A1:B1)"));
+        assert!(cell.cached_value().is_none());
     }
 }

@@ -28,7 +28,7 @@
 | Page breaks | targeted | v1.3.0 | `rowBreaks`/`colBreaks` — targeted for v1.3.0 |
 | **Cell values & types** | | | |
 | Number, String, Bool, Error | shipped | v0.1.0 | |
-| Formula (read/write) | shipped | v0.1.0 | Stored as string formula + cached value. `cachedValue` getter + `worksheet.recalculate()` behind the `formula-eval` Cargo feature (unreleased) |
+| Formula (read/write) | shipped | v0.1.0 | Stored as string formula + cached value. `cachedValue` getter + `worksheet.recalculate()` behind the `formula-eval` Cargo feature (unreleased). Authorable cached scalars via `cell.value = { formula, number|string|boolean|errorValue|dateSerial }` → `<f>..</f><v>..</v>` round-trip; `cell.value` returns the cached scalar, `cell.formula` returns the formula text. |
 | Shared formula | shipped | v2.0.0 | Expanded on write; streaming read resolves member cells (#25.2, #32 closed) |
 | Array formula | n-a | — | Rare; deferred |
 | Date/DateTime | shipped | v0.13.0 | Full round-trip; Date cell values preserved as JS Date via napi bridge (was ISO-8601 string) |

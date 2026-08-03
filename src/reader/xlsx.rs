@@ -2249,7 +2249,9 @@ fn map_data(data: &Data) -> CellValue {
         Data::DateTimeIso(s) => CellValue::string(s.clone()),
         Data::DurationIso(s) => CellValue::string(s.clone()),
         Data::Error(e) => {
-            let msg = format!("{:?}", e);
+            // CellErrorType implements Display as "#DIV/0!" etc.; use Display
+            // (not Debug, which yields the enum variant name "Div0").
+            let msg = format!("{}", e);
             CellValue {
                 value_type: "Error".into(),
                 error_value: Some(msg),
