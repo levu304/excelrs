@@ -64,9 +64,11 @@ jobs:
 
       - name: Add Rust target for musl
         if: ${{ matrix.musl }}
-        # --force re-downloads a complete rust-std (bundled self-contained
-        # Scrt1.o). Stale cache omits it -> "does not support cdylib".
-        run: rustup target add --force ${{ matrix.target }}
+        # remove+add forces a complete ruststd (bundled self-contained Scrt1.o);
+        # stale setup-rust cache omits it -> "does not support cdylib".
+        run: |
+          rustup target remove ${{ matrix.target }} 2>/dev/null || true
+          rustup target add ${{ matrix.target }}
 
       - name: Install Node.js 22.14.0
         uses: >-
