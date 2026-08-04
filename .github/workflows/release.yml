@@ -59,10 +59,9 @@ jobs:
           cache: true
           cache-key: cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Install musl toolchain
+      - name: Add Rust target for musl
         if: ${{ matrix.musl }}
         run: |
-          sudo apt-get install -y musl-tools
           rustup target add ${{ matrix.target }}
 
       - name: Install Node.js 22.14.0

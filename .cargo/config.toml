@@ -1,9 +1,14 @@
 # Static musl toolchain for linux-*musl targets.
 # Cargo only honors [target.*] when that target is selected, so native
-# gnu/darwin/windows builds are unaffected. `musl-gcc` comes from the host's
-# `musl-tools` package (Ubuntu apt); add via: rustup target add <triple>.
+# gnu/darwin/windows builds are unaffected.
+# Self-contained linking bundles rust-lld + the musl target's static
+# libc.a/libgcc.a (shipped via `rustup target add <triple>`), so NO
+# external C toolchain (musl-tools/musl-gcc) is needed and the produced
+# cdylib is fully static / portable across glibc/musl hosts.
+# Why not musl-gcc: the gnu gcc runtime (-lgcc_s / libgcc_s.so.1) it pulls
+# is absent on the ubuntu musl-tools setup -> linker failure.
 [target.x86_64-unknown-linux-musl]
-linker = "musl-gcc"
+rustflags = ["-C", "link-self-contained=+linker"]
 
 [target.aarch64-unknown-linux-musl]
-linker = "musl-gcc"
+rustflags = ["-C", "link-self-contained=+linker"]
