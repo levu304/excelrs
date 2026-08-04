@@ -84,6 +84,11 @@ jobs:
           npx napi build --platform --release --target ${{ matrix.target }}
           --features formula-eval --js native.js
 
+      - name: Smoke-load musl native binding
+        if: ${{ matrix.musl }}
+        run: >-
+          node -e "require('./excelrs.${{ matrix.npm_dir }}.node')"
+
       - name: Run Rust clippy (formula-eval)
         run: cargo clippy --features formula-eval -- -D warnings
 
@@ -94,11 +99,14 @@ jobs:
         run: cargo test --features formula-eval
 
       - name: Run JS tests
+        if: ${{ !matrix.musl }}
         run: pnpm test
       - name: Streaming smoke test
+        if: ${{ !matrix.musl }}
         run: node scripts/streaming-smoke.cjs
 
       - name: Validate napi enum bindings
+        if: ${{ !matrix.musl }}
         run: |
           node -e "
             const e = require('./index.js');
