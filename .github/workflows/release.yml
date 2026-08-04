@@ -84,6 +84,17 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      - name: Diag arm64-musl config + flags
+        if: ${{ matrix.target == 'aarch64-unknown-linux-musl' }}
+        run: |
+          echo "=== config ==="; cat .cargo/config.toml
+          TRIPLE=aarch64-unknown-linux-musl
+          SI="$(rustc --print sysroot)/lib/rustlib/$TRIPLE/lib/self-contained"
+          echo "=== self-cont. ($SI) ==="; ls "$SI" 2>&1 | tr '\n' ' '; echo
+          cargo clean -p excelrs-core 2>/dev/null || true
+          cargo build --target $TRIPLE --release -vv 2>&1 |
+            grep -E 'Running|linking|cannot|error|Finished|lgcc|musl|rust-lld' |
+            tail -20
       - name: Build native addon
         env:
           # musl-gcc ships arm64-musl crt (scrt1.o/libc.a) rust-std lacks.
