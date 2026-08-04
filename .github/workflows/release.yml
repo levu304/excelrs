@@ -91,14 +91,24 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Diag musl cargo -vv link flags
+      - name: Diag musl rustc invocation
         if: ${{ matrix.musl }}
         run: |
           echo "CWD=$(pwd)"
           echo "config=$(test -f .cargo/config.toml && echo yes || echo no)"
-          cargo build --target ${{ matrix.target }} --release -vv 2>&1 \
-            | grep -E 'link-self-contained|rust-lld|not found|error:|Finished' \
-            | tail -12
+          cargo clean -p excelrs-core 2>/dev/null || true
+          t=${{ matrix.target }}
+          cargo build --target "$t" --release -vv 2>&1 \
+            | tee /tmp/diag.log
+          echo "=== rustc Running lines ==="
+          grep 'Running.*rustc' /tmp/diag.log | tail -3
+          echo "=== link-self-contained present? ==="
+          grep -c 'link-self-contained' /tmp/diag.log
+          echo "=== rust-lld invoked? ==="
+          grep -c 'rust-lld' /tmp/diag.log
+          echo "=== errors ==="
+          grep -E 'not found|error:|cannot|undefined' /tmp/diag.log \
+            | head -3
       - name: Build native addon
         run: >-
           npx napi build --platform --release --target ${{ matrix.target }}
