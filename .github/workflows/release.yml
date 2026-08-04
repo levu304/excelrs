@@ -64,7 +64,13 @@ jobs:
 
       - name: Add Rust target for musl
         if: ${{ matrix.musl }}
-        run: rustup target add ${{ matrix.target }}
+        run: |
+          rustup target remove ${{ matrix.target }} 2>/dev/null || true
+          rustup target add ${{ matrix.target }}
+          SI="$(rustc --print sysroot)/lib/rustlib/${{ matrix.target }}/lib"
+          SC="$SI/self-contained"
+          echo "self_contained dir: $SC"
+          ls "$SC" 2>/dev/null | head -8 || echo ">>> ABSENT <<<"
 
       - name: Install Node.js 22.14.0
         uses: >-
