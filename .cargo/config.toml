@@ -8,7 +8,7 @@
 # Why not musl-gcc: the gnu gcc runtime (-lgcc_s / libgcc_s.so.1) it pulls
 # is absent on the ubuntu musl-tools setup -> linker failure.
 [target.x86_64-unknown-linux-musl]
-rustflags = ["-C", "link-self-contained=+linker"]
+rustflags = ["-C", "link-self-contained=-linker"]
 
 [target.aarch64-unknown-linux-musl]
-rustflags = ["-C", "link-self-contained=+linker"]
+rustflags = ["-C", "link-self-contained=-linker"]

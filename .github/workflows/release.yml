@@ -90,7 +90,7 @@ jobs:
         if: ${{ matrix.musl }}
         run: |
           ldd excelrs.${{ matrix.npm_dir }}.node || true
-          node -e "require('./excelrs.${{ matrix.npm_dir }}.node")
+          node -e "require('./excelrs.${{ matrix.npm_dir }}.node')"
 
       - name: Run Rust clippy (formula-eval)
         run: cargo clippy --features formula-eval -- -D warnings
