@@ -213,3 +213,71 @@ test('Date primitive still works (no regression)', async () => {
 
   expect(cell.type).toBe('Date')
 })
+
+test('C1: exceljs-authored shared-strings rich text read by excelrs', async () => {
+  const ExcelJS = await import('exceljs')
+  const wbjs = new ExcelJS.default.Workbook()
+  const ws = wbjs.addWorksheet('S')
+  // ExcelJS writes rich text as shared strings (<si><r><rPr>…)
+  ws.getCell('A1').value = {
+    richText: [
+      { text: 'Hello ', font: { name: 'Arial', size: 12, bold: true, color: { argb: 'FFFF0000' } } },
+      { text: 'World', font: { name: 'Times New Roman', size: 10, italic: true } },
+    ],
+  }
+
+  const raw = await wbjs.xlsx.writeBuffer()
+  const buf = raw instanceof Buffer ? raw : Buffer.from(raw as never)
+
+  const wb = new Workbook()
+  await wb.xlsx.read(buf)
+  const cell = wb.getWorksheet('S')!.getCell('A1')
+
+  expect(cell.type).toBe('RichText')
+  expect(cell.richText).toBeDefined()
+  expect(cell.richText!.length).toBe(2)
+  // Run 0: Arial 12 bold red
+  expect(cell.richText![0].text).toBe('Hello ')
+  const f0 = cell.richText![0].font!
+  expect(f0.name).toBe('Arial')
+  expect(f0.size).toBeCloseTo(12)
+  expect(f0.bold).toBe(true)
+  expect(f0.color).toBe('FFFF0000')
+  // Run 1: Times New Roman 10 italic
+  expect(cell.richText![1].text).toBe('World')
+  const f1 = cell.richText![1].font!
+  expect(f1.name).toBe('Times New Roman')
+  expect(f1.size).toBeCloseTo(10)
+  expect(f1.italic).toBe(true)
+})
+
+test('C2: exceljs round-trip then read by excelrs preserves rich text', async () => {
+  const ExcelJS = await import('exceljs')
+
+  // Write with exceljs
+  const wbjs = new ExcelJS.default.Workbook()
+  const wsjs = wbjs.addWorksheet('S')
+  wsjs.getCell('A1').value = {
+    richText: [{ text: 'Bold', font: { name: 'Arial', size: 14, bold: true } }],
+  }
+  const raw1 = await wbjs.xlsx.writeBuffer()
+  const buf1 = raw1 instanceof Buffer ? raw1 : Buffer.from(raw1 as never)
+
+  // Re-read into exceljs, then re-write (exceljs round-trip)
+  const wbjs2 = new ExcelJS.default.Workbook()
+  await wbjs2.xlsx.load(buf1 as never)
+  const raw2 = await wbjs2.xlsx.writeBuffer()
+  const buf2 = raw2 instanceof Buffer ? raw2 : Buffer.from(raw2 as never)
+
+  // Read with excelrs
+  const wb = new Workbook()
+  await wb.xlsx.read(buf2)
+  const cell = wb.getWorksheet('S')!.getCell('A1')
+
+  expect(cell.type).toBe('RichText')
+  expect(cell.richText!.length).toBe(1)
+  expect(cell.richText![0].text).toBe('Bold')
+  expect(cell.richText![0].font!.name).toBe('Arial')
+  expect(cell.richText![0].font!.size).toBeCloseTo(14)
+  expect(cell.richText![0].font!.bold).toBe(true)
+})

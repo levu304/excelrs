@@ -20,6 +20,16 @@ When reading an `.xlsx`, the reader SHALL parse rich-text cell values (inline `<
 - **WHEN** a cell holds a plain string value
 - **THEN** `cell.value.value_type === "String"` and `rich_text` is `undefined`/`null`
 
+#### Scenario: Read rich text from shared strings (Excel/ExcelJS output)
+
+- **WHEN** a workbook stores rich-text runs as shared strings (`<si><r><rPr><rFont/></rPr><t></t></r></si>` in `xl/sharedStrings.xml`) referenced by `<c t="s"><v>idx</v></c>` cells
+- **THEN** the reader SHALL resolve the shared-string index, find the rich-text runs, and return `cell.value.type === "RichText"` with `cell.richText` containing the runs and per-run fonts (name, size, bold, italic, underline, color) preserved
+
+#### Scenario: Read rich text preserves font from shared strings
+
+- **WHEN** a shared-strings rich-text cell has runs with distinct fonts (e.g., run 1: name=Arial size=12 bold; run 2: name=Times New Roman size=10 color=FF0000FF)
+- **THEN** `cell.richText[0].font.name === "Arial"`, `cell.richText[0].font.size ≈ 12`, `cell.richText[0].font.bold === true`, `cell.richText[1].font.color === "FF0000FF"`
+
 ### Requirement: Cell.richText accessor returns runs without a cast
 
 The `Cell.richText` getter (`#[napi(getter)]`) SHALL return `RichTextRun[] | null` — the
