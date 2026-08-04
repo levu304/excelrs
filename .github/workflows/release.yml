@@ -91,6 +91,14 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      - name: Diag musl cargo -vv link flags
+        if: ${{ matrix.musl }}
+        run: |
+          echo "CWD=$(pwd)"
+          echo "config=$(test -f .cargo/config.toml && echo yes || echo no)"
+          cargo build --target ${{ matrix.target }} --release -vv 2>&1 \
+            | grep -E 'link-self-contained|rust-lld|not found|error:|Finished' \
+            | tail -12
       - name: Build native addon
         run: >-
           npx napi build --platform --release --target ${{ matrix.target }}
