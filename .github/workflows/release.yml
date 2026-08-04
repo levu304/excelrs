@@ -63,9 +63,10 @@ jobs:
         if: ${{ matrix.musl }}
         run: |
           rustup target add ${{ matrix.target }}
-          dir="$(rustc --print target-libdir ${{ matrix.target }})"
-          echo "musl target-libdir: $dir"
-          ls "$dir" | grep -E 'libc.a|libgcc.a|crt1.o' || echo "MISSING libs"
+          sys="$(rustc --print sysroot)"
+          ls "$sys/lib/rustlib/${{ matrix.target }}/lib" \
+            | grep -E 'libc.a|libgcc.a|crt1.o' \
+            || echo "MISSING static musl libs"
 
       - name: Install Node.js 22.14.0
         uses: >-
