@@ -85,9 +85,21 @@ jobs:
         run: pnpm typecheck
 
       - name: Build native addon
-        run: >-
-          npx napi build --platform --release --target ${{ matrix.target }}
-          --features formula-eval --js native.js
+        env:
+          # musl-gcc ships arm64-musl crt (scrt1.o/libc.a) rust-std lacks.
+          # Only used by the arm64-musl target.
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+        run: |
+          # emnapi appends -crt-static for *musl. Per-target CARGO_TARGET_<t>_
+          # RUSTFLAGS env (below) beats the RUSTFLAGS env + config; only for the
+          # matching triple. arm64-musl: link-self-contained=no + static libgcc
+          # -> static dlopen-safe .so. x64-musl green via rust-lld.
+          rf="-C link-self-contained=no"
+          rf="$rf -C link-arg=-static-libgcc"
+          rf="$rf -C link-arg=-s"
+          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="$rf"
+          npx napi build --platform --release --target ${{ matrix.target }} \
+            --features formula-eval --js native.js
 
       - name: Smoke-load musl native binding (assert static + dlopen)
         if: ${{ matrix.musl }}

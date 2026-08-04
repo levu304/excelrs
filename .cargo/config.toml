@@ -1,27 +1,17 @@
-# linux-*musl native addon linking.
-# Cargo [target.<triple>.rustflags] takes precedence over the inherited
-# RUSTFLAGS env (so emnapi's -D warnings / -crt-static do not strip it),
-# and applies only when <triple> is the active build target — native
-# gnu/darwin/windows builds are unaffected.
-#
-# x86_64-unknown-linux-musl: rust-std's self-contained runtime ships the
-#   complete crt (Scrt1.o, libc.a); rust-lld links a static, dlopen-safe
-#   cdylib. `-linker` is a no-op on *musl (the granular flag is gnu-only),
-#   it only forces config precedence so emnapi's RUSTFLAGS env is ignored.
-#
-# aarch64-unknown-linux-musl: rust-std's self-contained runtime LACKS the
-#   shared cdylib entry object (Scrt1.o), so rust-lld cannot emit the
-#   cdylib and rustc falls back to the spec linker `aarch64-linux-musl-gcc`.
-#   Hand linking to musl-tools' `musl-gcc`, which ships a complete crt +
-#   static libc.a; `-static-libgcc` bakes libgcc (no libgcc_s.so.1 dep)
-#   and `-s` strips the final artifact.
+# linux-*musl native addon linking config. [target.<triple>.*] applies only
+# when <triple> is the active build target — gnu/darwin/windows are clear.
+# Per-target [rustflags] has higher cargo precedence than the inherited
+# RUSTFLAGS env, so emnapi's -D warnings / -crt-static (appended for *musl)
+# do not strip it here.
+# x86_64-unknown-linux-musl: rust-std ships a complete self-contained runtime
+#   (Scrt1.o, libc.a); rust-lld links a static, dlopen-safe cdylib. `-linker`
+#   is a no-op on *musl (gnu-only granular flag) but keeps config non-empty
+#   so the RUSTFLAGS env is ignored and emnapi's -crt-static is blocked.
+# aarch64-unknown-linux-musl is linked in release.yml via
+#   CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_* env instead of [target] config:
+#   rust-std's arm64 self-contained runtime lacks the cdylib entry object
+#   (Scrt1.o). musl-tools' musl-gcc ships a complete crt + static libc.a;
+#   -link-self-contained=no uses it (with libgcc baked static) instead of the
+#   incomplete rust-lld runtime.
 [target.x86_64-unknown-linux-musl]
 rustflags = ["-C", "link-self-contained=-linker"]
-
-[target.aarch64-unknown-linux-musl]
-linker = "musl-gcc"
-rustflags = [
-  "-C", "link-self-contained=no",
-  "-C", "link-arg=-static-libgcc",
-  "-C", "link-arg=-s",
-]
