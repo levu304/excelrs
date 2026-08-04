@@ -400,16 +400,6 @@ fn build_shared_strings(worksheets: &[Worksheet]) -> (Vec<String>, HashMap<Strin
                             });
                         }
                     }
-                    "Formula" => {
-                        // Collect cached string result from evaluated formula cells
-                        if let Some(s) = &cv.string {
-                            string_indices.entry(s.clone()).or_insert_with(|| {
-                                let idx = string_table.len() as u32;
-                                string_table.push(s.clone());
-                                idx
-                            });
-                        }
-                    }
                     _ => {}
                 }
             }
@@ -1813,7 +1803,24 @@ fn write_cell_xml<W: Write>(
         "Error" => Some("t=\"e\""),
         "RichText" => Some("t=\"inlineStr\""),
         "Hyperlink" => Some("t=\"s\""),
-        _ => None, // Number, Null, Formula (no type attr)
+        "Formula" => {
+            // Formula string results carry their own cell type so calamine
+            // re-types the cached <v> correctly on read-back (mirrors Excel:
+            // boolean→t="b", error→t="e", string-result→t="str").
+            // Priority must match the value-writing arm below
+            // (number → string → boolean → error_value → date_serial).
+            // number and date_serial produce no t attribute (fall through to None).
+            if cv.string.is_some() {
+                Some("t=\"str\"")
+            } else if cv.boolean.is_some() {
+                Some("t=\"b\"")
+            } else if cv.error_value.is_some() {
+                Some("t=\"e\"")
+            } else {
+                None // number, date_serial, or no cached result
+            }
+        }
+        _ => None, // Number, Null, RichText, Date, Merge
     };
 
     if let Some(attr) = cell_type_attr {
@@ -1857,14 +1864,15 @@ fn write_cell_xml<W: Write>(
             if let Some(n) = cv.number {
                 write_str(w, &format!("<v>{}</v>", n))?;
             } else if let Some(s) = &cv.string {
-                if let Some(idx) = string_indices.get(s) {
-                    write_str(w, &format!("<v>{}</v>", idx))?;
-                }
+                // Formula string results use t="str" (inline, not shared strings).
+                write_str(w, &format!("<v>{}</v>", escape(s)))?;
             } else if let Some(b) = cv.boolean {
                 let v = if b { "1" } else { "0" };
                 write_str(w, &format!("<v>{}</v>", v))?;
             } else if let Some(e) = &cv.error_value {
                 write_str(w, &format!("<v>{}</v>", escape(e)))?;
+            } else if let Some(serial) = cv.date_serial {
+                write_str(w, &format!("<v>{}</v>", serial))?;
             }
         }
         "RichText" => {

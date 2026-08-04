@@ -30,7 +30,7 @@ const CELLVALUE_UNION_TYPE = `export type CellValue =
   | { valueType: "String"; string: string }
   | { valueType: "Boolean"; boolean: boolean }
   | { valueType: "Date"; dateSerial: number }
-  | { valueType: "Formula"; formula: string }
+  | { valueType: "Formula"; formula: string; number?: number; string?: string; boolean?: boolean; errorValue?: string; dateSerial?: number }
   | { valueType: "Error"; errorValue: string }
   | { valueType: "Hyperlink"; hyperlink: string; hyperlinkText?: string }
   | { valueType: "RichText"; richText: Array<RichTextRun> }
@@ -46,7 +46,7 @@ const CELLVALUE_INPUT_TYPE = `export type CellValueInput =
   | { valueType?: "String"; string: string }
   | { valueType?: "Boolean"; boolean: boolean }
   | { valueType?: "Date"; dateSerial: number }
-  | { valueType?: "Formula"; formula: string }
+  | { valueType?: "Formula"; formula: string; number?: number; string?: string; boolean?: boolean; errorValue?: string; dateSerial?: number }
   | { valueType?: "Error"; errorValue: string }
   | { valueType?: "Hyperlink"; hyperlink: string; hyperlinkText?: string }
   | { valueType?: "RichText"; richText: Array<RichTextRun> }

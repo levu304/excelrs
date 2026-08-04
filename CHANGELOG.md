@@ -1,6 +1,12 @@
 # Changelog
 <!-- Release process: tag-driven from main. `git tag -a vX.Y.Z -m "..."` then push the tag. -->
 
+## [Unreleased]
+
+### Added
+
+- **Authorable cached formula results (round-trip)** — Cell.value = { formula, number | string | boolean | errorValue | dateSerial } now stores the cached scalar alongside the formula string; the writer emits <f>..</f><v>..</v> with the matching t attribute; the reader surfaces cell.value as the cached scalar and cell.formula as the formula text. Closes the authoring gap in #54 (ExcelJS-authored caches already read back). Fixes #55 (TS Cell.cachedValue declaration was missing).
+
 ## [2.8.0] - 2026-08-02
 
 ### Added

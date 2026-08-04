@@ -25,6 +25,13 @@ export declare class Cell {
   get col(): number
   get formula(): string | null
   /**
+   * Cached computed value Excel embedded alongside a formula `<f>…</f><v>…</v>`
+   * (read-only). Returns a scalar `CellValue` (number, string, boolean, error,
+   * or date serial) for an evaluated/cached formula cell, or `null` when the
+   * cell is not a formula or has no cached value. Resolves issue #55.
+   */
+  get cachedValue(): CellValue | null
+  /**
    * Convenience getter for the comment text (ExcelJS `cell.note`).
    * Returns `None` when the cell has no comment.
    */
@@ -748,7 +755,7 @@ export type CellValue =
   | { valueType: "String"; string: string }
   | { valueType: "Boolean"; boolean: boolean }
   | { valueType: "Date"; dateSerial: number }
-  | { valueType: "Formula"; formula: string }
+  | { valueType: "Formula"; formula: string; number?: number; string?: string; boolean?: boolean; errorValue?: string; dateSerial?: number }
   | { valueType: "Error"; errorValue: string }
   | { valueType: "Hyperlink"; hyperlink: string; hyperlinkText?: string }
   | { valueType: "RichText"; richText: Array<RichTextRun> }
@@ -760,7 +767,7 @@ export type CellValueInput =
   | { valueType?: "String"; string: string }
   | { valueType?: "Boolean"; boolean: boolean }
   | { valueType?: "Date"; dateSerial: number }
-  | { valueType?: "Formula"; formula: string }
+  | { valueType?: "Formula"; formula: string; number?: number; string?: string; boolean?: boolean; errorValue?: string; dateSerial?: number }
   | { valueType?: "Error"; errorValue: string }
   | { valueType?: "Hyperlink"; hyperlink: string; hyperlinkText?: string }
   | { valueType?: "RichText"; richText: Array<RichTextRun> }

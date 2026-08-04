@@ -230,6 +230,9 @@ pub(crate) struct CellInner {
     pub style: Option<Style>,
     /// Cell comment / note (v1.0.0). `None` = no comment.
     pub comment: Option<CellComment>,
+    /// `true` only when a cached scalar was set by `Worksheet::recalculate()`
+    /// (via `set_cached_value_raw`). Guards `cached_value()` per R4.
+    pub recalc_only: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -260,6 +263,7 @@ impl Cell {
                 formula: None,
                 style: None,
                 comment: None,
+                recalc_only: false,
             })),
         }
     }
@@ -284,7 +288,29 @@ impl Cell {
                 Ok(d.to_unknown())
             }
             "Null" => Ok(env.to_js_value(&serde_json::Value::Null)?),
-            _ => Ok(env.to_js_value(cv)?), // Formula, RichText, Hyperlink, Error, Merge
+            "Formula" => {
+                // Formula cells carry an optional cached scalar (Excel-authored
+                // `<f>..</f><v>..</v>` or JS-authored `cell.value = { formula, number, .. }`).
+                // Return the cached scalar so it round-trips as a bare value; null
+                // when no cache is present (formula authored without a result).
+                if let Some(n) = cv.number {
+                    Ok(env.to_js_value(&n)?)
+                } else if let Some(ref s) = cv.string {
+                    Ok(env.to_js_value(s)?)
+                } else if let Some(b) = cv.boolean {
+                    Ok(env.to_js_value(&b)?)
+                } else if let Some(ref e) = &cv.error_value {
+                    Ok(env.to_js_value(e)?)
+                } else if let Some(serial) = cv.date_serial {
+                    let ms = serial_to_millis(serial) as f64;
+                    let d = env.create_date(ms)?;
+                    let d: napi::JsDate<'static> = unsafe { std::mem::transmute(d) };
+                    Ok(d.to_unknown())
+                } else {
+                    Ok(env.to_js_value(&serde_json::Value::Null)?)
+                }
+            }
+            _ => Ok(env.to_js_value(cv)?), // RichText, Hyperlink, Error, Merge
         }
     }
 
@@ -336,6 +362,7 @@ impl Cell {
             let mut inner = self.inner.lock().expect("Cell lock poisoned");
             inner.value = CellValue::date(millis_to_serial(ms));
             inner.formula = None;
+            inner.recalc_only = false;
             return Ok(());
         }
 
@@ -389,7 +416,13 @@ impl Cell {
                     let text = obj.get("hyperlinkText").and_then(|v| v.as_str()).map(|s| s.to_string());
                     CellValue::hyperlink(url.to_string(), text)
                 } else if let Some(f) = obj.get("formula").and_then(|v| v.as_str()) {
-                    CellValue::formula(f.to_string())
+                    let mut cv = CellValue::formula(f.to_string());
+                    cv.number = obj.get("number").and_then(|v| v.as_f64());
+                    cv.string = obj.get("string").and_then(|v| v.as_str()).map(str::to_string);
+                    cv.boolean = obj.get("boolean").and_then(|v| v.as_bool());
+                    cv.error_value = obj.get("errorValue").and_then(|v| v.as_str()).map(str::to_string);
+                    cv.date_serial = obj.get("dateSerial").and_then(|v| v.as_f64());
+                    cv
                 } else if let Some(vt) = obj.get("valueType").and_then(|v| v.as_str()) {
                     if CellType::from_tag(vt).is_none() {
                         return Err(napi::Error::from_reason(format!("Unknown valueType discriminant: '{vt}'. Expected one of: Number, String, Boolean, Formula, Error, Hyperlink, RichText, Date, Null, Merge")));
@@ -419,6 +452,7 @@ impl Cell {
         } else {
             None
         };
+        inner.recalc_only = false;
         Ok(())
     }
 
@@ -459,7 +493,7 @@ impl Cell {
     pub fn cached_value(&self) -> Option<CellValue> {
         let inner = self.inner.lock().expect("Cell lock poisoned");
         let cv = &inner.value;
-        if cv.value_type != "Formula" {
+        if cv.value_type != "Formula" || !inner.recalc_only {
             return None;
         }
         if let Some(n) = cv.number {
@@ -563,7 +597,9 @@ impl Cell {
     /// Internal: set the CellValue directly (used by reader, add_row).
     /// Skips the serde_json::Value dispatch for efficiency.
     pub fn set_value_raw(&mut self, value: CellValue) {
-        self.inner.lock().expect("Cell lock poisoned").value = value;
+        let mut inner = self.inner.lock().expect("Cell lock poisoned");
+        inner.value = value;
+        inner.recalc_only = false;
     }
 
     /// Internal: return the raw `CellValue` (a `Date` cell exposes the serial,
@@ -604,6 +640,7 @@ impl Cell {
         inner.value.error_value = value.error_value;
         inner.value.date_serial = value.date_serial;
         inner.value.rich_text = value.rich_text;
+        inner.recalc_only = true;
     }
 
     /// Internal: renumber this cell to a new row, updating its cached `row`
@@ -910,5 +947,35 @@ mod tests {
                 "round-trip via {expected:?} failed"
             );
         }
+    }
+
+    #[test]
+    fn test_cached_value_getter_r4() {
+        // R4: cachedValue is recalc-only — returns None unless the cached
+        // scalar was set by recalculate() via set_cached_value_raw.
+        // Reader/authoring paths (set_value_raw, set_value) set recalc_only=false.
+
+        // Non-Formula cell: cachedValue is null.
+        let mut cell = Cell::new("A1".into(), 1, 1);
+        cell.set_value_raw(CellValue::number(42.0));
+        assert_eq!(cell.value_raw().value_type, "Number");
+        assert!(cell.cached_value().is_none());
+
+        // Formula cell with a cached scalar set via set_value_raw (reader/authoring
+        // path) returns None — cachedValue requires recalc_only=true.
+        let mut cell = Cell::new("B1".into(), 1, 2);
+        let mut cv = CellValue::formula("A1+B1");
+        cv.number = Some(3.0);
+        cell.set_value_raw(cv);
+        assert_eq!(cell.value_raw().value_type, "Formula");
+        assert!(
+            cell.cached_value().is_none(),
+            "cachedValue must be None without recalc (R4)"
+        );
+
+        // Formula cell without a cached scalar returns None.
+        let mut cell = Cell::new("C1".into(), 1, 3);
+        cell.set_value_raw(CellValue::formula("SUM(A1:B1)"));
+        assert!(cell.cached_value().is_none());
     }
 }
