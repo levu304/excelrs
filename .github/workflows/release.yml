@@ -64,17 +64,10 @@ jobs:
 
       - name: Add Rust target for musl
         if: ${{ matrix.musl }}
-        run: |
-          for i in 1 2 3; do
-            rustup target remove ${{ matrix.target }} 2>/dev/null || true
-            if rustup target add ${{ matrix.target }}; then break; fi
-            echo "retry $i"; sleep 5
-          done
-          SI="$(rustc --print sysroot)/lib/rustlib/${{ matrix.target }}/lib"
-          SC="$SI/self-contained"
-          for f in libc.a libunwind.a; do
-            test -f "$SC/$f" && echo "$f=OK" || echo "$f=MISSING"
-          done
+        run: rustup target add ${{ matrix.target }}
+      - name: Install musl-tools (arm64-musl only)
+        if: ${{ matrix.target == 'aarch64-unknown-linux-musl' }}
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Install Node.js 22.14.0
         uses: >-
@@ -91,24 +84,6 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Diag musl rustc invocation
-        if: ${{ matrix.musl }}
-        run: |
-          echo "CWD=$(pwd)"
-          echo "config=$(test -f .cargo/config.toml && echo yes || echo no)"
-          cargo clean -p excelrs-core 2>/dev/null || true
-          t=${{ matrix.target }}
-          cargo build --target "$t" --release -vv 2>&1 \
-            | tee /tmp/diag.log
-          echo "=== rustc Running lines ==="
-          grep 'Running.*rustc' /tmp/diag.log | tail -3
-          echo "=== link-self-contained present? ==="
-          grep -c 'link-self-contained' /tmp/diag.log
-          echo "=== rust-lld invoked? ==="
-          grep -c 'rust-lld' /tmp/diag.log
-          echo "=== errors ==="
-          grep -E 'not found|error:|cannot|undefined' /tmp/diag.log \
-            | head -3
       - name: Build native addon
         run: >-
           npx napi build --platform --release --target ${{ matrix.target }}

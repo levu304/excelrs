@@ -1,14 +1,27 @@
-# Static musl toolchain for linux-*musl targets.
-# Cargo only honors [target.*] when that target is selected, so native
+# linux-*musl native addon linking.
+# Cargo [target.<triple>.rustflags] takes precedence over the inherited
+# RUSTFLAGS env (so emnapi's -D warnings / -crt-static do not strip it),
+# and applies only when <triple> is the active build target — native
 # gnu/darwin/windows builds are unaffected.
-# Self-contained linking bundles rust-lld + the musl target's static
-# libc.a + libunwind.a (shipped via `rustup target add <triple>`), so NO
-# external C toolchain (musl-tools/musl-gcc) is needed and the produced
-# cdylib is fully static / portable across glibc/musl hosts.
-# Why not musl-gcc: the gnu gcc runtime (-lgcc_s / libgcc_s.so.1) it pulls
-# is absent on the ubuntu musl-tools setup -> linker failure.
+#
+# x86_64-unknown-linux-musl: rust-std's self-contained runtime ships the
+#   complete crt (Scrt1.o, libc.a); rust-lld links a static, dlopen-safe
+#   cdylib. `-linker` is a no-op on *musl (the granular flag is gnu-only),
+#   it only forces config precedence so emnapi's RUSTFLAGS env is ignored.
+#
+# aarch64-unknown-linux-musl: rust-std's self-contained runtime LACKS the
+#   shared cdylib entry object (Scrt1.o), so rust-lld cannot emit the
+#   cdylib and rustc falls back to the spec linker `aarch64-linux-musl-gcc`.
+#   Hand linking to musl-tools' `musl-gcc`, which ships a complete crt +
+#   static libc.a; `-static-libgcc` bakes libgcc (no libgcc_s.so.1 dep)
+#   and `-s` strips the final artifact.
 [target.x86_64-unknown-linux-musl]
 rustflags = ["-C", "link-self-contained=-linker"]
 
 [target.aarch64-unknown-linux-musl]
-rustflags = ["-C", "link-self-contained=-linker"]
+linker = "musl-gcc"
+rustflags = [
+  "-C", "link-self-contained=no",
+  "-C", "link-arg=-static-libgcc",
+  "-C", "link-arg=-s",
+]
