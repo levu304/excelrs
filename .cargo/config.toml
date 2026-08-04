@@ -1,10 +1,9 @@
-# linux-*musl native addon linking. Build step runs plain `cargo build` (not
-# emnapi), so the -crt-static RUSTFLAGS env is never introduced.
-[target.x86_64-unknown-linux-musl]
-# `-linker` is a stable no-op on *musl (gnu-only granular flag) but keeps
-# [rustflags] non-empty, so cargo honors config over any RUSTFLAGS env and
-# uses rust-lld self-contained -> static, dlopen-safe cdylib.
-rustflags = ["-C", "link-self-contained=-linker"]
-
-[target.aarch64-unknown-linux-musl]
-rustflags = ["-C", "link-self-contained=-linker"]
+# linux-*musl native addon linking. The Build step runs a plain
+# `cargo build --target <triple>` (NOT emnapi), so emnai's
+# `-C target-feature=-crt-static` RUSTFLAGS env is never introduced.
+#
+# rust-std's default for *-musl is self-contained rust-lld (bundled libc.a +
+# Scrt1.o + libunwind.a), which links a static, dlopen-safe cdylib with no
+# external toolchain. No musl-tools / musl-gcc needed. `rustup target add` in
+# the workflow force-downloads a complete rust-std (self-contained Scrt1.o) so
+# cargo doesn't hit "does not support these crate types".
