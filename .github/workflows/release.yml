@@ -4,6 +4,11 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Skip npm publish; build artifacts only (draft validation)"
+        type: boolean
+        default: false
 
 jobs:
   build:
@@ -225,12 +230,14 @@ jobs:
           echo "Platform package.json files created"
 
       - name: Publish platform packages
+        if: ${{ !inputs.dry_run }}
         run: |
           for dir in npm/*/; do
             (cd "$dir" && npm publish --access public) || exit 1
           done
 
       - name: Publish to npm (main package)
+        if: ${{ !inputs.dry_run }}
         run: |
           node -e "
             const pkg = require('./package.json');
@@ -250,6 +257,7 @@ jobs:
           npm publish --access public
 
       - name: Verify all 7 packages on npm
+        if: ${{ !inputs.dry_run }}
         run: |
           set -e
           VERSION=$(node -p "require('./package.json').version")
