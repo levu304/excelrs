@@ -1,0 +1,24 @@
+## 1. Toolchain & local dev parity
+
+- [ ] 1.1 Create `.cargo/config.toml` pinning `musl-gcc` as the linker for `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` targets (guarded so it does not affect gnu/darwin/windows builds).
+- [ ] 1.2 Add `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` to `package.json` `napi.targets` so local `napi build --platform` covers musl.
+
+## 2. Release build matrix
+
+- [ ] 2.1 Add `linux-x64-musl` and `linux-arm64-musl` build matrix entries: `target: x86_64-unknown-linux-musl` / `aarch64-unknown-linux-musl` on `ubuntu-22.04` / `ubuntu-22.04-arm`, `npm_dir: linux-x64-musl` / `linux-arm64-musl`.
+- [ ] 2.2 Gate `musl-tools` install + `rustup target add *-musl` to the musl legs only (gnu/darwin/windows legs must run unchanged).
+- [ ] 2.3 Pass `--target ${{ matrix.target }}` to the `npx napi build ... --js native.js` command (uniform; no-op for gnu/darwin/windows since host==target).
+
+## 3. Publish job packaging
+
+- [ ] 3.1 Add `npm/linux-x64-musl/package.json` and `npm/linux-arm64-musl/package.json` platform manifests via the existing "Create platform package.json files" heredoc block (`os: ["linux"]`, matching `cpu`, `main` = `excelrs.linux-*-musl.node`).
+- [ ] 3.2 Confirm the `for dir in npm/*/` publish loop already covers the new dirs (it globs all); add an explicit list entry only if the loop is narrowed.
+- [ ] 3.3 Add `@levu304/excelrs-linux-x64-musl` and `@levu304/excelrs-linux-arm64-musl` to the `optionalDependencies` rewrite block.
+- [ ] 3.4 Extend the "Verify all N packages on npm" loop from 5 to 7 packages (include both musl packages).
+
+## 4. Verification
+
+- [ ] 4.1 CI: the two new musl matrix legs build and upload `excelrs.linux-*-musl.node` artifacts without failing the gnu/darwin/windows legs.
+- [ ] 4.2 Smoke test: the musl x64 binary loads in a Node.js process and round-trips a styled workbook (write + read back, assert style preserved).
+- [ ] 4.3 Smoke test: the musl arm64 binary loads on an arm64 host (static-link load on glibc arm64).
+- [ ] 4.4 `openspec validate --strict` passes for this change.
