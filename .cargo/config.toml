@@ -1,0 +1,9 @@
+# Static musl toolchain for linux-*musl targets.
+# Cargo only honors [target.*] when that target is selected, so native
+# gnu/darwin/windows builds are unaffected. `musl-gcc` comes from the host's
+# `musl-tools` package (Ubuntu apt); add via: rustup target add <triple>.
+[target.x86_64-unknown-linux-musl]
+linker = "musl-gcc"
+
+[target.aarch64-unknown-linux-musl]
+linker = "musl-gcc"
