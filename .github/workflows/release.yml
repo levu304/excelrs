@@ -81,7 +81,15 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Build native addon
+      - name: "Build native addon (musl: cargo static + napi --no-build)"
+        if: ${{ matrix.musl }}
+        run: |
+          cargo build --release --target ${{ matrix.target }} \
+            --features formula-eval
+          npx napi build --platform --release --target ${{ matrix.target }} \
+            --no-build --js native.js
+      - name: "Build native addon (non-musl: emnapi default)"
+        if: ${{ !matrix.musl }}
         run: >-
           npx napi build --platform --release --target ${{ matrix.target }}
           --features formula-eval --js native.js
