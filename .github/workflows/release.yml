@@ -62,7 +62,7 @@ jobs:
       - name: Add Rust target for musl
         if: ${{ matrix.musl }}
         run: |
-          rustup target add --force ${{ matrix.target }}
+          rustup target add ${{ matrix.target }}
           dir="$(rustc --print target-libdir ${{ matrix.target }})"
           echo "musl target-libdir: $dir"
           ls "$dir" | grep -E 'libc.a|libgcc.a|crt1.o' || echo "MISSING libs"
