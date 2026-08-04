@@ -1807,12 +1807,15 @@ fn write_cell_xml<W: Write>(
             // Formula string results carry their own cell type so calamine
             // re-types the cached <v> correctly on read-back (mirrors Excel:
             // boolean→t="b", error→t="e", string-result→t="str").
-            if cv.boolean.is_some() {
+            // Priority must match the value-writing arm below
+            // (number → string → boolean → error_value → date_serial).
+            // number and date_serial produce no t attribute (fall through to None).
+            if cv.string.is_some() {
+                Some("t=\"str\"")
+            } else if cv.boolean.is_some() {
                 Some("t=\"b\"")
             } else if cv.error_value.is_some() {
                 Some("t=\"e\"")
-            } else if cv.string.is_some() {
-                Some("t=\"str\"")
             } else {
                 None // number, date_serial, or no cached result
             }

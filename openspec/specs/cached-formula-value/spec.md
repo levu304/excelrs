@@ -1,6 +1,7 @@
 # cached-formula-value Specification
 
 ## Purpose
+
 Define the behavior for authoring and round-tripping **cached formula results** (the `<v>` paired
 with a `<f>`) without depending on a formula-evaluation engine. A formula cell authored with an
 explicit cached scalar SHALL be serialized as `<f>{formula}</f><v>{cached}</v>` and SHALL read
@@ -9,7 +10,9 @@ back so that `cell.value` returns the cached scalar and `cell.formula` returns t
 This is the minimal, engine-independent half of issue #54 ("Formula cached results cannot be
 authored on write"). It does **not** attempt in-process formula evaluation — cached values are
 supplied by the caller (JS authoring) or by Excel itself.
+
 ## Requirements
+
 ### Requirement: setter accepts cached scalar fields on a Formula cell
 
 `Cell.value = { valueType: "Formula" | formula, <cached scalar field> }` SHALL store the supplied
@@ -55,11 +58,23 @@ When a `Formula` `CellValue` carries a cached scalar, the writer `"Formula"` arm
 `<f>{formula}</f><v>{cached}</v>`. The arm already emits `number`/`string`/`boolean`/
 `error_value`; this change adds the `date_serial` branch (mirrors the `Date` arm).
 
+The `t` attribute emitted via `cell_type_attr` for the `Formula` arm SHALL check cached scalar
+fields in the same priority order as the value-writing arm: `number → string → boolean →
+error_value → date_serial`. `number` and `date_serial` produce no `t` attribute (fall through
+to `None`). This prevents a mismatch where `t="b"` is emitted alongside a `<v>` containing a
+string value (when both `boolean` and `string` are present).
+
 #### Scenario: date cached value persists `<v>`
 
 WHEN a formula cell is assigned `{ formula: "DATE(2025,1,1)", dateSerial: 45657 }` and round-tripped
 THEN the written xlsx contains `<f>DATE(2025,1,1)</f><v>45657</v>` and reads back
 `cell.value` is `45657`.
+
+#### Scenario: t attribute matches v content for boolean+string formula cell
+
+WHEN a formula cell carries both `boolean` and `string` cached scalars (edge case)
+THEN the emitted `t` attribute matches the field type whose value is emitted in `<v>`
+(string takes priority, matching the value-writing arm).
 
 ### Requirement: Excel-authored cached formula reads back
 
@@ -72,3 +87,38 @@ WHEN a workbook authored in Excel (or by ExcelJS with `{ formula, result }`) con
 `<f>A2+B2</f><v>3</v>` is read
 THEN `cell.value` is `3` and `cell.formula` is `"A2+B2"`.
 
+### Requirement: Cell.cachedValue is recalc-only
+
+The `Cell.cachedValue` getter SHALL return `null` for any `Formula`-typed cell whose cached
+scalar was set by the reader (`set_value_raw` / `insert_cell_value` / `insert_cell_formula`)
+or by the JS setter (`set_value`). It SHALL return the cached scalar ONLY when the cell was
+evaluated via `Worksheet::recalculate()` (which calls `set_cached_value_raw`).
+
+The implementation enforces this via a per-cell `recalc_only: bool` flag on `CellInner`:
+`recalc_only` is `true` only after `set_cached_value_raw` (recalc path), and `false` after
+`Cell::new`, `set_value_raw`, or `set_value` (authoring/reader paths).
+
+#### Scenario: Excel-authored cached formula cell.cachedValue is null
+
+WHEN a Formula cell read from disk carries `<f>..</f><v>..</v>` (Excel/ExcelJS authored)
+THEN `cell.cachedValue` is `null` (reader path sets `recalc_only = false`).
+
+#### Scenario: JS-authored cached formula cell.cachedValue is null
+
+WHEN a cell is assigned `{ formula: "SUM(A2:B2)", number: 3 }` via the JS setter
+THEN `cell.cachedValue` is `null` (setter path sets `recalc_only = false`).
+
+#### Scenario: recalc'd formula cell.cachedValue returns scalar
+
+WHEN a Formula cell is evaluated via `Worksheet::recalculate()`
+THEN `cell.cachedValue` returns the computed scalar (recalc path sets `recalc_only = true`).
+
+### Requirement: date cached formula round-trip test coverage
+
+The JS-authored date-formula round-trip scenario SHALL be covered by an automated test in
+`__test__/cached-formula.test.ts`.
+
+#### Scenario: JS-authored cached date formula round-trips as bare number
+
+WHEN a cell is assigned `{ formula: "DATE(2025,1,1)", dateSerial: 45657 }` and round-tripped
+THEN `cell.value` is `45657` (a bare number, not a JS `Date`).

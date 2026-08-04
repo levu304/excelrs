@@ -230,6 +230,9 @@ pub(crate) struct CellInner {
     pub style: Option<Style>,
     /// Cell comment / note (v1.0.0). `None` = no comment.
     pub comment: Option<CellComment>,
+    /// `true` only when a cached scalar was set by `Worksheet::recalculate()`
+    /// (via `set_cached_value_raw`). Guards `cached_value()` per R4.
+    pub recalc_only: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -260,6 +263,7 @@ impl Cell {
                 formula: None,
                 style: None,
                 comment: None,
+                recalc_only: false,
             })),
         }
     }
@@ -358,6 +362,7 @@ impl Cell {
             let mut inner = self.inner.lock().expect("Cell lock poisoned");
             inner.value = CellValue::date(millis_to_serial(ms));
             inner.formula = None;
+            inner.recalc_only = false;
             return Ok(());
         }
 
@@ -447,6 +452,7 @@ impl Cell {
         } else {
             None
         };
+        inner.recalc_only = false;
         Ok(())
     }
 
@@ -487,7 +493,7 @@ impl Cell {
     pub fn cached_value(&self) -> Option<CellValue> {
         let inner = self.inner.lock().expect("Cell lock poisoned");
         let cv = &inner.value;
-        if cv.value_type != "Formula" {
+        if cv.value_type != "Formula" || !inner.recalc_only {
             return None;
         }
         if let Some(n) = cv.number {
@@ -591,7 +597,9 @@ impl Cell {
     /// Internal: set the CellValue directly (used by reader, add_row).
     /// Skips the serde_json::Value dispatch for efficiency.
     pub fn set_value_raw(&mut self, value: CellValue) {
-        self.inner.lock().expect("Cell lock poisoned").value = value;
+        let mut inner = self.inner.lock().expect("Cell lock poisoned");
+        inner.value = value;
+        inner.recalc_only = false;
     }
 
     /// Internal: return the raw `CellValue` (a `Date` cell exposes the serial,
@@ -632,6 +640,7 @@ impl Cell {
         inner.value.error_value = value.error_value;
         inner.value.date_serial = value.date_serial;
         inner.value.rich_text = value.rich_text;
+        inner.recalc_only = true;
     }
 
     /// Internal: renumber this cell to a new row, updating its cached `row`
@@ -942,21 +951,27 @@ mod tests {
 
     #[test]
     fn test_cached_value_getter_r4() {
-        // R4: cachedValue is null for non-Formula-typed cells.
+        // R4: cachedValue is recalc-only — returns None unless the cached
+        // scalar was set by recalculate() via set_cached_value_raw.
+        // Reader/authoring paths (set_value_raw, set_value) set recalc_only=false.
+
+        // Non-Formula cell: cachedValue is null.
         let mut cell = Cell::new("A1".into(), 1, 1);
         cell.set_value_raw(CellValue::number(42.0));
         assert_eq!(cell.value_raw().value_type, "Number");
         assert!(cell.cached_value().is_none());
 
-        // Formula cell with a cached scalar returns it (unchanged behavior).
+        // Formula cell with a cached scalar set via set_value_raw (reader/authoring
+        // path) returns None — cachedValue requires recalc_only=true.
         let mut cell = Cell::new("B1".into(), 1, 2);
         let mut cv = CellValue::formula("A1+B1");
         cv.number = Some(3.0);
         cell.set_value_raw(cv);
         assert_eq!(cell.value_raw().value_type, "Formula");
-        let cached = cell.cached_value().expect("should have cached value");
-        assert_eq!(cached.value_type, "Number");
-        assert_eq!(cached.number, Some(3.0));
+        assert!(
+            cell.cached_value().is_none(),
+            "cachedValue must be None without recalc (R4)"
+        );
 
         // Formula cell without a cached scalar returns None.
         let mut cell = Cell::new("C1".into(), 1, 3);

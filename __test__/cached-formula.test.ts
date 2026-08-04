@@ -143,6 +143,23 @@ test('JS-authored cached error formula round-trips', async () => {
   expect(c.value).toBe('#DIV/0!')
 })
 
+test('JS-authored cached date formula round-trips as bare number', async () => {
+  const wb = makeWorkbook()
+  const ws = wb.getWorksheet('S')!
+  ws.getCell('A1').value = { formula: 'DATE(2025,1,1)', dateSerial: 45657 } as never
+
+  const buf = await wb.xlsx.write()
+  const ws2 = await readXlsx(buf)
+  const c = ws2.getCell('A1')
+  expect(c.formula).toBe('DATE(2025,1,1)')
+  // JS-authored dateSerial emits <v>45657</v> with no t attribute and no date
+  // number format, so calamine re-types it as Data::Float(45657) and reads
+  // back as a bare number (not a JS Date). The ExcelJS-authored variant in §4.2
+  // applies a date style and reads back as a Date — this covers the other path.
+  expect(c.value).toBe(45657)
+  expect(typeof c.value).toBe('number')
+})
+
 // ---------------------------------------------------------------------------
 // 4.3 Hand-crafted .xlsx reads back cached scalar + formula
 // ---------------------------------------------------------------------------
