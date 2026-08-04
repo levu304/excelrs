@@ -1,10 +1,4 @@
-# rich-text Specification
-
-## Purpose
-
-Rich-text cell content round-trip: `CellValue.rich_text` runs with per-run `Font`, parsed on read and emitted on write. Write has shipped since v0.5.0; v0.12.0 adds the read side.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Reader parses rich-text cell content (theme/val-aware fonts)
 
@@ -63,21 +57,3 @@ The `Cell.richText` getter (`#[napi(getter)]`) SHALL return `RichTextRun[] | nul
 
 - **WHEN** a Number cell stores `42`
 - **THEN** `cell.richText` SHALL be `null`
-
-### Requirement: Workbook round-trips rich text
-
-A workbook written by excelrs with rich-text runs SHALL, after being read back, yield a `CellValue` whose `rich_text` runs match the originally written runs (text and per-run font).
-
-#### Scenario: Write then read preserves runs
-
-- **WHEN** rich text is written and the file is read back
-- **THEN** the run count, each run's `text`, and each run's `font` match the written values
-
-### Requirement: Public setter accepts rich-text object
-
-The public `Cell.value` setter SHALL accept a rich-text object so the rich-text capability is reachable from JavaScript.
-
-#### Scenario: Write rich text through the public setter and read back
-
-- **WHEN** a cell is written via `cell.value = { richText: [{ text: "Hello ", font: { bold: true } }, { text: "World" }] }`, the workbook is saved and read back
-- **THEN** `cell.value.value_type` SHALL be `"RichText"` and `cell.value.rich_text` SHALL equal the two runs with the bold flag preserved on the first run

@@ -22,6 +22,7 @@ use crate::error::ExcelrsError;
 use crate::model::cell::{CellValue, RichTextRun};
 use crate::model::header_footer::HeaderFooter;
 use crate::model::page_setup::{CellComments, Orientation, PageMargins, PageSetup};
+use crate::model::color::ThemeColorScheme;
 use crate::model::style::{Font, Style};
 use crate::model::workbook::Workbook;
 use crate::model::workbook_inner::WorkbookInner;
@@ -119,11 +120,18 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
     }
 
     // Step 3.10: parse rich-text inline strings and attach
-    let per_sheet_rich_text = parse_sheet_rich_text(data, sheet_count);
+    let per_sheet_rich_text = parse_sheet_rich_text(data, sheet_count, &style_table.scheme);
     for (i, cells) in per_sheet_rich_text.into_iter().enumerate() {
         for (row, col, runs) in &cells {
             let cv = CellValue::rich_text(runs.clone());
             inner.worksheets[i].insert_cell_value(*row, *col, cv);
+        }
+    }
+
+    // Step 3.10b: parse rich-text shared strings and overlay onto cells
+    if let Ok(rich_strings) = parse_shared_string_rich_text(data, &style_table.scheme) {
+        if !rich_strings.is_empty() {
+            overlay_shared_string_rich_text(data, sheet_count, &rich_strings, &mut inner);
         }
     }
 
@@ -2269,7 +2277,88 @@ fn map_data(data: &Data) -> CellValue {
 /// from each sheet's XML. Returns per-sheet lists of (row, col, runs).
 // Not behind a Result: inline-str parsing is best-effort; failure on individual
 // cells degrades to plain string (the already-parsed calamine string value).
-fn parse_sheet_rich_text(data: &[u8], sheet_count: usize) -> Vec<Vec<(u32, u32, Vec<RichTextRun>)>> {
+/// Apply a single rPr child element (b, i, u, sz, color, rFont) to a Font.
+/// Shared by inline-string and shared-string rich-text parsers to keep
+/// Font mapping identical across both code paths.
+/// Read a boolean OOXML attribute (`val`) honoring the ECMA-376 rule:
+/// absent => true (default); `val` in `off_values` => false; anything else => true.
+/// `off_values` differs per element: `<b/>`/`<i/>` turn off on `0`/`false`;
+/// `<u/>` additionally turns off on `none`.
+fn rpr_bool(elem: &quick_xml::events::BytesStart, off_values: &[&str]) -> bool {
+    for attr in elem.attributes().flatten() {
+        if attr.key.as_ref() == b"val" {
+            let v = String::from_utf8_lossy(&attr.value);
+            return !off_values.iter().any(|o| o.eq_ignore_ascii_case(v.trim()));
+        }
+    }
+    true
+}
+
+fn apply_rpr_child(
+    font: &mut Font,
+    elem: &quick_xml::events::BytesStart,
+    has_rpr: &mut bool,
+    scheme: &ThemeColorScheme,
+) {
+    match elem.name().as_ref() {
+        b"b" => { font.bold = Some(rpr_bool(elem, &["0", "false"])); *has_rpr = true; }
+        b"i" => { font.italic = Some(rpr_bool(elem, &["0", "false"])); *has_rpr = true; }
+        b"u" => { font.underline = Some(rpr_bool(elem, &["0", "false", "none"])); *has_rpr = true; }
+        b"sz" => {
+            for attr in elem.attributes().flatten() {
+                if attr.key.as_ref() == b"val" {
+                    font.size = String::from_utf8_lossy(&attr.value).parse::<f64>().ok();
+                    *has_rpr = true;
+                }
+            }
+        }
+        b"color" => {
+            let mut rgb: Option<String> = None;
+            let mut theme: Option<usize> = None;
+            let mut indexed: Option<usize> = None;
+            let mut tint: Option<f64> = None;
+            let mut auto = false;
+            for attr in elem.attributes().flatten() {
+                match attr.key.as_ref() {
+                    b"rgb" => rgb = Some(String::from_utf8_lossy(&attr.value).into_owned()),
+                    b"theme" => theme = String::from_utf8_lossy(&attr.value).parse::<usize>().ok(),
+                    b"indexed" => indexed = String::from_utf8_lossy(&attr.value).parse::<usize>().ok(),
+                    b"tint" => tint = String::from_utf8_lossy(&attr.value).parse::<f64>().ok(),
+                    b"auto" => auto = true,
+                    _ => {}
+                }
+            }
+            // Priority mirrors the style-table color resolver: theme -> indexed -> rgb -> auto.
+            if let Some(idx) = theme {
+                font.color = scheme.resolve_theme(idx, tint);
+            } else if let Some(idx) = indexed {
+                font.color = scheme.resolve_indexed(idx);
+            } else if let Some(r) = rgb {
+                font.color = Some(r);
+            } else if auto {
+                font.color = Some("FF000000".to_string());
+            }
+            if font.color.is_some() {
+                *has_rpr = true;
+            }
+        }
+        b"rFont" => {
+            for attr in elem.attributes().flatten() {
+                if attr.key.as_ref() == b"val" {
+                    font.name = Some(String::from_utf8_lossy(&attr.value).into_owned());
+                    *has_rpr = true;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn parse_sheet_rich_text(
+    data: &[u8],
+    sheet_count: usize,
+    scheme: &ThemeColorScheme,
+) -> Vec<Vec<(u32, u32, Vec<RichTextRun>)>> {
     use std::io::Cursor;
     let cursor = Cursor::new(data);
     let mut archive = match zip::ZipArchive::new(cursor) {
@@ -2283,7 +2372,7 @@ fn parse_sheet_rich_text(data: &[u8], sheet_count: usize) -> Vec<Vec<(u32, u32, 
             Ok(entry) => {
                 let mut xml = String::new();
                 if entry.take(MAX_ENTRY_BYTES).read_to_string(&mut xml).is_ok() {
-                    parse_inline_str_rich_text(&xml)
+                    parse_inline_str_rich_text(&xml, scheme)
                 } else {
                     Vec::new()
                 }
@@ -2296,11 +2385,15 @@ fn parse_sheet_rich_text(data: &[u8], sheet_count: usize) -> Vec<Vec<(u32, u32, 
 }
 
 /// Parse `<c t="inlineStr"><is><r>...</r></is></c>` elements from a sheet XML string.
-fn parse_inline_str_rich_text(xml: &str) -> Vec<(u32, u32, Vec<RichTextRun>)> {
-    parse_inline_str_rich_text_with(xml, MAX_EVENTS)
+fn parse_inline_str_rich_text(xml: &str, scheme: &ThemeColorScheme) -> Vec<(u32, u32, Vec<RichTextRun>)> {
+    parse_inline_str_rich_text_with(xml, MAX_EVENTS, scheme)
 }
 
-fn parse_inline_str_rich_text_with(xml: &str, max_events: usize) -> Vec<(u32, u32, Vec<RichTextRun>)> {
+fn parse_inline_str_rich_text_with(
+    xml: &str,
+    max_events: usize,
+    scheme: &ThemeColorScheme,
+) -> Vec<(u32, u32, Vec<RichTextRun>)> {
     use quick_xml::events::Event;
     use quick_xml::Reader;
 
@@ -2356,42 +2449,7 @@ fn parse_inline_str_rich_text_with(xml: &str, max_events: usize) -> Vec<(u32, u3
                     has_rpr = false;
                 }
                 b"rPr" if in_r => in_rpr = true,
-                b"b" if in_rpr => {
-                    current_font.bold = Some(true);
-                    has_rpr = true;
-                }
-                b"i" if in_rpr => {
-                    current_font.italic = Some(true);
-                    has_rpr = true;
-                }
-                b"u" if in_rpr => {
-                    current_font.underline = Some(true);
-                    has_rpr = true;
-                }
-                b"sz" if in_rpr => {
-                    for attr in e.attributes().flatten() {
-                        if attr.key.as_ref() == b"val" {
-                            current_font.size = String::from_utf8_lossy(&attr.value).parse::<f64>().ok();
-                            has_rpr = true;
-                        }
-                    }
-                }
-                b"color" if in_rpr => {
-                    for attr in e.attributes().flatten() {
-                        if attr.key.as_ref() == b"rgb" {
-                            current_font.color = Some(String::from_utf8_lossy(&attr.value).into_owned());
-                            has_rpr = true;
-                        }
-                    }
-                }
-                b"rFont" if in_rpr => {
-                    for attr in e.attributes().flatten() {
-                        if attr.key.as_ref() == b"val" {
-                            current_font.name = Some(String::from_utf8_lossy(&attr.value).into_owned());
-                            has_rpr = true;
-                        }
-                    }
-                }
+                _ if in_rpr => apply_rpr_child(&mut current_font, e, &mut has_rpr, scheme),
                 b"t" if in_r => in_t = true,
                 _ => {}
             },
@@ -2429,6 +2487,216 @@ fn parse_inline_str_rich_text_with(xml: &str, max_events: usize) -> Vec<(u32, u3
         }
     }
     result
+}
+
+
+/// Parse rich-text runs from `xl/sharedStrings.xml`.
+///
+/// Returns a map of `<si>` index → `Vec<RichTextRun>` for entries that contain
+/// rich-text `<r>` children. Plain `<si><t>…</t></si>` entries are omitted.
+/// If the file doesn't exist, returns an empty map.
+fn parse_shared_string_rich_text(
+    data: &[u8],
+    scheme: &ThemeColorScheme,
+) -> Result<std::collections::HashMap<u32, Vec<RichTextRun>>, ExcelrsError> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+    use std::io::Cursor;
+
+    let cursor = Cursor::new(data);
+    let mut archive = match zip::ZipArchive::new(cursor) {
+        Ok(a) => a,
+        Err(_) => return Ok(std::collections::HashMap::new()),
+    };
+
+    let mut xml = String::new();
+    match archive.by_name("xl/sharedStrings.xml") {
+        Ok(entry) => {
+            entry
+                .take(MAX_ENTRY_BYTES)
+                .read_to_string(&mut xml)
+                .map_err(|e| ExcelrsError::Parse(format!("Failed to read sharedStrings.xml: {e}")))?;
+        }
+        Err(_) => return Ok(std::collections::HashMap::new()),
+    }
+
+    let mut reader = Reader::from_str(&xml);
+    let mut buf = Vec::new();
+    let mut result: std::collections::HashMap<u32, Vec<RichTextRun>> = std::collections::HashMap::new();
+
+    let mut in_si = false;
+    let mut in_r = false;
+    let mut in_rpr = false;
+    let mut in_t = false;
+    let mut has_rpr = false;
+    let mut current_text = String::new();
+    let mut current_font = Font::default();
+    let mut runs: Vec<RichTextRun> = Vec::new();
+    let mut has_rich_text = false;
+    let mut index: u32 = 0;
+    let mut events: u64 = 0;
+
+    loop {
+        buf.clear();
+        events += 1;
+        if events > MAX_EVENTS as u64 {
+            break;
+        }
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => match e.name().as_ref() {
+                b"si" => {
+                    in_si = true;
+                    runs.clear();
+                    has_rich_text = false;
+                }
+                b"r" if in_si => {
+                    in_r = true;
+                    current_font = Font::default();
+                    current_text.clear();
+                    has_rpr = false;
+                    has_rich_text = true;
+                }
+                b"rPr" if in_r => in_rpr = true,
+                _ if in_rpr => apply_rpr_child(&mut current_font, e, &mut has_rpr, scheme),
+                b"t" if in_r => in_t = true,
+                b"t" if in_si => {
+                    // plain <si><t>…</t></si> — no rich text, skip on </si>
+                }
+                _ => {}
+            },
+            Ok(Event::End(ref e)) => match e.name().as_ref() {
+                b"t" if in_t => in_t = false,
+                b"r" if in_r => {
+                    if !current_text.is_empty() {
+                        let font = if has_rpr { Some(current_font.clone()) } else { None };
+                        runs.push(RichTextRun {
+                            text: std::mem::take(&mut current_text),
+                            font,
+                        });
+                    }
+                    in_r = false;
+                }
+                b"rPr" if in_rpr => in_rpr = false,
+                b"si" if in_si => {
+                    if has_rich_text && !runs.is_empty() {
+                        result.insert(index, runs.clone());
+                    }
+                    index += 1;
+                    in_si = false;
+                }
+                _ => {}
+            },
+            Ok(Event::Text(ref e)) if in_t => {
+                current_text.push_str(e.unescape().unwrap_or_default().as_ref());
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+
+    Ok(result)
+}
+
+/// Overlay rich-text shared strings onto cells.
+///
+/// Scans each worksheet XML for `<c t="s"><v>idx</v></c>` cells and, when the
+/// shared-string index is present in `rich_strings`, replaces the cell's
+/// `CellValue` with a `RichText` CellValue preserving per-run fonts.
+fn overlay_shared_string_rich_text(
+    data: &[u8],
+    sheet_count: usize,
+    rich_strings: &std::collections::HashMap<u32, Vec<RichTextRun>>,
+    inner: &mut WorkbookInner,
+) {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+    use std::io::Cursor;
+
+    if rich_strings.is_empty() {
+        return;
+    }
+
+    let cursor = Cursor::new(data);
+    let mut archive = match zip::ZipArchive::new(cursor) {
+        Ok(a) => a,
+        Err(_) => return,
+    };
+
+    for i in 0..sheet_count {
+        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+        let xml = match archive.by_name(&path) {
+            Ok(entry) => {
+                let mut xml = String::new();
+                if entry.take(MAX_ENTRY_BYTES).read_to_string(&mut xml).is_err() {
+                    continue;
+                }
+                xml
+            }
+            Err(_) => continue,
+        };
+
+        let mut reader = Reader::from_str(&xml);
+        let mut buf = Vec::new();
+        let mut in_c = false;
+        let mut in_v = false;
+        let mut cell_ref = String::new();
+        let mut cell_type = String::new();
+        let mut v_text = String::new();
+
+        loop {
+            buf.clear();
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(ref e)) => match e.name().as_ref() {
+                    b"c" => {
+                        cell_ref.clear();
+                        cell_type.clear();
+                        v_text.clear();
+                        for attr in e.attributes().flatten() {
+                            match attr.key.as_ref() {
+                                b"r" => {
+                                    cell_ref = String::from_utf8_lossy(&attr.value).into_owned();
+                                }
+                                b"t" => {
+                                    cell_type = String::from_utf8_lossy(&attr.value).into_owned();
+                                }
+                                _ => {}
+                            }
+                        }
+                        in_c = true;
+                    }
+                    b"v" if in_c => in_v = true,
+                    _ => {}
+                },
+                Ok(Event::End(ref e)) => match e.name().as_ref() {
+                    b"v" if in_v => in_v = false,
+                    b"c" if in_c => {
+                        if cell_type == "s" {
+                            if let Ok(idx) = v_text.trim().parse::<u32>() {
+                                if let Some(runs) = rich_strings.get(&idx) {
+                                    if let Some((row, col)) = ref_to_rowcol(&cell_ref) {
+                                        let cv = CellValue::rich_text(runs.clone());
+                                        inner.worksheets[i].insert_cell_value(row, col, cv);
+                                    }
+                                }
+                            }
+                        }
+                        cell_ref.clear();
+                        cell_type.clear();
+                        v_text.clear();
+                        in_c = false;
+                    }
+                    _ => {}
+                },
+                Ok(Event::Text(ref e)) if in_v => {
+                    v_text.push_str(e.unescape().unwrap_or_default().as_ref());
+                }
+                Ok(Event::Eof) => break,
+                Err(_) => break,
+                _ => {}
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3021,7 +3289,7 @@ mod tests {
           </row>
         </sheetData>
         </worksheet>"##;
-        let cells = parse_inline_str_rich_text(xml);
+        let cells = parse_inline_str_rich_text(xml, &ThemeColorScheme::default());
         assert_eq!(cells.len(), 3, "expected 3 rich-text cells");
 
         // A1: plain rich text, no rPr
@@ -3061,7 +3329,7 @@ mod tests {
           </row>
         </sheetData>
         </worksheet>"##;
-        let cells = parse_inline_str_rich_text(xml);
+        let cells = parse_inline_str_rich_text(xml, &ThemeColorScheme::default());
         assert_eq!(cells.len(), 1);
         assert_eq!(cells[0].2.len(), 1);
         let f = cells[0].2[0].font.as_ref().unwrap();
@@ -3081,11 +3349,11 @@ mod tests {
         }
         let xml = format!("<worksheet><sheetData>{}</sheetData></worksheet>", cells_xml);
         // cap below total → only the first cell is committed, rest truncated
-        let cells = parse_inline_str_rich_text_with(&xml, 15);
+        let cells = parse_inline_str_rich_text_with(&xml, 15, &ThemeColorScheme::default());
         assert!(cells.len() < 3, "event cap not enforced: got {} cells", cells.len());
         assert_eq!(cells.len(), 1);
         // cap above total → all cells parsed
-        let cells2 = parse_inline_str_rich_text_with(&xml, 1000);
+        let cells2 = parse_inline_str_rich_text_with(&xml, 1000, &ThemeColorScheme::default());
         assert_eq!(cells2.len(), 3);
     }
 
@@ -3096,7 +3364,7 @@ mod tests {
           <c r="A1" t="s"><v>0</v></c>
           <c r="B1"><v>123</v></c>
         </row></sheetData></worksheet>"##;
-        let cells = parse_inline_str_rich_text(xml);
+        let cells = parse_inline_str_rich_text(xml, &ThemeColorScheme::default());
         assert!(cells.is_empty(), "no inlineStr → no rich text rows");
     }
 
@@ -3181,7 +3449,188 @@ mod tests {
         assert_eq!(b.diagonal_down, Some(true));
     }
 
+    
+    // -- shared-strings rich-text parsing (Step 3.10b) --
+
+    /// Full xlsx with: A1 -> shared-string rich text (index 0),
+    /// B1 -> plain shared string (index 1), C1 -> inline-string rich text.
+    fn make_xlsx_shared_strings_rich_text() -> Vec<u8> {
+        use std::io::Write;
+
+        let mut buf = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let options: zip::write::FileOptions<'_, ()> =
+                zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+            zip.start_file("[Content_Types].xml", options).unwrap();
+            write!(
+                zip,
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
+</Types>"#
+            ).unwrap();
+
+            zip.start_file("_rels/.rels", options).unwrap();
+            write!(
+                zip,
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"#
+            ).unwrap();
+
+            zip.start_file("xl/workbook.xml", options).unwrap();
+            write!(
+                zip,
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>"#
+            ).unwrap();
+
+            zip.start_file("xl/_rels/workbook.xml.rels", options).unwrap();
+            write!(
+                zip,
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>"#
+            ).unwrap();
+
+            zip.start_file("xl/worksheets/sheet1.xml", options).unwrap();
+            write!(
+                zip,
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="s"><v>0</v></c>
+      <c r="B1" t="s"><v>1</v></c>
+      <c r="C1" t="inlineStr"><is><r><rPr><b/></rPr><t>Inline</t></r></is></c>
+    </row>
+  </sheetData>
+</worksheet>"#
+            ).unwrap();
+
+            zip.start_file("xl/sharedStrings.xml", options).unwrap();
+            write!(
+                zip,
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="2" uniqueCount="2">
+  <si><r><rPr><b/><sz val="14"/><color rgb="FFFF0000"/><rFont val="Arial"/></rPr><t>Red Bold</t></r><r><t> Normal</t></r></si>
+  <si><t>plain</t></si>
+</sst>"#
+            ).unwrap();
+
+            zip.finish().unwrap();
+        }
+        buf
+    }
+
+    fn make_xlsx_without_shared_strings() -> Vec<u8> {
+        use std::io::Write;
+
+        let mut buf = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let options: zip::write::FileOptions<'_, ()> =
+                zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+            zip.start_file("[Content_Types].xml", options).unwrap();
+            write!(
+                zip,
+                r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>"#
+            ).unwrap();
+            zip.finish().unwrap();
+        }
+        buf
+    }
+
     #[test]
+    fn test_parse_shared_string_rich_text_extracts_runs() {
+        let xml = make_xlsx_shared_strings_rich_text();
+        let map = parse_shared_string_rich_text(&xml, &ThemeColorScheme::default()).unwrap();
+        assert!(map.contains_key(&0), "index 0 should have rich text");
+        let runs = map.get(&0).unwrap();
+        assert_eq!(runs.len(), 2);
+        // Run 0: bold, size 14, red, Arial
+        assert_eq!(runs[0].text, "Red Bold");
+        let f0 = runs[0].font.as_ref().unwrap();
+        assert_eq!(f0.bold, Some(true));
+        assert_eq!(f0.size, Some(14.0));
+        assert_eq!(f0.color.as_deref(), Some("FFFF0000"));
+        assert_eq!(f0.name.as_deref(), Some("Arial"));
+        // Run 1: no rPr -> no font
+        assert_eq!(runs[1].text, " Normal");
+        assert!(runs[1].font.is_none());
+    }
+
+    #[test]
+    fn test_parse_shared_string_skips_plain_si() {
+        let xml = make_xlsx_shared_strings_rich_text();
+        let map = parse_shared_string_rich_text(&xml, &ThemeColorScheme::default()).unwrap();
+        assert!(!map.contains_key(&1), "plain si should be absent");
+    }
+
+    #[test]
+    fn test_parse_shared_string_no_file() {
+        let xml = make_xlsx_without_shared_strings();
+        let map = parse_shared_string_rich_text(&xml, &ThemeColorScheme::default()).unwrap();
+        assert!(map.is_empty(), "no sharedStrings.xml -> empty map");
+    }
+
+    #[test]
+    fn test_overlay_shared_string_rich_text_replaces_string() {
+        let xml = make_xlsx_shared_strings_rich_text();
+        let inner = workbook_inner_from_bytes(&xml).unwrap();
+        // A1 references shared string index 0 (rich text)
+        let cell = inner.worksheets[0].get_cell_by_rc(1, 1);
+        let cv = cell.value_raw();
+        assert_eq!(cv.value_type, "RichText");
+        let runs = cv.rich_text.as_ref().expect("should have rich text");
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].text, "Red Bold");
+        assert_eq!(runs[0].font.as_ref().unwrap().bold, Some(true));
+        assert_eq!(runs[0].font.as_ref().unwrap().size, Some(14.0));
+        assert_eq!(runs[1].text, " Normal");
+        assert!(runs[1].font.is_none());
+    }
+
+    #[test]
+    fn test_overlay_shared_string_plain_string_unchanged() {
+        let xml = make_xlsx_shared_strings_rich_text();
+        let inner = workbook_inner_from_bytes(&xml).unwrap();
+        // B1 references shared string index 1 (plain)
+        let cell = inner.worksheets[0].get_cell_by_rc(1, 2);
+        let cv = cell.value_raw();
+        assert_eq!(cv.value_type, "String", "plain shared string should stay String");
+        assert_eq!(cv.string.as_deref(), Some("plain"));
+        assert!(cv.rich_text.is_none());
+    }
+
+    #[test]
+    fn test_overlay_inline_str_not_affected() {
+        let xml = make_xlsx_shared_strings_rich_text();
+        let inner = workbook_inner_from_bytes(&xml).unwrap();
+        // C1 is inline-string rich text — should still work alongside shared-string overlay
+        let cell = inner.worksheets[0].get_cell_by_rc(1, 3);
+        let cv = cell.value_raw();
+        assert_eq!(cv.value_type, "RichText");
+        let runs = cv.rich_text.as_ref().expect("should have inline rich text");
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].text, "Inline");
+        assert_eq!(runs[0].font.as_ref().unwrap().bold, Some(true));
+    }
+
+#[test]
     fn test_rich_text_roundtrip() {
         use crate::model::workbook_inner::WorkbookInner;
         use crate::writer::xlsx::workbook_to_bytes;
@@ -3523,5 +3972,135 @@ mod tests {
             max_col <= 16384,
             "Bug 1: max col {max_col} exceeds 16384 — unbounded range bomb"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Rich-text theme/val color fidelity (Enhancement A)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_rich_text_rpr_val_flags() {
+        let xml = r##"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+        <sheetData><row r="1">
+          <c r="A1" t="inlineStr"><is><r><rPr><b val="0"/><i/><u val="none"/></rPr><t>Flags</t></r></is></c>
+        </row></sheetData></worksheet>"##;
+        let cells = parse_inline_str_rich_text(xml, &ThemeColorScheme::default());
+        let f = cells[0].2[0].font.as_ref().unwrap();
+        assert_eq!(f.bold, Some(false));
+        assert_eq!(f.italic, Some(true));
+        assert_eq!(f.underline, Some(false));
+    }
+
+    #[test]
+    fn test_rich_text_resolves_theme_indexed_auto_default_scheme() {
+        let scheme = ThemeColorScheme::default();
+        let xml = r##"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+        <sheetData><row r="1">
+          <c r="A1" t="inlineStr"><is>
+            <r><rPr><color theme="4" tint="0.5"/></rPr><t>T</t></r>
+            <r><rPr><color indexed="8"/></rPr><t>I</t></r>
+            <r><rPr><color auto="1"/></rPr><t>A</t></r>
+          </is></c>
+        </row></sheetData></worksheet>"##;
+        let cells = parse_inline_str_rich_text(xml, &scheme);
+        assert_eq!(cells[0].2[0].text, "T");
+        assert_eq!(cells[0].2[0].font.as_ref().unwrap().color, scheme.resolve_theme(4, Some(0.5)));
+        assert_eq!(cells[0].2[1].font.as_ref().unwrap().color, scheme.resolve_indexed(8));
+        assert_eq!(cells[0].2[2].font.as_ref().unwrap().color, Some("FF000000".to_string()));
+    }
+
+    fn make_xlsx_rich_text_theme() -> Vec<u8> {
+        use std::io::Write;
+        let mut buf = Vec::new();
+        let options: zip::write::FileOptions<'_, ()> =
+            zip::write::FileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+        {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            zip.start_file("[Content_Types].xml", options).unwrap();
+            write!(zip, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
+</Types>"#).unwrap();
+
+            zip.start_file("_rels/.rels", options).unwrap();
+            write!(zip, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"#).unwrap();
+
+            zip.start_file("xl/workbook.xml", options).unwrap();
+            write!(zip, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>
+</workbook>"#).unwrap();
+
+            zip.start_file("xl/_rels/workbook.xml.rels", options).unwrap();
+            write!(zip, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>"#).unwrap();
+
+            zip.start_file("xl/theme/theme1.xml", options).unwrap();
+            write!(zip, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Custom">
+  <a:themeElements><a:clrScheme name="Custom">
+    <a:dk1><a:srgbClr val="000000"/></a:dk1><a:lt1><a:srgbClr val="FFFFFF"/></a:lt1>
+    <a:dk2><a:srgbClr val="1F497D"/></a:dk2><a:lt2><a:srgbClr val="EEECE1"/></a:lt2>
+    <a:accent1><a:srgbClr val="336699"/></a:accent1>
+    <a:accent2><a:srgbClr val="C0504D"/></a:accent2><a:accent3><a:srgbClr val="9BBB59"/></a:accent3>
+    <a:accent4><a:srgbClr val="F79646"/></a:accent4><a:accent5><a:srgbClr val="8064A2"/></a:accent5>
+    <a:accent6><a:srgbClr val="4BACC6"/></a:accent6>
+    <a:hlink><a:srgbClr val="0000FF"/></a:hlink><a:folHlink><a:srgbClr val="800080"/></a:folHlink>
+  </a:clrScheme></a:themeElements></a:theme>"#).unwrap();
+
+            zip.start_file("xl/worksheets/sheet1.xml", options).unwrap();
+            write!(zip, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="s"><v>0</v></c>
+      <c r="B1" t="inlineStr"><is><r><rPr><b val="0"/><i/><u val="none"/></rPr><t>Flags</t></r></is></c>
+    </row>
+  </sheetData>
+</worksheet>"#).unwrap();
+
+            zip.start_file("xl/sharedStrings.xml", options).unwrap();
+            write!(zip, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="1" uniqueCount="1">
+  <si><r><rPr><color theme="4"/></rPr><t>Themed</t></r></si>
+</sst>"#).unwrap();
+
+            zip.finish().unwrap();
+        }
+        buf
+    }
+
+    #[test]
+    fn test_rich_text_theme_color_end_to_end() {
+        let xml = make_xlsx_rich_text_theme();
+        let inner = workbook_inner_from_bytes(&xml).unwrap();
+
+        let a1 = inner.worksheets[0].get_cell_by_rc(1, 1);
+        let cv = a1.value_raw();
+        assert_eq!(cv.value_type, "RichText");
+        let runs = cv.rich_text.as_ref().unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].text, "Themed");
+        let f = runs[0].font.as_ref().unwrap();
+        assert_eq!(f.color.as_deref(), Some("FF336699"), "theme4 must resolve via custom theme1.xml");
+        assert_ne!(f.color.as_deref(), Some("FF4F81BD"), "must differ from default accent1");
+
+        let b1 = inner.worksheets[0].get_cell_by_rc(1, 2);
+        let cv = b1.value_raw();
+        assert_eq!(cv.value_type, "RichText");
+        let f = cv.rich_text.as_ref().unwrap()[0].font.as_ref().unwrap();
+        assert_eq!(f.bold, Some(false));
+        assert_eq!(f.italic, Some(true));
+        assert_eq!(f.underline, Some(false));
     }
 }

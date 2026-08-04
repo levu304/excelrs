@@ -86,6 +86,8 @@ pub struct StyleTableRead {
     pub fills: Vec<Fill>,
     pub borders: Vec<Border>,
     pub cell_xfs: Vec<ParsedCellXf>,
+    /// Theme color scheme from `xl/theme/theme1.xml` (or OOXML default), reused by rich-text run-font color resolution.
+    pub scheme: ThemeColorScheme,
     /// Differential formats (`<dxfs>`) — referenced by conditional-format rules.
     pub dxfs: Vec<Dxf>,
 }
@@ -118,6 +120,7 @@ impl StyleTableRead {
             fills: Vec::new(),
             borders: Vec::new(),
             cell_xfs: Vec::new(),
+            scheme: ThemeColorScheme::default(),
             dxfs: Vec::new(),
         }
     }
@@ -692,6 +695,7 @@ pub fn parse_style_table(data: &[u8], scheme: &ThemeColorScheme) -> Result<Style
         fills,
         borders,
         cell_xfs,
+        scheme: ThemeColorScheme::default(),
         dxfs: Vec::new(),
     })
 }
@@ -788,6 +792,8 @@ pub fn parse_styles_and_sheet_maps(
         sheet_style_maps.push(map);
     }
 
+    // Expose the resolved theme scheme to callers (rich-text run fonts reuse it).
+    style_table.scheme = scheme;
     Ok((style_table, sheet_style_maps))
 }
 
@@ -1520,6 +1526,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            scheme: ThemeColorScheme::default(),
             dxfs: Vec::new(),
         };
         let style = table.resolve_style(1).unwrap();

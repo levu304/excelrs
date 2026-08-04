@@ -122,6 +122,7 @@ const SYSTEM_INDEXED_COLORS: [&str; 56] = [
 /// | 9     | accent6    | 4BACC6    |
 /// | 10    | hlink      | 0000FF    |
 /// | 11    | folHlink   | 800080    |
+#[derive(Debug, Clone)]
 pub struct ThemeColorScheme {
     /// 12 theme color entries, each a 6-char RGB string (no alpha).
     entries: [String; 12],
