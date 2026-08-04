@@ -1,17 +1,28 @@
 # linux-*musl native addon linking config. [target.<triple>.*] applies only
-# when <triple> is the active build target — gnu/darwin/windows are clear.
-# Per-target [rustflags] takes cargo precedence over the inherited RUSTFLAGS
-# env, so emnapi's -D warnings / -crt-static (appended for *musl) are ignored
-# for musl legs here.
+# when <triple> is the active build target; gnu/darwin/windows are clear.
+# Cargo [target.<triple>.rustflags] takes precedence over the RUSTFLAGS env,
+# so the flags set here win for the plain `cargo build` step (no emnapi
+# -crt-static interference in that step).
 #
-# Both musl targets: rust-std ships a complete self-contained runtime
-# (Scrt1.o, libc.a, libunwind.a); rust-lld links a static, dlopen-safe cdylib.
-# `-linker` is a no-op on *musl (gnu-only granular flag) but keeps the config
-# block non-empty, which makes cargo honor [rustflags] and ignore the RUSTFLAGS
-# env — so emnapi's -crt-static (dynamic, which emits -lgcc_s) is blocked in
-# favor of the default static CRT. No musl-tools / musl-gcc needed.
+# Musl legs use external musl-gcc (musl-tools), which ships a complete static
+# runtime (Scrt1.o, libc.a) that rust-std's self-contained bundle is flaky
+# about (missing Scrt1.o -> "does not support cdylib"). musl-gcc +
+# +crt-static + link-self-contained=no + -static-libgcc -> fully static,
+# dlopen-safe .so (no libgcc_s.so.1 / libc.so runtime deps on host).
 [target.x86_64-unknown-linux-musl]
-rustflags = ["-C", "link-self-contained=-linker"]
+linker = "musl-gcc"
+rustflags = [
+  "-C", "link-self-contained=no",
+  "-C", "target-feature=+crt-static",
+  "-C", "link-arg=-static-libgcc",
+  "-C", "link-arg=-s",
+]
 
 [target.aarch64-unknown-linux-musl]
-rustflags = ["-C", "link-self-contained=-linker"]
+linker = "musl-gcc"
+rustflags = [
+  "-C", "link-self-contained=no",
+  "-C", "target-feature=+crt-static",
+  "-C", "link-arg=-static-libgcc",
+  "-C", "link-arg=-s",
+]

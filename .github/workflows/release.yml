@@ -65,6 +65,9 @@ jobs:
       - name: Add Rust target for musl
         if: ${{ matrix.musl }}
         run: rustup target add ${{ matrix.target }}
+      - name: "Install musl-tools (musl legs: musl-gcc static runtime)"
+        if: ${{ matrix.musl }}
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Install Node.js 22.14.0
         uses: >-
