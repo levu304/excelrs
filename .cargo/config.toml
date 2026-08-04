@@ -2,7 +2,7 @@
 # Cargo only honors [target.*] when that target is selected, so native
 # gnu/darwin/windows builds are unaffected.
 # Self-contained linking bundles rust-lld + the musl target's static
-# libc.a/libgcc.a (shipped via `rustup target add <triple>`), so NO
+# libc.a + libunwind.a (shipped via `rustup target add <triple>`), so NO
 # external C toolchain (musl-tools/musl-gcc) is needed and the produced
 # cdylib is fully static / portable across glibc/musl hosts.
 # Why not musl-gcc: the gnu gcc runtime (-lgcc_s / libgcc_s.so.1) it pulls

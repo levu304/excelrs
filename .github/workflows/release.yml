@@ -57,17 +57,14 @@ jobs:
           actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
         with:
           cache: true
-          cache-key: cargo-${{ hashFiles('**/Cargo.lock') }}
+          # Per-target cache key: setup-rust-toolchain caches ~/.rustup too.
+          # A shared Cargo.lock key let x64 cache poison arm64 musl rust-std
+          # (cross-arch restore dropped its self-contained runtime).
+          cache-key: ${{ hashFiles('**/Cargo.lock') }}-${{ matrix.target }}
 
       - name: Add Rust target for musl
         if: ${{ matrix.musl }}
-        run: |
-          rustup target add ${{ matrix.target }}
-          echo "rustc: $(rustc --version --verbose)"
-          sys="$(rustc --print sysroot)"
-          d="$sys/lib/rustlib/${{ matrix.target }}/lib"
-          echo "dir=$d"; ls "$d" 2>&1
-          echo "self_contained="; ls "$d/self_contained" 2>&1
+        run: rustup target add ${{ matrix.target }}
 
       - name: Install Node.js 22.14.0
         uses: >-
@@ -89,10 +86,11 @@ jobs:
           npx napi build --platform --release --target ${{ matrix.target }}
           --features formula-eval --js native.js
 
-      - name: Smoke-load musl native binding
+      - name: Smoke-load musl native binding (assert static + dlopen)
         if: ${{ matrix.musl }}
-        run: >-
-          node -e "require('./excelrs.${{ matrix.npm_dir }}.node')"
+        run: |
+          ldd excelrs.${{ matrix.npm_dir }}.node || true
+          node -e "require('./excelrs.${{ matrix.npm_dir }}.node")
 
       - name: Run Rust clippy (formula-eval)
         run: cargo clippy --features formula-eval -- -D warnings
@@ -388,6 +386,7 @@ jobs:
           rm -rf "$SMOKE_DIR"
 
       - name: Create GitHub Release
+        if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
