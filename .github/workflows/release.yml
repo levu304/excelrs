@@ -63,10 +63,11 @@ jobs:
         if: ${{ matrix.musl }}
         run: |
           rustup target add ${{ matrix.target }}
+          echo "rustc: $(rustc --version --verbose)"
           sys="$(rustc --print sysroot)"
-          ls "$sys/lib/rustlib/${{ matrix.target }}/lib" \
-            | grep -E 'libc.a|libgcc.a|crt1.o' \
-            || echo "MISSING static musl libs"
+          d="$sys/lib/rustlib/${{ matrix.target }}/lib"
+          echo "dir=$d"; ls "$d" 2>&1
+          echo "self_contained="; ls "$d/self_contained" 2>&1
 
       - name: Install Node.js 22.14.0
         uses: >-
