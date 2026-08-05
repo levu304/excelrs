@@ -64,11 +64,14 @@ jobs:
 
       - name: Add Rust target for musl
         if: ${{ matrix.musl }}
-        # remove+add forces a complete ruststd (bundled self-contained Scrt1.o);
-        # stale setup-rust cache omits it -> "does not support cdylib".
+        # rust-lld self-contained DROPS the cdylib crate type on *-musl
+        # (rust 1.97.1); the Build step links via external `musl-gcc`.
         run: |
           rustup target remove ${{ matrix.target }} 2>/dev/null || true
           rustup target add ${{ matrix.target }}
+      - name: "Install musl-tools (musl legs: musl-gcc linker)"
+        if: ${{ matrix.musl }}
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Install Node.js 22.14.0
         uses: >-
@@ -85,10 +88,13 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: "Build native addon (musl: plain cargo + rust-lld self-contained)"
+      - name: "Build native addon (musl: cargo + musl-gcc static link)"
         if: ${{ matrix.musl }}
         run: |
           cargo clean --target ${{ matrix.target }}
+          export RUSTFLAGS="-C target-feature=-crt-static -D warnings"
+          export RUSTFLAGS="$RUSTFLAGS -C link-arg=-static-libgcc"
+          export RUSTFLAGS="$RUSTFLAGS -C link-arg=-s"
           cargo build --release --target ${{ matrix.target }} \
             --features formula-eval
           npx napi build --platform --release --target ${{ matrix.target }} \

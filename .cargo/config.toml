@@ -1,9 +1,12 @@
-# linux-*musl native addon linking. The Build step runs a plain
-# `cargo build --target <triple>` (NOT emnapi), so emnai's
-# `-C target-feature=-crt-static` RUSTFLAGS env is never introduced.
-#
-# rust-std's default for *-musl is self-contained rust-lld (bundled libc.a +
-# Scrt1.o + libunwind.a), which links a static, dlopen-safe cdylib with no
-# external toolchain. No musl-tools / musl-gcc needed. `rustup target add` in
-# the workflow force-downloads a complete rust-std (self-contained Scrt1.o) so
-# cargo doesn't hit "does not support these crate types".
+# *-musl native addon linking. The Build step sets
+# RUSTFLAGS="-C target-feature=-crt-static ..." which forces rustc off
+# self-contained -> external `musl-gcc` (musl-tools). rust 1.97.1 drops the
+# `cdylib` crate type under self-contained, so the external musl-gcc path is
+# mandatory. musl-tools ships a static libc.a + libgcc.a, and
+# `-static-libgcc` (link-arg) forces libgcc.a over libgcc_s.so.1, producing a
+# fully static, dlopen-safe .so (no libc.so.6 / libgcc_s.so.1 runtime deps).
+[target.x86_64-unknown-linux-musl]
+linker = "musl-gcc"
+
+[target.aarch64-unknown-linux-musl]
+linker = "musl-gcc"
