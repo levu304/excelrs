@@ -155,7 +155,7 @@ test('cell.valueOf discriminated union narrows on valueType', () => {
   // Narrow via valueType — TS prevents accessing richText on other variants
   const cv = cell.valueOf
   if (cv.valueType === 'RichText') {
-    expect(cv.richText.length).toBe(2)
+    expect(cv.richText?.length).toBe(2)
   } else {
     // Should never reach here for a RichText cell
     expect(true).toBe(false)

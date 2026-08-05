@@ -1,3 +1,5 @@
+import type { CellValueInput } from './native'
+
 type CellSimpleValue = number | string | boolean | null
 type CellValueResult = CellSimpleValue | Date | CellValue/**
  * A single cell in a worksheet.
@@ -21,7 +23,7 @@ export declare class Cell {
    * 2. `CellValue` object / other objects → `Null` (round-trip via object is not supported)
    * 3. `serde_json::Value` fallback (Number, String, Bool, Null)
    */
-  set value(val: unknown)
+  set value(val: CellValueInput | string | number | boolean | Date | null)
   get address(): string
   get row(): number
   get col(): number
@@ -135,6 +137,10 @@ export declare class Row {
    * This is the Rust backing for `Row.getCell(col: string)`.
    */
   getCellByColLetter(colLetter: string): Cell
+  /** Get cell by 1-indexed column number (JS glue → getCellByColNum). */
+  getCell(col: number): Cell
+  /** Get cell by column letter (JS glue → getCellByColLetter). */
+  getCell(col: string): Cell
 }
 
 /**
@@ -439,6 +445,10 @@ export declare class Worksheet {
    * Creates the row (and cell) if absent.
    */
   getCellByRc(row: number, col: number): Cell
+  /** Get cell by A1-style address string (JS glue → getCellByAddress). */
+  getCell(address: string): Cell
+  /** Get cell by 1-indexed row and column numbers (JS glue → getCellByRc). */
+  getCell(row: number, col: number): Cell
   /** Get row by 1-indexed row number. Creates the row if it doesn't exist. */
   getRow(rowNumber: number): Row
   /** Add a row of cell values. Returns the created Row. */
