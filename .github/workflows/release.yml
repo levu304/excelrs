@@ -128,7 +128,7 @@ jobs:
         if: ${{ matrix.musl }}
         run: |
           f=excelrs.${{ matrix.npm_dir }}.node
-          node --no-warnings scripts/musl-smoke-test.cjs "$f"
+          node --no-warnings scripts/musl-smoke-test.cjs "$PWD/$f"
       - name: Smoke-test musl binding on Alpine (musl-host dlopen + round-trip)
         if: ${{ matrix.musl }}
         continue-on-error: true
