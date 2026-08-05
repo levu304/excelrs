@@ -110,8 +110,12 @@ jobs:
       - name: Smoke-load musl native binding (assert static + dlopen)
         if: ${{ matrix.musl }}
         run: |
-          ldd excelrs.${{ matrix.npm_dir }}.node || true
-          node -e "require('./excelrs.${{ matrix.npm_dir }}.node')"
+          f=excelrs.${{ matrix.npm_dir }}.node
+          readelf -d "$f" | grep NEEDED || true
+          readelf -l "$f" | grep -iE "interp|tls" || true
+          nm -D "$f" | grep -i napi_register || true
+          ldd "$f" || true
+          node -e "require('./$f')"
 
       - name: Run Rust clippy (formula-eval)
         run: cargo clippy --features formula-eval -- -D warnings
