@@ -131,9 +131,7 @@ jobs:
           docker run --rm \
             -v "$PWD/$f:/w/$f" \
             -v "$PWD/scripts/musl-smoke-test.cjs:/w/smoke.cjs" \
-            node:20-alpine sh -c '
-            node --no-warnings /w/smoke.cjs /w/$f
-          '
+            node:20-alpine node --no-warnings /w/smoke.cjs "/w/$f"
       - name: Smoke-test arm64-musl binary on glibc arm64
         if: ${{ matrix.target == 'aarch64-unknown-linux-musl' }}
         run: |
