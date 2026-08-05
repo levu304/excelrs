@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# musl-gcc: thin wrapper over `musl-gcc` that links a *dynamically*-linked
+# musl cdylib for rustc 1.97.1 *-musl. Under `-C target-feature=-crt-static`
+# rustc goes off self-contained and emits a dynamic link
+# (`-Wl,-Bdynamic -lgcc_s -lc`); we let musl-gcc resolve those against the
+# musl toolchain so the .so ends up NEEDED libc.musl-*.so.1.
+#
+# A FULLY-STATIC musl cdylib segfaults on dlopen (musl's static
+# TLS/pthread init conflicts with the host libc, even on a musl host where
+# two musl instances collide) — SIGSEGV 139. napi .node files must link musl
+# libc dynamically so they dlopen cleanly on musl hosts (Alpine).
+set -euo pipefail
+exec musl-gcc "$@"

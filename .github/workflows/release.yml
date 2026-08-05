@@ -88,16 +88,15 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: "Build native addon (musl: cargo + musl-gcc-static link)"
+      - name: "Build native addon (musl: cargo + musl-gcc link)"
         if: ${{ matrix.musl }}
         run: |
           T=${{ matrix.target }}
           T_ENV=$(echo "$T" | tr '[:lower:]-' '[:upper:]_')
-          export "CARGO_TARGET_${T_ENV}_LINKER=musl-gcc-static"
+          export "CARGO_TARGET_${T_ENV}_LINKER=musl-gcc"
           export PATH="$GITHUB_WORKSPACE/scripts:$PATH"
           cargo clean --target "$T"
           export RUSTFLAGS="-C target-feature=-crt-static -D warnings"
-          export RUSTFLAGS="$RUSTFLAGS -C link-arg=-static-libgcc"
           export RUSTFLAGS="$RUSTFLAGS -C link-arg=-s"
           npx napi build --platform --release --target "$T" \
             --features formula-eval --js native.js
@@ -107,33 +106,29 @@ jobs:
           npx napi build --platform --release --target ${{ matrix.target }}
           --features formula-eval --js native.js
 
-      # Recipe B: static-musl cdylib carries its own libc.a; gdb proved its
-      # getauxval/init_have_lse_atomics conflicts with glibc ld.so auxv at
-      # dlopen on this glibc CI runner (SIGSEGV 139). Assert static linkage
-      # here; do NOT require() on glibc. Alpine (musl-host) dlopen smoke below.
-      - name: Assert musl binary is fully static (no NEEDED)
+      # Musl cdylib links musl libc dynamically (NEEDED libc.musl-*.so.1) so it
+      # dlopen's cleanly on musl hosts. A fully-static musl cdylib segfaults on
+      # dlopen (SIGSEGV 139: static TLS/pthread init collides with host libc),
+      # so assert DYNAMIC musl linkage, never glibc (libc.so.6).
+      - name: Assert musl binary links musl libc (dynamic, no glibc)
         if: ${{ matrix.musl }}
         run: |
           f=excelrs.${{ matrix.npm_dir }}.node
-          if readelf -d "$f" | grep -q NEEDED; then
-            echo "FAIL: binary has dynamic dependencies (not fully static):"
+          if readelf -d "$f" | grep -q 'libc.so.6'; then
+            echo "FAIL: binary links glibc (libc.so.6) — not musl:"
             readelf -d "$f" | grep NEEDED
             exit 1
           fi
-          echo "✓ no NEEDED entries — fully static"
+          if ! readelf -d "$f" | grep -q NEEDED; then
+            echo "FAIL: no dynamic deps — expected musl libc linkage"
+            exit 1
+          fi
+          echo "✓ dynamically linked against musl libc"
           nm -D "$f" | grep -q napi_register
           echo "✓ napi_register symbol present"
           ldd "$f" 2>&1 || true
-      - name: Smoke-test musl binding on glibc host
-        if: ${{ matrix.musl }}
-        run: |
-          f=excelrs.${{ matrix.npm_dir }}.node
-          node --no-warnings scripts/musl-smoke-test.cjs "$PWD/$f"
       - name: Smoke-test musl binding on Alpine (musl-host dlopen + round-trip)
         if: ${{ matrix.musl }}
-        continue-on-error: true
-        env:
-          RUST_MIN_STACK: 8388608
         run: |
           f=excelrs.${{ matrix.npm_dir }}.node
           docker run --rm \

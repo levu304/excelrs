@@ -1,13 +1,12 @@
 # *-musl cdylib. rust-lld self-contained DROPS the cdylib crate type on
 # *-musl (rust 1.97.1), so a musl cdylib must link via an external musl
 # toolchain. RUSTFLAGS (Build step) carries `-C target-feature=-crt-static`
-# which switches rustc off self-contained -> external linker. We point the
-# linker at `scripts/musl-gcc-static` (on PATH via the Build step): a wrapper
-# over musl-gcc that rewrites rustc's dynamic link args (-Bdynamic/-lgcc_s)
-# to static (-Bstatic/-lgcc), so musl libc.a + libgcc.a link in and the .so
-# ends fully static (no libc.so.6 / libgcc_s.so.1 at runtime).
+# (crt-static OFF) which switches rustc off self-contained -> external
+# linker. We point the linker at `scripts/musl-gcc` (on PATH via the Build
+# step): a thin wrapper over musl-gcc that links musl libc *dynamically*
+# (NEEDED libc.musl-*.so.1) so the .node dlopen's cleanly on musl hosts.
 [target.x86_64-unknown-linux-musl]
-linker = "musl-gcc-static"
+linker = "musl-gcc"
 
 [target.aarch64-unknown-linux-musl]
-linker = "musl-gcc-static"
+linker = "musl-gcc"
