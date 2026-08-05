@@ -88,9 +88,10 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: "Build native addon (musl: cargo + musl-gcc static link)"
+      - name: "Build native addon (musl: cargo + musl-gcc-static link)"
         if: ${{ matrix.musl }}
         run: |
+          export PATH="$GITHUB_WORKSPACE/scripts:$PATH"
           cargo clean --target ${{ matrix.target }}
           export RUSTFLAGS="-C target-feature=-crt-static -D warnings"
           export RUSTFLAGS="$RUSTFLAGS -C link-arg=-static-libgcc"

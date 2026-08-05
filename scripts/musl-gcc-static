@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# musl-gcc-static: thin wrapper over `musl-gcc` that links a fully-static
+# shared cdylib (no NEEDED libc.so/libc.so.6/libgcc_s.so.1) for rustc 1.97.1
+# `*-musl`. Under `-C target-feature=-crt-static` rustc goes off
+# self-contained and emits a *dynamic* link: `-Wl,-Bdynamic -lgcc_s -lc`.
+# musl-tools ships libc.a (static, PIC) and libgcc.a but no libgcc_s.so.1, so
+# we rewrite those two tokens to their static counterparts, then hand off to
+# `musl-gcc`. musl-gcc must be on PATH (apt musl-tools).
+set -euo pipefail
+args=()
+for a in "$@"; do
+  case "$a" in
+    -Wl,-Bdynamic) a="-Wl,-Bstatic" ;;
+    -lgcc_s)       a="-lgcc" ;;
+  esac
+  args+=("$a")
+done
+exec musl-gcc "${args[@]}"
