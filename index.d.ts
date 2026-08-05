@@ -1,6 +1,19 @@
-import type { CellValueInput } from './native'
-
 type CellSimpleValue = number | string | boolean | null
+
+// Inline cell-value input type (mirrors native.d.ts but avoids importing
+// from the gitignored, CI-pre-typecheck native.d.ts so typecheck passes
+// before napi build generates it).
+type CellValueInput =
+  | { valueType?: "Null" }
+  | { valueType?: "Number"; number: number }
+  | { valueType?: "String"; string: string }
+  | { valueType?: "Boolean"; boolean: boolean }
+  | { valueType?: "Date"; dateSerial: number }
+  | { valueType?: "Formula"; formula: string; number?: number; string?: string; boolean?: boolean; errorValue?: string; dateSerial?: number }
+  | { valueType?: "Error"; errorValue: string }
+  | { valueType?: "Hyperlink"; hyperlink: string; hyperlinkText?: string }
+  | { valueType?: "RichText"; richText: Array<RichTextRun> }
+  | { valueType?: "Merge" };
 type CellValueResult = CellSimpleValue | Date | CellValue/**
  * A single cell in a worksheet.
  *
