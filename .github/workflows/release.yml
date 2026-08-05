@@ -107,7 +107,11 @@ jobs:
           npx napi build --platform --release --target ${{ matrix.target }}
           --features formula-eval --js native.js
 
-      - name: Smoke-load musl native binding (assert static + dlopen)
+      # Recipe B: static-musl cdylib carries its own libc.a; gdb proved its
+      # getauxval/init_have_lse_atomics conflicts with glibc ld.so auxv at
+      # dlopen on this glibc CI runner (SIGSEGV 139). Assert static linkage
+      # here; do NOT require() on glibc. Alpine (musl-host) dlopen smoke below.
+      - name: Smoke-load musl native binding (assert static; deps empty)
         if: ${{ matrix.musl }}
         run: |
           f=excelrs.${{ matrix.npm_dir }}.node
@@ -115,7 +119,14 @@ jobs:
           readelf -l "$f" | grep -iE "interp|tls" || true
           nm -D "$f" | grep -i napi_register || true
           ldd "$f" || true
-          node -e "require('./$f')"
+      - name: Smoke-load musl binding on Alpine (musl-host dlopen, Recipe B)
+        if: ${{ matrix.musl }}
+        run: |
+          f=excelrs.${{ matrix.npm_dir }}.node
+          docker run --rm -v "$PWD/$f:/w/$f" node:20-alpine sh -c '
+            node -e "require(\"/w/$f\")"
+          '
+
 
       - name: Run Rust clippy (formula-eval)
         run: cargo clippy --features formula-eval -- -D warnings
