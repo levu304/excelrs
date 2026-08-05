@@ -111,21 +111,34 @@ jobs:
       # getauxval/init_have_lse_atomics conflicts with glibc ld.so auxv at
       # dlopen on this glibc CI runner (SIGSEGV 139). Assert static linkage
       # here; do NOT require() on glibc. Alpine (musl-host) dlopen smoke below.
-      - name: Smoke-load musl native binding (assert static; deps empty)
+      - name: Assert musl binary is fully static (no NEEDED)
         if: ${{ matrix.musl }}
         run: |
           f=excelrs.${{ matrix.npm_dir }}.node
-          readelf -d "$f" | grep NEEDED || true
-          readelf -l "$f" | grep -iE "interp|tls" || true
-          nm -D "$f" | grep -i napi_register || true
-          ldd "$f" || true
-      - name: Smoke-load musl binding on Alpine (musl-host dlopen, Recipe B)
+          if readelf -d "$f" | grep -q NEEDED; then
+            echo "FAIL: binary has dynamic dependencies (not fully static):"
+            readelf -d "$f" | grep NEEDED
+            exit 1
+          fi
+          echo "✓ no NEEDED entries — fully static"
+          nm -D "$f" | grep -q napi_register
+          echo "✓ napi_register symbol present"
+          ldd "$f" 2>&1 || true
+      - name: Smoke-test musl binding on Alpine (musl-host dlopen + round-trip)
         if: ${{ matrix.musl }}
         run: |
           f=excelrs.${{ matrix.npm_dir }}.node
-          docker run --rm -v "$PWD/$f:/w/$f" node:20-alpine sh -c '
-            node -e "require(\"/w/$f\")"
+          docker run --rm \
+            -v "$PWD/$f:/w/$f" \
+            -v "$PWD/scripts/musl-smoke-test.cjs:/w/smoke.cjs" \
+            node:20-alpine sh -c '
+            node --no-warnings /w/smoke.cjs /w/$f
           '
+      - name: Smoke-test arm64-musl binary on glibc arm64
+        if: ${{ matrix.target == 'aarch64-unknown-linux-musl' }}
+        run: |
+          f=excelrs.${{ matrix.npm_dir }}.node
+          node --no-warnings scripts/musl-smoke-test.cjs "$f"
 
 
       - name: Run Rust clippy (formula-eval)

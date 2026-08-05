@@ -18,7 +18,7 @@
 
 ## 4. Verification
 
-- [ ] 4.1 CI: the two new musl matrix legs build and upload `excelrs.linux-*-musl.node` artifacts without failing the gnu/darwin/windows legs.
-- [ ] 4.2 Smoke test: the musl x64 binary loads in a Node.js process and round-trips a styled workbook (write + read back, assert style preserved).
-- [ ] 4.3 Smoke test: the musl arm64 binary loads on an arm64 host (static-link load on glibc arm64).
+- [x] 4.1 CI: the two new musl matrix legs build and upload `excelrs.linux-*-musl.node` artifacts without failing the gnu/darwin/windows legs.
+- [x] 4.2 Smoke test: the musl x64 binary loads in a Node.js process and round-trips a styled workbook (write + read back, assert style preserved).
+- [x] 4.3 Smoke test: the musl arm64 binary loads on an arm64 host (static-link load on glibc arm64).
 - [x] 4.4 `openspec validate --strict` passes for this change.
