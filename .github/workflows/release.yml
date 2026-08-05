@@ -91,15 +91,16 @@ jobs:
       - name: "Build native addon (musl: cargo + musl-gcc-static link)"
         if: ${{ matrix.musl }}
         run: |
+          T=${{ matrix.target }}
+          T_ENV=$(echo "$T" | tr '[:lower:]-' '[:upper:]_')
+          export "CARGO_TARGET_${T_ENV}_LINKER=musl-gcc-static"
           export PATH="$GITHUB_WORKSPACE/scripts:$PATH"
-          cargo clean --target ${{ matrix.target }}
+          cargo clean --target "$T"
           export RUSTFLAGS="-C target-feature=-crt-static -D warnings"
           export RUSTFLAGS="$RUSTFLAGS -C link-arg=-static-libgcc"
           export RUSTFLAGS="$RUSTFLAGS -C link-arg=-s"
-          cargo build --release --target ${{ matrix.target }} \
-            --features formula-eval
-          npx napi build --platform --release --target ${{ matrix.target }} \
-            --no-build --js native.js
+          npx napi build --platform --release --target "$T" \
+            --features formula-eval --js native.js
       - name: "Build native addon (non-musl: emnapi default)"
         if: ${{ !matrix.musl }}
         run: >-
