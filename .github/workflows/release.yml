@@ -15,6 +15,16 @@ jobs:
     permissions:
       contents: read
 
+    # Fail wedged runners fast instead of burning the 6h GitHub ceiling
+    # (a hung musl build never lets the cargo cache persist).
+    timeout-minutes: 45
+
+    # sccache persists compiled-crate objects to the GHA cache incrementally,
+    # so even a timed-out/cancelled build leaves a warm cache for the retry.
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
+
     strategy:
       fail-fast: false
       matrix:
@@ -51,6 +61,9 @@ jobs:
           actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
+
+      - name: Sccache (cache Rust compiles across CI runs)
+        uses: mozilla-actions/sccache-action@v0.0.10
 
       - name: Install Rust
         uses: >-
@@ -98,13 +111,13 @@ jobs:
           cargo clean --target "$T"
           export RUSTFLAGS="-C target-feature=-crt-static -C lto=off"
           export RUSTFLAGS="$RUSTFLAGS -D warnings -C link-arg=-s"
-          npx napi build --platform --release --target "$T" \
+          pnpm exec napi build --platform --release --target "$T" \
             --features formula-eval --js native.js
       - name: "Build native addon (non-musl: emnapi default)"
         if: ${{ !matrix.musl }}
         run: >-
-          npx napi build --platform --release --target ${{ matrix.target }}
-          --features formula-eval --js native.js
+          pnpm exec napi build --platform --release
+          --target ${{ matrix.target }} --features formula-eval --js native.js
 
       # Musl cdylib links musl libc dynamically (NEEDED libc.musl-*.so.1) so it
       # dlopen's cleanly on musl hosts. A fully-static musl cdylib segfaults on
