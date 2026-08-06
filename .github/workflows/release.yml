@@ -96,8 +96,8 @@ jobs:
           export "CARGO_TARGET_${T_ENV}_LINKER=musl-gcc"
           export PATH="$GITHUB_WORKSPACE/scripts:$PATH"
           cargo clean --target "$T"
-          export RUSTFLAGS="-C target-feature=-crt-static -D warnings"
-          export RUSTFLAGS="$RUSTFLAGS -C link-arg=-s"
+          export RUSTFLAGS="-C target-feature=-crt-static -C lto=off"
+          export RUSTFLAGS="$RUSTFLAGS -D warnings -C link-arg=-s"
           npx napi build --platform --release --target "$T" \
             --features formula-eval --js native.js
       - name: "Build native addon (non-musl: emnapi default)"
