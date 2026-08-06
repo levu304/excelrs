@@ -1,6 +1,6 @@
 ## 1. Toolchain & local dev parity
 
-- [x] 1.1 Create `.cargo/config.toml` pinning `musl-gcc` as the linker for `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` targets (guarded so it does not affect gnu/darwin/windows builds).
+- [x] 1.1 Build musl via `cargo-zigbuild` (`napi build --cross-compile`) with `-C target-feature=-crt-static` for dynamic musl linkage; `.cargo/config.toml` documents this and the `-C linker-plugin-lto=off` workaround for the rustc-1.97 / zig-0.14 (LLVM 21) bitcode mismatch. Does not affect gnu/darwin/windows builds.
 - [x] 1.2 Add `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` to `package.json` `napi.targets` so local `napi build --platform` covers musl.
 
 ## 2. Release build matrix
