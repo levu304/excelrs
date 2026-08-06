@@ -4,11 +4,27 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Skip npm publish; build artifacts only (draft validation)"
+        type: boolean
+        default: false
 
 jobs:
   build:
     permissions:
       contents: read
+
+    # Cold musl builds compile the whole dep tree + link via musl-gcc/mold,
+    # which is fast (bfd wedged CI at 45m; mold links in seconds). 120m is a
+    # generous safety cap for a first cold run that still builds everything.
+    timeout-minutes: 120
+
+    # sccache persists compiled-crate objects to the GHA cache incrementally,
+    # so even a timed-out/cancelled build leaves a warm cache for the retry.
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
 
     strategy:
       fail-fast: false
@@ -17,15 +33,27 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-14
             npm_dir: darwin-arm64
+            musl: false
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-22.04
             npm_dir: linux-x64-gnu
+            musl: false
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-22.04-arm
             npm_dir: linux-arm64-gnu
+            musl: false
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-22.04
+            npm_dir: linux-x64-musl
+            musl: true
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-22.04-arm
+            npm_dir: linux-arm64-musl
+            musl: true
           - target: x86_64-pc-windows-msvc
             os: windows-2022
             npm_dir: win32-x64-msvc
+            musl: false
 
     runs-on: ${{ matrix.os }}
 
@@ -35,12 +63,29 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Sccache (cache Rust compiles across CI runs)
+        uses: mozilla-actions/sccache-action@v0.0.10
+
       - name: Install Rust
         uses: >-
           actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
         with:
           cache: true
-          cache-key: cargo-${{ hashFiles('**/Cargo.lock') }}
+          # Per-target cache key: setup-rust-toolchain caches ~/.rustup too.
+          # A shared Cargo.lock key let x64 cache poison arm64 musl rust-std
+          # (cross-arch restore dropped its self-contained runtime).
+          cache-key: ${{ hashFiles('**/Cargo.lock') }}-${{ matrix.target }}
+
+      - name: Add Rust target for musl
+        if: ${{ matrix.musl }}
+        # rust-lld self-contained DROPS the cdylib crate type on *-musl
+        # (rust 1.97.1); the Build step links via cargo-zigbuild (zig lld).
+        run: |
+          rustup target remove ${{ matrix.target }} 2>/dev/null || true
+          rustup target add ${{ matrix.target }}
+      - name: "Install cargo-zigbuild (musl: napi --cross-compile)"
+        if: ${{ matrix.musl }}
+        run: pip3 install cargo-zigbuild
 
       - name: Install Node.js 22.14.0
         uses: >-
@@ -57,11 +102,51 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Build native addon
+      - name: "Build native addon (musl: cargo-zigbuild + zig lld)"
+        if: ${{ matrix.musl }}
+        run: |
+          T=${{ matrix.target }}
+          export RUSTFLAGS="-C target-feature=-crt-static -C lto=off"
+          export RUSTFLAGS="$RUSTFLAGS -C linker-plugin-lto=off"
+          export RUSTFLAGS="$RUSTFLAGS -D warnings -C link-arg=-s"
+          pnpm exec napi build --cross-compile \
+            --platform --release --target "$T" \
+            --features formula-eval --js native.js
+      - name: "Build native addon (non-musl: emnapi default)"
+        if: ${{ !matrix.musl }}
         run: >-
-          npx napi build --platform --release --features formula-eval
-          --js native.js
+          pnpm exec napi build --platform --release
+          --target ${{ matrix.target }} --features formula-eval --js native.js
 
+      # Musl cdylib links musl libc dynamically (NEEDED libc.musl-*.so.1) so it
+      # dlopen's cleanly on musl hosts. A fully-static musl cdylib segfaults on
+      # dlopen (SIGSEGV 139: static TLS/pthread init collides with host libc),
+      # so assert DYNAMIC musl linkage, never glibc (libc.so.6).
+      - name: Assert musl binary links musl libc (dynamic, no glibc)
+        if: ${{ matrix.musl }}
+        run: |
+          f=excelrs.${{ matrix.npm_dir }}.node
+          if readelf -d "$f" | grep -q 'libc.so.6'; then
+            echo "FAIL: binary links glibc (libc.so.6) — not musl:"
+            readelf -d "$f" | grep NEEDED
+            exit 1
+          fi
+          if ! readelf -d "$f" | grep -q NEEDED; then
+            echo "FAIL: no dynamic deps — expected musl libc linkage"
+            exit 1
+          fi
+          echo "✓ dynamically linked against musl libc"
+          nm -D "$f" | grep -q napi_register
+          echo "✓ napi_register symbol present"
+          ldd "$f" 2>&1 || true
+      - name: Smoke-test musl binding on Alpine (musl-host dlopen + round-trip)
+        if: ${{ matrix.musl }}
+        run: |
+          f=excelrs.${{ matrix.npm_dir }}.node
+          docker run --rm \
+            -v "$PWD/$f:/w/$f" \
+            -v "$PWD/scripts/musl-smoke-test.cjs:/w/smoke.cjs" \
+            node:20-alpine node --no-warnings /w/smoke.cjs "/w/$f"
       - name: Run Rust clippy (formula-eval)
         run: cargo clippy --features formula-eval -- -D warnings
 
@@ -72,11 +157,14 @@ jobs:
         run: cargo test --features formula-eval
 
       - name: Run JS tests
+        if: ${{ !matrix.musl }}
         run: pnpm test
       - name: Streaming smoke test
+        if: ${{ !matrix.musl }}
         run: node scripts/streaming-smoke.cjs
 
       - name: Validate napi enum bindings
+        if: ${{ !matrix.musl }}
         run: |
           node -e "
             const e = require('./index.js');
@@ -174,6 +262,26 @@ jobs:
             "repository": "https://github.com/levu304/excelrs"
           }
           EOF
+          cat > npm/linux-x64-musl/package.json <<EOF
+          {
+            "name": "@levu304/excelrs-linux-x64-musl",
+            "version": "$VERSION",
+            "os": ["linux"],
+            "cpu": ["x64"],
+            "main": "excelrs.linux-x64-musl.node",
+            "repository": "https://github.com/levu304/excelrs"
+          }
+          EOF
+          cat > npm/linux-arm64-musl/package.json <<EOF
+          {
+            "name": "@levu304/excelrs-linux-arm64-musl",
+            "version": "$VERSION",
+            "os": ["linux"],
+            "cpu": ["arm64"],
+            "main": "excelrs.linux-arm64-musl.node",
+            "repository": "https://github.com/levu304/excelrs"
+          }
+          EOF
           cat > npm/win32-x64-msvc/package.json <<EOF
           {
             "name": "@levu304/excelrs-win32-x64-msvc",
@@ -187,12 +295,14 @@ jobs:
           echo "Platform package.json files created"
 
       - name: Publish platform packages
+        if: ${{ !inputs.dry_run }}
         run: |
           for dir in npm/*/; do
             (cd "$dir" && npm publish --access public) || exit 1
           done
 
       - name: Publish to npm (main package)
+        if: ${{ !inputs.dry_run }}
         run: |
           node -e "
             const pkg = require('./package.json');
@@ -200,6 +310,8 @@ jobs:
               '@levu304/excelrs-darwin-arm64': pkg.version,
               '@levu304/excelrs-linux-x64-gnu': pkg.version,
               '@levu304/excelrs-linux-arm64-gnu': pkg.version,
+              '@levu304/excelrs-linux-x64-musl': pkg.version,
+              '@levu304/excelrs-linux-arm64-musl': pkg.version,
               '@levu304/excelrs-win32-x64-msvc': pkg.version
             };
             require('fs').writeFileSync(
@@ -209,7 +321,8 @@ jobs:
           "
           npm publish --access public
 
-      - name: Verify all 5 packages on npm
+      - name: Verify all 7 packages on npm
+        if: ${{ !inputs.dry_run }}
         run: |
           set -e
           VERSION=$(node -p "require('./package.json').version")
@@ -217,6 +330,8 @@ jobs:
                      @levu304/excelrs-darwin-arm64 \
                      @levu304/excelrs-linux-x64-gnu \
                      @levu304/excelrs-linux-arm64-gnu \
+                     @levu304/excelrs-linux-x64-musl \
+                     @levu304/excelrs-linux-arm64-musl \
                      @levu304/excelrs-win32-x64-msvc; do
             for attempt in 1 2 3 4 5; do
               published=$(npm view "$pkg@$VERSION" version \
@@ -326,6 +441,7 @@ jobs:
           rm -rf "$SMOKE_DIR"
 
       - name: Create GitHub Release
+        if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-

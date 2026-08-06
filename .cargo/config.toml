@@ -1,0 +1,8 @@
+# *-musl cdylib. We build via cargo-zigbuild (napi build --cross-compile),
+# which links musl libc through zig's bundled lld — fast, and avoids the
+# musl-gcc/bfd link that wedged CI. rustc 1.97 emits LLVM 22 bitcode that
+# zig's lld (LLVM 21) can't parse, so RUSTFLAGS (Build step) carries
+# `-C linker-plugin-lto=off` to emit plain ELF objects. `-C target-feature
+# =-crt-static` (crt-static OFF) links musl libc *dynamically* (NEEDED
+# libc.musl-*.so.1) so the .node dlopen's cleanly on musl hosts; the Assert
+# musl step fails the build if linkage regresses.

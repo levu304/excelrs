@@ -1,4 +1,19 @@
 type CellSimpleValue = number | string | boolean | null
+
+// Inline cell-value input type (mirrors native.d.ts but avoids importing
+// from the gitignored, CI-pre-typecheck native.d.ts so typecheck passes
+// before napi build generates it).
+type CellValueInput =
+  | { valueType?: "Null" }
+  | { valueType?: "Number"; number: number }
+  | { valueType?: "String"; string: string }
+  | { valueType?: "Boolean"; boolean: boolean }
+  | { valueType?: "Date"; dateSerial: number }
+  | { valueType?: "Formula"; formula: string; number?: number; string?: string; boolean?: boolean; errorValue?: string; dateSerial?: number }
+  | { valueType?: "Error"; errorValue: string }
+  | { valueType?: "Hyperlink"; hyperlink: string; hyperlinkText?: string }
+  | { valueType?: "RichText"; richText: Array<RichTextRun> }
+  | { valueType?: "Merge" };
 type CellValueResult = CellSimpleValue | Date | CellValue/**
  * A single cell in a worksheet.
  *
@@ -11,13 +26,15 @@ export declare class Cell {
   get value(): CellValueResult
   /** Returns the cell value type discriminant. */
   get type(): CellType
-  /**
-   * @deprecated Use `cell.value` instead (returns Date for Date cells).
-   * Will be removed in v3.
-   */
+  /** Returns a JS `Date` for Date-type cells, or `null` otherwise. */
   get date(): Date | null
   /**
-   * Accepts primitives, CellValueInput-like objects, or Date — dispatch by shape.
+   * Accepts JS primitives and CellValue objects.
+   *
+   * Three-path dispatch:
+   * 1. Raw JS `Date` → serial (for `cell.value = new Date(...)`)
+   * 2. `CellValue` object / other objects → `Null` (round-trip via object is not supported)
+   * 3. `serde_json::Value` fallback (Number, String, Bool, Null)
    */
   set value(val: CellValueInput | string | number | boolean | Date | null)
   get address(): string
@@ -25,10 +42,11 @@ export declare class Cell {
   get col(): number
   get formula(): string | null
   /**
-   * Cached computed value Excel embedded alongside a formula `<f>…</f><v>…</v>`
-   * (read-only). Returns a scalar `CellValue` (number, string, boolean, error,
-   * or date serial) for an evaluated/cached formula cell, or `null` when the
-   * cell is not a formula or has no cached value. Resolves issue #55.
+   * Cached computed value for formula cells.
+   *
+   * Returns a typed `CellValue` (number, string, boolean, or error)
+   * when the formula has been evaluated via `Worksheet::recalculate()`,
+   * or `null` when the cell is not a formula or hasn't been evaluated.
    */
   get cachedValue(): CellValue | null
   /**
@@ -200,10 +218,12 @@ export declare class StreamWriter {
   /**
    * Finalize the streaming writer and write the .xlsx directly to a file.
    *
-   * Output is streamed incrementally to disk (one sheet's XML buffered in RAM
-   * at a time); input is NOT constant-memory — sheets are accumulated in the
-   * writer handle before writing begins, so peak memory is O(all sheets).
-   * True constant-memory `writeSheet()` is tracked as a follow-up; see
+   * Output is streamed incrementally to disk: the zip writer flushes one
+   * sheet's entry at a time, so only one sheet's XML is buffered in RAM.
+   * Input is NOT constant-memory — sheets are accumulated in the handle's
+   * `sheets` buffer before writing begins, so peak memory is O(all sheets).
+   * True constant-memory `writeSheet()` (each sheet written to the zip as it
+   * arrives, before finalize) is tracked as a follow-up — see
    * `openspec/specs/streaming-write-incremental/spec.md`.
    */
   finalizeToFile(path: string): Promise<void>
@@ -211,13 +231,15 @@ export declare class StreamWriter {
    * Finalize the streaming writer into a JS `ReadableStream` of `.xlsx`
    * bytes.
    *
-   * Emits compressed zip chunks onto a bounded channel (cap 16) drained by the
-   * stream's pull callback, so the *emitter* side is backpressured (the worker
-   * parks if the consumer falls behind; peak output memory = channel fill +
-   * one sheet's XML). Input is NOT constant-memory — sheets are accumulated in
-   * the writer handle before this call, so peak memory is O(all sheets).
-   * True constant-memory `writeSheet()` is tracked as a follow-up; see
-   * `openspec/specs/streaming-write-incremental/spec.md`.
+   * Output is streamed: sheets are written on a blocking worker thread and
+   * pushed through a bounded mpsc channel (cap 16) that the `ReadableStream`'s
+   * pull callback drains, so the *emitter* side has backpressure (the worker
+   * parks if the consumer falls behind; peak output memory is bounded by
+   * channel fill + one sheet's XML). Input is NOT constant-memory — sheets
+   * are accumulated in the handle's `sheets` buffer before this is called,
+   * so peak memory is O(all sheets). True constant-memory `writeSheet()`
+   * (each sheet written to the zip as it arrives) is tracked as a follow-up —
+   * see `openspec/specs/streaming-write-incremental/spec.md`.
    *
    * Terminal write errors are sent as `Err` channel items, which the stream
    * adapter rejects on (rather than closing silently) — see
@@ -436,6 +458,10 @@ export declare class Worksheet {
    * Creates the row (and cell) if absent.
    */
   getCellByRc(row: number, col: number): Cell
+  /** Get cell by A1-style address string (JS glue → getCellByAddress). */
+  getCell(address: string): Cell
+  /** Get cell by 1-indexed row and column numbers (JS glue → getCellByRc). */
+  getCell(row: number, col: number): Cell
   /** Get row by 1-indexed row number. Creates the row if it doesn't exist. */
   getRow(rowNumber: number): Row
   /** Add a row of cell values. Returns the created Row. */
@@ -567,14 +593,10 @@ export declare class Worksheet {
   getTables(): Array<Table>
   /** Remove the named table (and its part/relationship); cells stay intact. */
   removeTable(name: string): boolean
-  /** Get cell by A1-style address string (JS glue → getCellByAddress). */
-  getCell(address: string): Cell
-  /** Get cell by 1-indexed row and column numbers (JS glue → getCellByRc). */
-  getCell(row: number, col: number): Cell
 }
 
 /** Active pane quadrant. */
-export declare enum ActivePane {
+export declare const enum ActivePane {
   BottomLeft = 'BottomLeft',
   BottomRight = 'BottomRight',
   TopLeft = 'TopLeft',
@@ -632,7 +654,7 @@ export interface Alignment {
 }
 
 /** Horizontal alignment. */
-export declare enum AlignmentHorizontal {
+export declare const enum AlignmentHorizontal {
   Left = 'Left',
   Center = 'Center',
   Right = 'Right',
@@ -641,7 +663,7 @@ export declare enum AlignmentHorizontal {
 }
 
 /** Vertical alignment. */
-export declare enum AlignmentVertical {
+export declare const enum AlignmentVertical {
   Top = 'Top',
   Middle = 'Middle',
   Bottom = 'Bottom'
@@ -657,7 +679,7 @@ export interface AnchorPoint {
 }
 
 /** Anchor type for embedded images. */
-export declare enum AnchorType {
+export declare const enum AnchorType {
   OneCell = 'OneCell',
   TwoCell = 'TwoCell'
 }
@@ -695,7 +717,7 @@ export interface BorderStyle {
 }
 
 /** Border line style per OOXML §18.18.3. */
-export declare enum BorderStyleStyle {
+export declare const enum BorderStyleStyle {
   Thin = 'Thin',
   Medium = 'Medium',
   Thick = 'Thick',
@@ -729,14 +751,14 @@ export interface CellComment {
 }
 
 /** Cell comments display mode. */
-export declare enum CellComments {
+export declare const enum CellComments {
   None = 'None',
   AsDisplayed = 'AsDisplayed',
   AtEnd = 'AtEnd'
 }
 
 /** Discriminant for cell value variants. Mirrors the `value_type` string values. */
-export declare enum CellType {
+export declare const enum CellType {
   Null = 'Null',
   Number = 'Number',
   String = 'String',
@@ -749,29 +771,29 @@ export declare enum CellType {
   Merge = 'Merge'
 }
 
-export type CellValue =
-  | { valueType: "Null" }
-  | { valueType: "Number"; number: number }
-  | { valueType: "String"; string: string }
-  | { valueType: "Boolean"; boolean: boolean }
-  | { valueType: "Date"; dateSerial: number }
-  | { valueType: "Formula"; formula: string; number?: number; string?: string; boolean?: boolean; errorValue?: string; dateSerial?: number }
-  | { valueType: "Error"; errorValue: string }
-  | { valueType: "Hyperlink"; hyperlink: string; hyperlinkText?: string }
-  | { valueType: "RichText"; richText: Array<RichTextRun> }
-  | { valueType: "Merge" };
-
-export type CellValueInput =
-  | { valueType?: "Null" }
-  | { valueType?: "Number"; number: number }
-  | { valueType?: "String"; string: string }
-  | { valueType?: "Boolean"; boolean: boolean }
-  | { valueType?: "Date"; dateSerial: number }
-  | { valueType?: "Formula"; formula: string; number?: number; string?: string; boolean?: boolean; errorValue?: string; dateSerial?: number }
-  | { valueType?: "Error"; errorValue: string }
-  | { valueType?: "Hyperlink"; hyperlink: string; hyperlinkText?: string }
-  | { valueType?: "RichText"; richText: Array<RichTextRun> }
-  | { valueType?: "Merge" };
+export interface CellValue {
+  /**
+   * Discriminant: "Null" | "Number" | "String" | "Boolean" | "Formula" | "Error"
+   * | "Hyperlink" | "RichText" | "Date" | "Merge"
+   */
+  valueType: "Null" | "Number" | "String" | "Boolean" | "Formula" | "Error" | "Hyperlink" | "RichText" | "Date" | "Merge"
+  number?: number
+  string?: string
+  boolean?: boolean
+  formula?: string
+  errorValue?: string
+  /** URL for hyperlink (write-only, Null on read). */
+  hyperlink?: string
+  /** Display text for hyperlink (write-only, Null on read). */
+  hyperlinkText?: string
+  /** Rich text runs (write-only, Null on read). */
+  richText?: Array<RichTextRun>
+  /**
+   * Excel serial date value (days since 1899-12-30; fractional part = time of day).
+   * Exposed as `dateSerial` on the JS `CellValue` object for round-trip support.
+   */
+  dateSerial?: number
+}
 
 /** A single color used by `colorScale` / `dataBar` / `iconSet` rules. */
 export interface CfColor {
@@ -971,7 +993,7 @@ export interface Fill {
 }
 
 /** Fill kind variants matching OOXML pattern fill types. */
-export declare enum FillKind {
+export declare const enum FillKind {
   None = 'None',
   Solid = 'Solid',
   Gradient = 'Gradient'
@@ -999,7 +1021,7 @@ export interface GradientStop {
 }
 
 /** Gradient type: linear or path. */
-export declare enum GradientType {
+export declare const enum GradientType {
   Linear = 'Linear',
   Path = 'Path'
 }
@@ -1095,7 +1117,7 @@ export interface JsStreamValue {
 }
 
 /** Page orientation. */
-export declare enum Orientation {
+export declare const enum Orientation {
   Portrait = 'Portrait',
   Landscape = 'Landscape'
 }
@@ -1202,7 +1224,7 @@ export interface SheetView {
 }
 
 /** Sheet view pane state. */
-export declare enum SheetViewState {
+export declare const enum SheetViewState {
   Frozen = 'Frozen',
   Split = 'Split'
 }
@@ -1280,6 +1302,3 @@ export interface WorkbookView {
   tabRatio?: number
   visibility?: string
 }
-
-// __EXCELJS_GETCELL_GLUE__
-
