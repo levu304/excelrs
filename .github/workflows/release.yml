@@ -15,9 +15,11 @@ jobs:
     permissions:
       contents: read
 
-    # Fail wedged runners fast instead of burning the 6h GitHub ceiling
-    # (a hung musl build never lets the cargo cache persist).
-    timeout-minutes: 45
+    # Cold musl builds (no warm target/ cache yet) compile the whole dep
+    # tree + link via musl-gcc/bfd, which takes well over an hour on the
+    # first run. 45m killed it mid-link; 120m gives it room to finish and
+    # warm the cache for subsequent runs.
+    timeout-minutes: 120
 
     # sccache persists compiled-crate objects to the GHA cache incrementally,
     # so even a timed-out/cancelled build leaves a warm cache for the retry.
