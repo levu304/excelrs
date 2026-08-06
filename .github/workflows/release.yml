@@ -79,13 +79,13 @@ jobs:
       - name: Add Rust target for musl
         if: ${{ matrix.musl }}
         # rust-lld self-contained DROPS the cdylib crate type on *-musl
-        # (rust 1.97.1); the Build step links via external musl-gcc + mold.
+        # (rust 1.97.1); the Build step links via cargo-zigbuild (zig lld).
         run: |
           rustup target remove ${{ matrix.target }} 2>/dev/null || true
           rustup target add ${{ matrix.target }}
-      - name: "Install musl-tools + mold (musl: musl-gcc + mold link)"
+      - name: "Install cargo-zigbuild (musl: napi --cross-compile)"
         if: ${{ matrix.musl }}
-        run: sudo apt-get update && sudo apt-get install -y musl-tools mold
+        run: pip3 install cargo-zigbuild
 
       - name: Install Node.js 22.14.0
         uses: >-
@@ -102,17 +102,15 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: "Build native addon (musl: musl-gcc driver + mold link)"
+      - name: "Build native addon (musl: cargo-zigbuild + zig lld)"
         if: ${{ matrix.musl }}
         run: |
           T=${{ matrix.target }}
-          T_ENV=$(echo "$T" | tr '[:lower:]-' '[:upper:]_')
-          export "CARGO_TARGET_${T_ENV}_LINKER=musl-gcc"
-          export PATH="$GITHUB_WORKSPACE/scripts:$PATH"
           export RUSTFLAGS="-C target-feature=-crt-static -C lto=off"
+          export RUSTFLAGS="$RUSTFLAGS -C linker-plugin-lto=off"
           export RUSTFLAGS="$RUSTFLAGS -D warnings -C link-arg=-s"
-          export RUSTFLAGS="$RUSTFLAGS -C link-arg=-fuse-ld=mold"
-          pnpm exec napi build --platform --release --target "$T" \
+          pnpm exec napi build --cross-compile \
+            --platform --release --target "$T" \
             --features formula-eval --js native.js
       - name: "Build native addon (non-musl: emnapi default)"
         if: ${{ !matrix.musl }}
