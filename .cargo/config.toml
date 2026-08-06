@@ -1,12 +1,7 @@
-# *-musl cdylib. rust-lld self-contained DROPS the cdylib crate type on
-# *-musl (rust 1.97.1), so a musl cdylib must link via an external musl
-# toolchain. RUSTFLAGS (Build step) carries `-C target-feature=-crt-static`
-# (crt-static OFF) which switches rustc off self-contained -> external
-# linker. We point the linker at `scripts/musl-gcc` (on PATH via the Build
-# step): a thin wrapper over musl-gcc that links musl libc *dynamically*
-# (NEEDED libc.musl-*.so.1) so the .node dlopen's cleanly on musl hosts.
-[target.x86_64-unknown-linux-musl]
-linker = "musl-gcc"
-
-[target.aarch64-unknown-linux-musl]
-linker = "musl-gcc"
+# *-musl cdylib. We build via cargo-zigbuild (napi build --cross-compile),
+# which links musl libc through zig's bundled lld — fast, and avoids the
+# musl-gcc/bfd link hang that wedged CI at 45m. RUSTFLAGS (Build step) carries
+# `-C target-feature=-crt-static` (crt-static OFF) so rustc links musl libc
+# *dynamically* (NEEDED libc.musl-*.so.1) — a fully-static musl cdylib
+# segfaults on dlopen (static TLS/pthread init collides with host libc), so
+# the Assert musl step in release.yml fails the build if linkage regresses.

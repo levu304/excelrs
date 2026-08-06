@@ -15,10 +15,9 @@ jobs:
     permissions:
       contents: read
 
-    # Cold musl builds (no warm target/ cache yet) compile the whole dep
-    # tree + link via musl-gcc/bfd, which takes well over an hour on the
-    # first run. 45m killed it mid-link; 120m gives it room to finish and
-    # warm the cache for subsequent runs.
+    # Cold musl builds compile the whole dep tree + link via cargo-zigbuild
+    # (zig lld) — fast, but a first cold run still builds everything, so 120m
+    # is a generous safety cap (the old musl-gcc/bfd link wedged at 45m).
     timeout-minutes: 120
 
     # sccache persists compiled-crate objects to the GHA cache incrementally,
@@ -80,13 +79,16 @@ jobs:
       - name: Add Rust target for musl
         if: ${{ matrix.musl }}
         # rust-lld self-contained DROPS the cdylib crate type on *-musl
-        # (rust 1.97.1); the Build step links via external `musl-gcc`.
+        # (rust 1.97.1); cargo-zigbuild links via zig's bundled lld instead.
         run: |
           rustup target remove ${{ matrix.target }} 2>/dev/null || true
           rustup target add ${{ matrix.target }}
-      - name: "Install musl-tools (musl legs: musl-gcc linker)"
+      - name: "Install zig (musl legs: cargo-zigbuild linker)"
         if: ${{ matrix.musl }}
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+        uses: mlugg/setup-zig@v2
+      - name: "Install cargo-zigbuild (musl legs: napi --cross-compile)"
+        if: ${{ matrix.musl }}
+        run: pip3 install cargo-zigbuild
 
       - name: Install Node.js 22.14.0
         uses: >-
@@ -103,17 +105,14 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: "Build native addon (musl: cargo + musl-gcc link)"
+      - name: "Build native addon (musl: cargo-zigbuild + zig lld)"
         if: ${{ matrix.musl }}
         run: |
           T=${{ matrix.target }}
-          T_ENV=$(echo "$T" | tr '[:lower:]-' '[:upper:]_')
-          export "CARGO_TARGET_${T_ENV}_LINKER=musl-gcc"
-          export PATH="$GITHUB_WORKSPACE/scripts:$PATH"
-          cargo clean --target "$T"
           export RUSTFLAGS="-C target-feature=-crt-static -C lto=off"
           export RUSTFLAGS="$RUSTFLAGS -D warnings -C link-arg=-s"
-          pnpm exec napi build --platform --release --target "$T" \
+          pnpm exec napi build --cross-compile \
+            --platform --release --target "$T" \
             --features formula-eval --js native.js
       - name: "Build native addon (non-musl: emnapi default)"
         if: ${{ !matrix.musl }}
