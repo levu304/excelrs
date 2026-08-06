@@ -1,7 +1,7 @@
 # Changelog
 <!-- Release process: tag-driven from main. `git tag -a vX.Y.Z -m "..."` then push the tag. -->
 
-## [Unreleased]
+## [2.8.1] - 2026-08-06
 
 ### Added
 
