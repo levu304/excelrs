@@ -1,0 +1,5 @@
+#!/bin/sh
+# Thin wrapper so `musl-gcc` resolves from PATH in CI. Links musl libc
+# *dynamically* (NEEDED libc.musl-*.so.1); the real link is done by mold
+# via -C link-arg=-fuse-ld=mold in the release.yml Build step.
+exec musl-gcc "$@"
