@@ -298,12 +298,34 @@ jobs:
         if: ${{ !inputs.dry_run }}
         run: |
           for dir in npm/*/; do
-            (cd "$dir" && npm publish --access public) || exit 1
+            name=$(node -p "require('./$dir/package.json').name")
+            ver=$(node -p "require('./$dir/package.json').version")
+            if npm view "$name@$ver" version >/dev/null 2>&1; then
+              echo "SKIP $name@$ver (already published)"
+              continue
+            fi
+            for attempt in 1 2 3; do
+              if (cd "$dir" && npm publish --access public); then
+                break
+              fi
+              if [ "$attempt" -eq 3 ]; then
+                echo "FAIL $name@$ver after 3 attempts"
+                exit 1
+              fi
+              echo "  retry $attempt for $name (waiting 5s)..."
+              sleep 5
+            done
           done
 
       - name: Publish to npm (main package)
         if: ${{ !inputs.dry_run }}
         run: |
+          name=$(node -p "require('./package.json').name")
+          ver=$(node -p "require('./package.json').version")
+          if npm view "$name@$ver" version >/dev/null 2>&1; then
+            echo "SKIP $name@$ver (already published)"
+            exit 0
+          fi
           node -e "
             const pkg = require('./package.json');
             pkg.optionalDependencies = {
@@ -319,7 +341,17 @@ jobs:
             JSON.stringify(pkg, null, 2) + '\n'
           );
           "
-          npm publish --access public
+          for attempt in 1 2 3; do
+            if npm publish --access public; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "FAIL $name@$ver after 3 attempts"
+              exit 1
+            fi
+            echo "  retry $attempt for $name (waiting 5s)..."
+            sleep 5
+          done
 
       - name: Verify all 7 packages on npm
         if: ${{ !inputs.dry_run }}
