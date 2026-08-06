@@ -7,6 +7,8 @@
 
 - **Authorable cached formula results (round-trip)** — Cell.value = { formula, number | string | boolean | errorValue | dateSerial } now stores the cached scalar alongside the formula string; the writer emits <f>..</f><v>..</v> with the matching t attribute; the reader surfaces cell.value as the cached scalar and cell.formula as the formula text. Closes the authoring gap in #54 (ExcelJS-authored caches already read back). Fixes #55 (TS Cell.cachedValue declaration was missing).
 
+- **`linux-x64-musl` / `linux-arm64-musl` prebuilt native binaries** — release build matrix gains `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` entries, producing `excelrs.linux-x64-musl.node` and `excelrs.linux-arm64-musl.node`. npm resolves `@levu304/excelrs-linux-x64-musl` (and `-arm64-musl`) via `optionalDependencies` on Alpine/musl Linux hosts, fixing `Cannot find native binding` on those platforms. musl cdylib links musl libc dynamically (dlopen-safe; fully-static musl segfaults on load).
+
 ## [2.8.0] - 2026-08-02
 
 ### Added
