@@ -1,6 +1,16 @@
 # Changelog
 <!-- Release process: tag-driven from main. `git tag -a vX.Y.Z -m "..."` then push the tag. -->
 
+## [2.9.0] - 2026-08-07
+
+### Added
+
+- **Exposed formula recalculation via `Workbook`/`Worksheet.recalculate()` (#62)** — the recompute path is now JS-accessible; it caches computed values back into cells and round-trips them as `<f>..</f><v>..</v>`. Built only with the `formula-eval` feature (on by default in release binaries). Closes #62.
+
+### Fixed
+
+- **Rich-text runs without an explicit `rFont` no longer read back as the `Calibri` default (#63)** — fixes spurious font leakage on round-trip. Fixes #63.
+
 ## [2.8.1] - 2026-08-06
 
 ### Added
