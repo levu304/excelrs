@@ -20,12 +20,6 @@ jobs:
     # generous safety cap for a first cold run that still builds everything.
     timeout-minutes: 120
 
-    # sccache persists compiled-crate objects to the GHA cache incrementally,
-    # so even a timed-out/cancelled build leaves a warm cache for the retry.
-    env:
-      SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: "sccache"
-
     strategy:
       fail-fast: false
       matrix:
@@ -62,9 +56,6 @@ jobs:
           actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
-
-      - name: Sccache (cache Rust compiles across CI runs)
-        uses: mozilla-actions/sccache-action@v0.0.10
 
       - name: Install Rust
         uses: >-
