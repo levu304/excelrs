@@ -219,3 +219,63 @@ test('cachedValue is null for uncached formula cells', async () => {
   expect(c.type).toBe('Formula')
   expect(c.cachedValue).toBeNull()
 })
+
+// ---------------------------------------------------------------------------
+// 4.7 recalculate() exposure (formula-eval build)
+// ---------------------------------------------------------------------------
+
+test('workbook.recalculate resolves cross-sheet references', () => {
+  const wb = new Workbook()
+  const s1 = wb.addWorksheet('Sheet1')
+  const s2 = wb.addWorksheet('Sheet2')
+  s2.getCell('A1').value = 42
+  s1.getCell('B1').value = { formula: 'Sheet2!A1' } as never
+  // Not evaluated yet — no cached scalar.
+  expect(s1.getCell('B1').value).toBeNull()
+
+  wb.recalculate()
+
+  // Cross-sheet ref resolves because workbook context is supplied.
+  expect(s1.getCell('B1').value).toBe(42)
+  expect(s1.getCell('B1').cachedValue).toEqual({
+    valueType: 'Number',
+    number: 42,
+  })
+})
+
+test('workbook.recalculate caches every formula cell across all sheets', () => {
+  const wb = new Workbook()
+  const s1 = wb.addWorksheet('S1')
+  const s2 = wb.addWorksheet('S2')
+  s1.getCell('A1').value = { formula: '1+2' } as never
+  s2.getCell('B2').value = { formula: '4*5' } as never
+
+  wb.recalculate()
+
+  expect(s1.getCell('A1').value).toBe(3)
+  expect(s2.getCell('B2').value).toBe(20)
+})
+
+test('worksheet.recalculate populates single-sheet cached values', () => {
+  const wb = makeWorkbook()
+  const ws = wb.getWorksheet('S')!
+  ws.getCell('A1').value = { formula: '1+2' } as never
+  expect(ws.getCell('A1').value).toBeNull()
+
+  ws.recalculate()
+
+  expect(ws.getCell('A1').value).toBe(3)
+})
+
+test('worksheet.recalculate: cross-sheet ref caches #REF! and recalc still completes', () => {
+  const wb = makeWorkbook()
+  const ws = wb.getWorksheet('S')!
+  ws.getCell('A1').value = { formula: '1+2' } as never
+  ws.getCell('B1').value = { formula: 'Other!A1' } as never
+
+  // Must not throw — per-cell error isolation, no abort.
+  ws.recalculate()
+
+  expect(ws.getCell('A1').value).toBe(3)
+  expect(ws.getCell('B1').value).toBe('#REF!')
+})

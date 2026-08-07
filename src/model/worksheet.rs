@@ -176,10 +176,38 @@ impl Worksheet {
     ///
     /// For cells whose value type is "Formula", the formula string is evaluated
     /// through `FormulaEvaluator` and the result stores on the cell's `cachedValue`
-    /// fields. Cross-sheet references return `#REF!` when no workbook context available.
+    /// fields. Cross-sheet references return `#REF!` when no workbook context
+    /// available (single-sheet scope) — use `Workbook::recalculate` for
+    /// cross-sheet-capable recalculation.
+    #[napi]
+    /// Recalculate formula cells in this worksheet, caching computed scalars.
+    /// Cross-sheet refs resolve to `#REF!` here (single-sheet scope); use
+    /// `Workbook::recalculate`. No-op when built without `formula-eval`.
+    pub fn recalculate(&self) {
+        #[cfg(feature = "formula-eval")]
+        {
+            // recalc is infallible per-cell — every eval error is cached as a
+            // cell-level error value, so the Result is always Ok; explicitly
+            // discard it to satisfy `must_use`.
+            let _ = self.recalculate_with(None);
+        }
+    }
+
+    /// Shared recalc core: evaluate every formula cell in this worksheet, passing
+    /// `workbook` context so cross-sheet references resolve.
+    ///
+    /// `Worksheet::recalculate` passes `None` (cross-sheet refs cache `#REF!`);
+    /// `Workbook::recalculate` passes `Some(&inner)` for each sheet.
+    ///
+    // ponytail: naive O(N^2) on deep formula chains — each top-level cell
+    // recursively re-evaluates its whole dependency subtree with no memoization.
+    // Fine for small sheets; a dirty-graph / cached-precendent pass is the upgrade.
     #[cfg(feature = "formula-eval")]
-    pub fn recalculate(&self) -> Result<(), crate::error::ExcelrsError> {
-        use crate::formula::{FormulaEvaluator, value_to_cell_value};
+    pub(crate) fn recalculate_with(
+        &self,
+        workbook: Option<&crate::model::workbook_inner::WorkbookInner>,
+    ) -> Result<(), crate::error::ExcelrsError> {
+        use crate::formula::{value_to_cell_value, FormulaEvaluator};
         use crate::model::cell::CellType;
 
         let rows_snapshot: Vec<Row> = self
@@ -196,7 +224,7 @@ impl Worksheet {
                 if matches!(CellType::from_tag(&cv.value_type), Some(CellType::Formula)) {
                     if let Some(ref formula) = cv.formula {
                         let mut evaluator =
-                            FormulaEvaluator::new(self, self.name.clone(), None);
+                            FormulaEvaluator::new(self, self.name.clone(), workbook);
                         // Per-cell error isolation: a parse error in one formula caches
                         // #VALUE! on that cell and continues, rather than aborting the
                         // entire recalculation batch (matches Excel semantics).

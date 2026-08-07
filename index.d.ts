@@ -273,6 +273,12 @@ export declare class Workbook {
   getWorksheet(nameOrIndex: any): Worksheet | null
   get worksheets(): Array<Worksheet>
   get worksheetCount(): number
+  /**
+   * Recalculate all formula cells across every worksheet, caching computed
+   * values with full workbook context so cross-sheet references (e.g.
+   * `Sheet2!A1`) resolve. Only available in builds with `formula-eval`.
+   */
+  recalculate(): void
   /** ISO-8601 timestamp of workbook creation. */
   get created(): string
   /** ISO-8601 timestamp of last modification. */
@@ -446,6 +452,12 @@ export declare class Worksheet {
   get rowCount(): number
   /** Number of columns with content (highest column index across all rows). */
   get columnCount(): number
+  /**
+   * Recalculate formula cells in this worksheet, caching computed scalars.
+   * Cross-sheet references resolve to `#REF!` in this single-sheet scope — use
+   * `workbook.recalculate()` when formulas reference other sheets.
+   */
+  recalculate(): void
   /**
    * Get cell by A1-style address string (e.g., "A1", "BC42").
    * Returns an empty cell if the address is valid but hasn't been populated.
