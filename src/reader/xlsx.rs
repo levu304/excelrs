@@ -2445,6 +2445,10 @@ fn parse_inline_str_rich_text_with(
                 b"r" if in_is => {
                     in_r = true;
                     current_font = Font::default();
+                    // Empty seed: run without <rFont>/<sz> must read back name/size null,
+                    // not the Calibri/11 default (inherit cell font semantics, OOXML).
+                    current_font.name = None;
+                    current_font.size = None;
                     current_text.clear();
                     has_rpr = false;
                 }
@@ -2552,6 +2556,10 @@ fn parse_shared_string_rich_text(
                 b"r" if in_si => {
                     in_r = true;
                     current_font = Font::default();
+                    // Empty seed: run without <rFont>/<sz> must read back name/size null,
+                    // not the Calibri/11 default (inherit cell font semantics, OOXML).
+                    current_font.name = None;
+                    current_font.size = None;
                     current_text.clear();
                     has_rpr = false;
                     has_rich_text = true;
@@ -3337,6 +3345,26 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_inline_str_rich_text_no_rfont_no_calibri_leak() {
+        // Regression: run with <b/> but no <rFont>/<sz> must read back
+        // name/size null (inherit cell font), not the Calibri/11 default.
+        let xml = r##"<worksheet>
+        <sheetData>
+          <row r="1">
+            <c r="A1" t="inlineStr"><is><r><rPr><b/></rPr><t>Bold</t></r></is></c>
+          </row>
+        </sheetData>
+        </worksheet>"##;
+        let cells = parse_inline_str_rich_text(xml, &ThemeColorScheme::default());
+        assert_eq!(cells.len(), 1);
+        assert_eq!(cells[0].2.len(), 1);
+        let f = cells[0].2[0].font.as_ref().unwrap();
+        assert_eq!(f.name, None, "no <rFont> → name must not default to Calibri");
+        assert_eq!(f.size, None, "no <sz> → size must not default to 11");
+        assert_eq!(f.bold, Some(true));
+    }
+
+    #[test]
     fn test_parse_inline_str_rich_text_event_cap() {
         // Finding #4: parser must stop after max_events, not loop unbounded.
         // 3 cells, each 1 run (~10 events per cell; commit happens at </c>).
@@ -3571,6 +3599,42 @@ mod tests {
         // Run 1: no rPr -> no font
         assert_eq!(runs[1].text, " Normal");
         assert!(runs[1].font.is_none());
+    }
+
+    #[test]
+    fn test_parse_shared_string_rich_text_no_rfont_no_calibri_leak() {
+        // Regression: shared-string run with <b/> but no <rFont>/<sz> must read back
+        // name/size null (inherit cell font), not the Calibri/11 default. Mirrors the
+        // inline-path test; guards the shared-string parser's fixed branch.
+        let xml = make_xlsx_shared_strings_no_rfont();
+        let map = parse_shared_string_rich_text(&xml, &ThemeColorScheme::default()).unwrap();
+        assert!(map.contains_key(&0), "index 0 should have rich text");
+        let runs = map.get(&0).unwrap();
+        assert_eq!(runs.len(), 1);
+        let f = runs[0].font.as_ref().unwrap();
+        assert_eq!(f.name, None, "no <rFont> → name must not default to Calibri");
+        assert_eq!(f.size, None, "no <sz> → size must not default to 11");
+        assert_eq!(f.bold, Some(true));
+    }
+
+    fn make_xlsx_shared_strings_no_rfont() -> Vec<u8> {
+        use std::io::Write;
+        let mut buf = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let options: zip::write::FileOptions<'_, ()> =
+                zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+            zip.start_file("xl/sharedStrings.xml", options).unwrap();
+            write!(
+                zip,
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="1" uniqueCount="1">
+  <si><r><rPr><b/></rPr><t>Bold</t></r></si>
+</sst>"#
+            )
+            .unwrap();
+        }
+        buf
     }
 
     #[test]
