@@ -49,6 +49,7 @@ jobs:
       - name: Build native addon
         run: >-
           npx napi build --platform --release
+          --features formula-eval
           --js native.js --dts native.d.ts
 
       - name: Lint types (Biome)
