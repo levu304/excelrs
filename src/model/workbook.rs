@@ -106,11 +106,8 @@ impl Workbook {
 
     /// Recalculate every worksheet, caching computed values with full workbook
     /// context so cross-sheet references (e.g. `Sheet2!A1`) resolve to live
-    /// values. Available only when built with the `formula-eval` feature.
-    #[napi]
-    /// Recalculate every worksheet, caching computed values with full workbook
-    /// context so cross-sheet references (e.g. `Sheet2!A1`) resolve to live
     /// values. No-op when built without `formula-eval`.
+    #[napi]
     pub fn recalculate(&self) {
         #[cfg(feature = "formula-eval")]
         {

@@ -176,13 +176,9 @@ impl Worksheet {
     ///
     /// For cells whose value type is "Formula", the formula string is evaluated
     /// through `FormulaEvaluator` and the result stores on the cell's `cachedValue`
-    /// fields. Cross-sheet references return `#REF!` when no workbook context
     /// available (single-sheet scope) — use `Workbook::recalculate` for
-    /// cross-sheet-capable recalculation.
+    /// cross-sheet-capable recalculation. No-op when built without `formula-eval`.
     #[napi]
-    /// Recalculate formula cells in this worksheet, caching computed scalars.
-    /// Cross-sheet refs resolve to `#REF!` here (single-sheet scope); use
-    /// `Workbook::recalculate`. No-op when built without `formula-eval`.
     pub fn recalculate(&self) {
         #[cfg(feature = "formula-eval")]
         {
