@@ -1072,11 +1072,7 @@ impl Worksheet {
             // Ensure the CellValue reflects Formula type so the evaluator,
             // cached-value getter, and writer all detect this as a formula cell.
             let mut cv = cell.value_raw();
-            // Using CellValue::formula() would discard cached value fields (number,
-            // string, etc.) from Pass 1 of the reader; preserve them by assigning the
-            // tag directly. (No CellType constructor mutates an existing CellValue.)
-            cv.value_type = "Formula".to_string();
-            cv.formula = Some(formula);
+            cv = cv.mark_formula(formula);
             cell.set_value_raw(cv);
         });
     }
