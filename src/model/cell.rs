@@ -199,6 +199,15 @@ impl CellValue {
         }
     }
 
+    /// Mark an existing `CellValue` as a formula, preserving all other
+    /// cached fields (number, string, etc.). Used by the reader when a cell
+    /// already carries a cached scalar from Pass 1 but also has a formula.
+    pub fn mark_formula(mut self, formula: impl Into<String>) -> Self {
+        self.value_type = "Formula".to_string();
+        self.formula = Some(formula.into());
+        self
+    }
+
     /// Validate this cell value. Validates rich-text fonts.
     /// Returns `Ok(self)` if valid, `Err` with `ExcelrsError` otherwise.
     /// This is called by the writer before emitting XML.
