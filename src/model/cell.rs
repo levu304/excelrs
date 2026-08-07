@@ -274,11 +274,11 @@ impl Cell {
     pub fn value(&self, env: Env) -> napi::Result<Unknown<'_>> {
         let inner = self.inner.lock().expect("Cell lock poisoned");
         let cv = &inner.value;
-        match cv.value_type.as_str() {
-            "Number" => Ok(env.to_js_value(&cv.number.unwrap_or(f64::NAN))?),
-            "String" => Ok(env.to_js_value(&cv.string.as_deref().unwrap_or(""))?),
-            "Boolean" => Ok(env.to_js_value(&cv.boolean.unwrap_or(false))?),
-            "Date" => {
+        match CellType::from_tag(&cv.value_type) {
+            Some(CellType::Number) => Ok(env.to_js_value(&cv.number.unwrap_or(f64::NAN))?),
+            Some(CellType::String) => Ok(env.to_js_value(&cv.string.as_deref().unwrap_or(""))?),
+            Some(CellType::Boolean) => Ok(env.to_js_value(&cv.boolean.unwrap_or(false))?),
+            Some(CellType::Date) => {
                 let serial = cv.date_serial.unwrap_or(0.0);
                 let ms = serial_to_millis(serial) as f64;
                 let d = env.create_date(ms)?;
@@ -287,8 +287,8 @@ impl Cell {
                 let d: napi::JsDate<'static> = unsafe { std::mem::transmute(d) };
                 Ok(d.to_unknown())
             }
-            "Null" => Ok(env.to_js_value(&serde_json::Value::Null)?),
-            "Formula" => {
+            Some(CellType::Null) => Ok(env.to_js_value(&serde_json::Value::Null)?),
+            Some(CellType::Formula) => {
                 // Formula cells carry an optional cached scalar (Excel-authored
                 // `<f>..</f><v>..</v>` or JS-authored `cell.value = { formula, number, .. }`).
                 // Return the cached scalar so it round-trips as a bare value; null
@@ -310,7 +310,8 @@ impl Cell {
                     Ok(env.to_js_value(&serde_json::Value::Null)?)
                 }
             }
-            _ => Ok(env.to_js_value(cv)?), // RichText, Hyperlink, Error, Merge
+            // Unknown tag (None), RichText, Hyperlink, Error, Merge — round-trip as CellValue object.
+            _ => Ok(env.to_js_value(cv)?),
         }
     }
 
@@ -328,7 +329,7 @@ impl Cell {
     pub fn date(&self, env: Env) -> napi::Result<Option<napi::JsDate<'static>>> {
         let inner = self.inner.lock().expect("Cell lock poisoned");
         let cv = &inner.value;
-        if cv.value_type == "Date" {
+        if matches!(CellType::from_tag(&cv.value_type), Some(CellType::Date)) {
             let serial = cv
                 .date_serial
                 .ok_or_else(|| napi::Error::from_reason("Date cell missing serial"))?;
@@ -447,7 +448,7 @@ impl Cell {
             }
             _ => CellValue::default(),
         };
-        inner.formula = if inner.value.value_type == "Formula" {
+        inner.formula = if matches!(CellType::from_tag(&inner.value.value_type), Some(CellType::Formula)) {
             inner.value.formula.clone()
         } else {
             None
@@ -493,7 +494,7 @@ impl Cell {
     pub fn cached_value(&self) -> Option<CellValue> {
         let inner = self.inner.lock().expect("Cell lock poisoned");
         let cv = &inner.value;
-        if cv.value_type != "Formula" || !inner.recalc_only {
+        if !matches!(CellType::from_tag(&cv.value_type), Some(CellType::Formula)) || !inner.recalc_only {
             return None;
         }
         if let Some(n) = cv.number {
@@ -659,7 +660,7 @@ impl Cell {
     /// never populated. The writer skips these cells to avoid phantom output.
     pub fn is_effectively_empty(&self) -> bool {
         let inner = self.inner.lock().expect("Cell lock poisoned");
-        inner.value.value_type == "Null" && inner.formula.is_none() && inner.style.is_none()
+        matches!(CellType::from_tag(&inner.value.value_type), Some(CellType::Null)) && inner.formula.is_none() && inner.style.is_none()
     }
 
     /// Compute the A1 address from (col, row). Used during row/cell creation.

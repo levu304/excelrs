@@ -26,7 +26,7 @@ use std::path::Path;
 use quick_xml::escape::escape;
 
 use crate::error::ExcelrsError;
-use crate::model::cell::Cell;
+use crate::model::cell::{Cell, CellType};
 use crate::model::comment::CellComment;
 use crate::model::defined_name::DefinedName;
 use crate::model::image::{AnchorType, WorksheetImage};
@@ -151,7 +151,7 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
                     // v0.13.0: Date cells need a date number format to round-trip as
                     // dates; inject a default one unless the style already has a format.
                     let cv = cell.value_raw();
-                    if cv.value_type == "Date" {
+                    if matches!(CellType::from_tag(&cv.value_type), Some(CellType::Date)) {
                         let needs_fmt = style.as_ref().is_none_or(|s| s.num_fmt.is_none());
                         if needs_fmt {
                             let serial = cv.date_serial.unwrap_or(0.0);
@@ -379,8 +379,8 @@ fn build_shared_strings(worksheets: &[Worksheet]) -> (Vec<String>, HashMap<Strin
         for row in ws.rows() {
             for cell in row.written_cells() {
                 let cv = cell.value_raw();
-                match cv.value_type.as_str() {
-                    "String" => {
+                match CellType::from_tag(&cv.value_type) {
+                    Some(CellType::String) => {
                         if let Some(s) = cv.string {
                             string_indices.entry(s.clone()).or_insert_with(|| {
                                 let idx = string_table.len() as u32;
@@ -389,7 +389,7 @@ fn build_shared_strings(worksheets: &[Worksheet]) -> (Vec<String>, HashMap<Strin
                             });
                         }
                     }
-                    "Hyperlink" => {
+                    Some(CellType::Hyperlink) => {
                         // Collect display text (prefer hyperlink_text, fallback to URL)
                         let text = cv.hyperlink_text.as_deref().or(cv.hyperlink.as_deref());
                         if let Some(s) = text {
@@ -426,7 +426,7 @@ fn collect_sheet_hyperlinks(ws: &Worksheet) -> Vec<SheetHyperlink> {
     for row in ws.rows() {
         for cell in row.written_cells() {
             let cv = cell.value_raw();
-            if cv.value_type == "Hyperlink" {
+            if matches!(CellType::from_tag(&cv.value_type), Some(CellType::Hyperlink)) {
                 if let Some(ref url) = cv.hyperlink {
                     let ref_addr = cell.address();
                     let rid = format!("rId{}", out.len() + 1);
@@ -1797,13 +1797,13 @@ fn write_cell_xml<W: Write>(
     write!(w, r#"<c r="{}" s="{}""#, address, style_index)?;
 
     // Determine cell type and write value attribute
-    let cell_type_attr = match cv.value_type.as_str() {
-        "String" => Some("t=\"s\""),
-        "Boolean" => Some("t=\"b\""),
-        "Error" => Some("t=\"e\""),
-        "RichText" => Some("t=\"inlineStr\""),
-        "Hyperlink" => Some("t=\"s\""),
-        "Formula" => {
+    let cell_type_attr = match CellType::from_tag(&cv.value_type) {
+        Some(CellType::String) => Some("t=\"s\""),
+        Some(CellType::Boolean) => Some("t=\"b\""),
+        Some(CellType::Error) => Some("t=\"e\""),
+        Some(CellType::RichText) => Some("t=\"inlineStr\""),
+        Some(CellType::Hyperlink) => Some("t=\"s\""),
+        Some(CellType::Formula) => {
             // Formula string results carry their own cell type so calamine
             // re-types the cached <v> correctly on read-back (mirrors Excel:
             // boolean→t="b", error→t="e", string-result→t="str").
@@ -1820,7 +1820,7 @@ fn write_cell_xml<W: Write>(
                 None // number, date_serial, or no cached result
             }
         }
-        _ => None, // Number, Null, RichText, Date, Merge
+        _ => None, // Number, Null, Date, Merge
     };
 
     if let Some(attr) = cell_type_attr {
@@ -1837,29 +1837,29 @@ fn write_cell_xml<W: Write>(
     }
 
     // Value element (skip Null cells — Excel interprets absence as empty)
-    match cv.value_type.as_str() {
-        "Number" => {
+    match CellType::from_tag(&cv.value_type) {
+        Some(CellType::Number) => {
             if let Some(n) = cv.number {
                 write_str(w, &format!("<v>{}</v>", n))?;
             }
         }
-        "String" => {
+        Some(CellType::String) => {
             if let Some(s) = &cv.string {
                 if let Some(idx) = string_indices.get(s) {
                     write_str(w, &format!("<v>{}</v>", idx))?;
                 }
             }
         }
-        "Boolean" => {
+        Some(CellType::Boolean) => {
             let v = if cv.boolean.unwrap_or(false) { "1" } else { "0" };
             write_str(w, &format!("<v>{}</v>", v))?;
         }
-        "Error" => {
+        Some(CellType::Error) => {
             if let Some(e) = &cv.error_value {
                 write_str(w, &format!("<v>{}</v>", escape(e)))?;
             }
         }
-        "Formula" => {
+        Some(CellType::Formula) => {
             // Formula cell: <f> written above. Emit <v> for cached result if present.
             if let Some(n) = cv.number {
                 write_str(w, &format!("<v>{}</v>", n))?;
@@ -1875,7 +1875,7 @@ fn write_cell_xml<W: Write>(
                 write_str(w, &format!("<v>{}</v>", serial))?;
             }
         }
-        "RichText" => {
+        Some(CellType::RichText) => {
             if let Some(runs) = &cv.rich_text {
                 write_str(w, "<is>")?;
                 for run in runs {
@@ -1908,7 +1908,7 @@ fn write_cell_xml<W: Write>(
                 write_str(w, "</is>")?;
             }
         }
-        "Hyperlink" => {
+        Some(CellType::Hyperlink) => {
             // Write the display text as a shared string value
             if let Some(text) = &cv.hyperlink_text {
                 if let Some(idx) = string_indices.get(text) {
@@ -1920,7 +1920,7 @@ fn write_cell_xml<W: Write>(
                 }
             }
         }
-        "Date" => {
+        Some(CellType::Date) => {
             // v0.13.0: emit the Excel serial as the cell value. With a date number
             // format (injected into the style table) Excel renders it as a date;
             // no `t` attribute is written (dates are numeric cells).

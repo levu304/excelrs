@@ -12,7 +12,7 @@ use xlstream_core::{CellError, ExcelDate, Value};
 use xlstream_parse::{parse, NodeRef, NodeView};
 
 use crate::error::ExcelrsError;
-use crate::model::cell::CellValue;
+use crate::model::cell::{CellType, CellValue};
 use crate::model::worksheet::Worksheet;
 use crate::model::workbook_inner::WorkbookInner;
 
@@ -63,27 +63,28 @@ fn parse_error_string(s: &str) -> CellError {
 
 /// Convert excelrs [`CellValue`] to [`Value`].
 fn cell_value_to_value(cv: &CellValue) -> Value {
-    match cv.value_type.as_str() {
-        "Number" => cv.number.map_or(Value::Empty, Value::Number),
-        "Integer" => cv.number.map_or(Value::Empty, |n| Value::Integer(n as i64)),
-        "String" => cv
+    match CellType::from_tag(&cv.value_type) {
+        // "Integer" tag is never produced by CellValue constructors (calamine
+        // Value::Integer maps to "Number" in value_to_cell_value); falls through to _.
+        Some(CellType::Number) => cv.number.map_or(Value::Empty, Value::Number),
+        Some(CellType::String) => cv
             .string
             .as_ref()
             .map(|s| Value::Text(s.as_str().into()))
             .unwrap_or(Value::Empty),
-        "Boolean" => Value::Bool(cv.boolean.unwrap_or(false)),
-        "Error" => {
+        Some(CellType::Boolean) => Value::Bool(cv.boolean.unwrap_or(false)),
+        Some(CellType::Error) => {
             if let Some(ref e) = cv.error_value {
                 Value::Error(parse_error_string(e))
             } else {
                 Value::Empty
             }
         }
-        "Date" => cv
+        Some(CellType::Date) => cv
             .date_serial
             .map(|s| Value::Date(ExcelDate { serial: s }))
             .unwrap_or(Value::Empty),
-        "Formula" => {
+        Some(CellType::Formula) => {
             // Use cached value fields (set by recalculate)
             if let Some(n) = cv.number {
                 return Value::Number(n);
@@ -108,38 +109,27 @@ fn cell_value_to_value(cv: &CellValue) -> Value {
 
 /// Convert [`Value`] to excelrs [`CellValue`] for caching.
 pub fn value_to_cell_value(v: &Value) -> CellValue {
-    let mut cv = CellValue::default();
     match v {
-        Value::Empty => {
-            cv.value_type = "Null".to_string();
-        }
-        Value::Number(n) => {
-            cv.value_type = "Number".to_string();
-            cv.number = Some(*n);
-        }
-        Value::Integer(i) => {
-            cv.value_type = "Number".to_string();
-            cv.number = Some(*i as f64);
-        }
-        Value::Text(s) => {
-            cv.value_type = "String".to_string();
-            cv.string = Some(s.to_string());
-        }
-        Value::Bool(b) => {
-            cv.value_type = "Boolean".to_string();
-            cv.boolean = Some(*b);
-        }
-        Value::Date(d) => {
-            cv.value_type = "Number".to_string();
-            cv.number = Some(d.serial);
-            cv.date_serial = Some(d.serial);
-        }
-        Value::Error(e) => {
-            cv.value_type = "Error".to_string();
-            cv.error_value = Some(cell_error_to_string(*e));
-        }
+        Value::Empty => CellValue::default(),
+        Value::Number(n) => CellValue::number(*n),
+        Value::Integer(i) => CellValue::number(*i as f64),
+        Value::Text(s) => CellValue::string(s.to_string()),
+        Value::Bool(b) => CellValue::boolean(*b),
+        // `CellValue::date` sets type "Date" without the `number` field; the
+        // original code uses "Number" with both `number` and `date_serial`.
+        Value::Date(d) => CellValue {
+            value_type: "Number".to_string(),
+            number: Some(d.serial),
+            date_serial: Some(d.serial),
+            ..Default::default()
+        },
+        // No `CellValue` constructor for Error variant — set field directly.
+        Value::Error(e) => CellValue {
+            value_type: "Error".to_string(),
+            error_value: Some(cell_error_to_string(*e)),
+            ..Default::default()
+        },
     }
-    cv
 }
 
 /// Strip the leading `=` that Excel may store in formula text.
@@ -334,7 +324,7 @@ impl<'ws> FormulaEvaluator<'ws> {
         let cell = ws.get_cell_by_rc(row, col);
         let cv = cell.value_raw();
 
-        let outcome = if cv.value_type == "Formula" {
+        let outcome = if matches!(CellType::from_tag(&cv.value_type), Some(CellType::Formula)) {
             if let Some(ref formula) = cv.formula {
                 let norm = normalize_formula(formula);
                 match parse(norm) {
