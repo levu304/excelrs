@@ -104,6 +104,27 @@ impl Workbook {
         self.inner.lock().expect("Workbook lock poisoned").worksheets()
     }
 
+    /// Recalculate every worksheet, caching computed values with full workbook
+    /// context so cross-sheet references (e.g. `Sheet2!A1`) resolve to live
+    /// values. No-op when built without `formula-eval`.
+    #[napi]
+    pub fn recalculate(&self) {
+        #[cfg(feature = "formula-eval")]
+        {
+            let inner = self.inner.lock().expect("Workbook lock poisoned");
+            // Snapshot worksheets (clone-on-read, share row Arcs) once, then eval
+            // each with `&inner` workbook context. The guard and each `&ws` both
+            // outlive the loop; the evaluator field-reads `inner.worksheets` (no
+            // re-lock), so the held Mutex never deadlocks.
+            let worksheets = inner.worksheets();
+            for ws in &worksheets {
+                // recalc_with is infallible per-cell; discard the always-Ok
+                // Result explicitly to satisfy `must_use`.
+                let _ = ws.recalculate_with(Some(&*inner));
+            }
+        }
+    }
+
     #[napi(getter)]
     pub fn worksheet_count(&self) -> u32 {
         self.inner.lock().expect("Workbook lock poisoned").worksheet_count()

@@ -270,8 +270,7 @@ fn test_worksheet_recalculate_caches_values() {
     let ws = ws_with_numbers();
     ws.insert_cell_formula(3, 1, "A1+B1".to_string()); // C1 = A1+B1 = 3
 
-    let result = ws.recalculate();
-    assert!(result.is_ok());
+    ws.recalculate();
 
     let cell = ws.get_cell_by_rc(3, 1);
     let cached = cell.cached_value();
@@ -293,7 +292,7 @@ fn test_cached_value_null_without_recalculate() {
 fn test_recalculate_error_caching() {
     let ws = Worksheet::new("Sheet1".into());
     ws.insert_cell_formula(1, 1, "1/0".to_string());
-    ws.recalculate().unwrap();
+    ws.recalculate();
 
     let cell = ws.get_cell_by_rc(1, 1);
     let cached = cell.cached_value();
@@ -317,7 +316,7 @@ fn test_recalculate_chained_formulas() {
     ws.insert_cell_formula(3, 1, "A1+B1".to_string());     // A3 = 3
     ws.insert_cell_formula(3, 2, "A3*2".to_string());      // B3 = A3*2 = 6
 
-    ws.recalculate().unwrap();
+    ws.recalculate();
 
     let a3 = ws.get_cell_by_rc(3, 1);
     assert_eq!(a3.cached_value().unwrap().number, Some(3.0));
@@ -386,8 +385,7 @@ fn test_recalculate_parse_error_isolation() {
     // Cell B1: valid formula = 2+2
     ws.insert_cell_formula(1, 2, "2+2".to_string());
 
-    let result = ws.recalculate();
-    assert!(result.is_ok(), "recalculate should not abort on parse error");
+    ws.recalculate();
 
     // Valid cell should have cached value
     let b1 = ws.get_cell_by_rc(1, 2);
