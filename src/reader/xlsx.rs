@@ -2445,6 +2445,10 @@ fn parse_inline_str_rich_text_with(
                 b"r" if in_is => {
                     in_r = true;
                     current_font = Font::default();
+                    // Empty seed: run without <rFont>/<sz> must read back name/size null,
+                    // not the Calibri/11 default (inherit cell font semantics, OOXML).
+                    current_font.name = None;
+                    current_font.size = None;
                     current_text.clear();
                     has_rpr = false;
                 }
@@ -2552,6 +2556,10 @@ fn parse_shared_string_rich_text(
                 b"r" if in_si => {
                     in_r = true;
                     current_font = Font::default();
+                    // Empty seed: run without <rFont>/<sz> must read back name/size null,
+                    // not the Calibri/11 default (inherit cell font semantics, OOXML).
+                    current_font.name = None;
+                    current_font.size = None;
                     current_text.clear();
                     has_rpr = false;
                     has_rich_text = true;
@@ -3334,6 +3342,26 @@ mod tests {
         assert_eq!(cells[0].2.len(), 1);
         let f = cells[0].2[0].font.as_ref().unwrap();
         assert_eq!(f.name, Some("Arial".into()));
+    }
+
+    #[test]
+    fn test_parse_inline_str_rich_text_no_rfont_no_calibri_leak() {
+        // Regression: run with <b/> but no <rFont>/<sz> must read back
+        // name/size null (inherit cell font), not the Calibri/11 default.
+        let xml = r##"<worksheet>
+        <sheetData>
+          <row r="1">
+            <c r="A1" t="inlineStr"><is><r><rPr><b/></rPr><t>Bold</t></r></is></c>
+          </row>
+        </sheetData>
+        </worksheet>"##;
+        let cells = parse_inline_str_rich_text(xml, &ThemeColorScheme::default());
+        assert_eq!(cells.len(), 1);
+        assert_eq!(cells[0].2.len(), 1);
+        let f = cells[0].2[0].font.as_ref().unwrap();
+        assert_eq!(f.name, None, "no <rFont> → name must not default to Calibri");
+        assert_eq!(f.size, None, "no <sz> → size must not default to 11");
+        assert_eq!(f.bold, Some(true));
     }
 
     #[test]
