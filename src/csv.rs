@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
-use crate::model::cell::CellValue;
+use crate::model::cell::{CellType, CellValue};
 use crate::model::workbook_inner::WorkbookInner;
 
 // ---------------------------------------------------------------------------
@@ -258,15 +258,15 @@ pub fn serialize_csv(inner: &WorkbookInner, delimiter: u8, with_bom: bool) -> Re
 
 /// Convert a `CellValue` to its CSV text representation.
 fn cell_value_to_text(value: &CellValue) -> String {
-    match value.value_type.as_str() {
-        "Null" => String::new(),
-        "Number" => value.number.map(|n| n.to_string()).unwrap_or_default(),
-        "String" => value.string.clone().unwrap_or_default(),
-        "Boolean" => value
+    match CellType::from_tag(&value.value_type) {
+        Some(CellType::Null) => String::new(),
+        Some(CellType::Number) => value.number.map(|n| n.to_string()).unwrap_or_default(),
+        Some(CellType::String) => value.string.clone().unwrap_or_default(),
+        Some(CellType::Boolean) => value
             .boolean
             .map(|b| if b { "TRUE" } else { "FALSE" }.to_string())
             .unwrap_or_default(),
-        "Formula" => {
+        Some(CellType::Formula) => {
             // Prefer cached numeric/boolean value; fallback to formula string
             if let Some(n) = value.number {
                 n.to_string()
@@ -276,18 +276,18 @@ fn cell_value_to_text(value: &CellValue) -> String {
                 value.formula.clone().unwrap_or_default()
             }
         }
-        "Error" => value.error_value.clone().unwrap_or_default(),
-        "Hyperlink" => value
+        Some(CellType::Error) => value.error_value.clone().unwrap_or_default(),
+        Some(CellType::Hyperlink) => value
             .hyperlink_text
             .clone()
             .or_else(|| value.hyperlink.clone())
             .unwrap_or_default(),
-        "RichText" => value
+        Some(CellType::RichText) => value
             .rich_text
             .as_ref()
             .map(|runs| runs.iter().map(|r| r.text.clone()).collect::<String>())
             .unwrap_or_default(),
-        "Merge" => String::new(),
+        Some(CellType::Merge) => String::new(),
         _ => String::new(),
     }
 }

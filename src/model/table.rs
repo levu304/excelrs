@@ -7,7 +7,7 @@
 use napi_derive::napi;
 use std::sync::{Arc, Mutex};
 
-use crate::model::cell::CellValue;
+use crate::model::cell::{CellType, CellValue};
 use serde_json::Value;
 
 /// A single table column definition.
@@ -84,9 +84,9 @@ pub type TableList = Arc<Mutex<Vec<Table>>>;
 
 /// Convert a `CellValue` to a plain text label (used to derive column names).
 pub fn cell_text(cv: &CellValue) -> String {
-    match cv.value_type.as_str() {
-        "String" => cv.string.clone().unwrap_or_default(),
-        "Number" => cv
+    match CellType::from_tag(&cv.value_type) {
+        Some(CellType::String) => cv.string.clone().unwrap_or_default(),
+        Some(CellType::Number) => cv
             .number
             .map(|n| {
                 if n.fract() == 0.0 {
@@ -96,7 +96,7 @@ pub fn cell_text(cv: &CellValue) -> String {
                 }
             })
             .unwrap_or_default(),
-        "Boolean" => cv.boolean.map(|b| b.to_string()).unwrap_or_default(),
+        Some(CellType::Boolean) => cv.boolean.map(|b| b.to_string()).unwrap_or_default(),
         _ => String::new(),
     }
 }

@@ -180,6 +180,7 @@ impl Worksheet {
     #[cfg(feature = "formula-eval")]
     pub fn recalculate(&self) -> Result<(), crate::error::ExcelrsError> {
         use crate::formula::{FormulaEvaluator, value_to_cell_value};
+        use crate::model::cell::CellType;
 
         let rows_snapshot: Vec<Row> = self
             .rows
@@ -192,7 +193,7 @@ impl Worksheet {
         for row in &rows_snapshot {
             for mut cell in row.cells_vec() {
                 let cv = cell.value_raw();
-                if cv.value_type == "Formula" {
+                if matches!(CellType::from_tag(&cv.value_type), Some(CellType::Formula)) {
                     if let Some(ref formula) = cv.formula {
                         let mut evaluator =
                             FormulaEvaluator::new(self, self.name.clone(), None);
@@ -1071,6 +1072,9 @@ impl Worksheet {
             // Ensure the CellValue reflects Formula type so the evaluator,
             // cached-value getter, and writer all detect this as a formula cell.
             let mut cv = cell.value_raw();
+            // Using CellValue::formula() would discard cached value fields (number,
+            // string, etc.) from Pass 1 of the reader; preserve them by assigning the
+            // tag directly. (No CellType constructor mutates an existing CellValue.)
             cv.value_type = "Formula".to_string();
             cv.formula = Some(formula);
             cell.set_value_raw(cv);
