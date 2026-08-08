@@ -227,6 +227,26 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
         }
     }
 
+    // Step 3.21: parse worksheet metadata from sheet XML: sheetPr/tabColor and
+    // sheetFormatPr (default row/col dimensions + outline levels).
+    let per_sheet_format = parse_sheet_format_pr(data, sheet_count)?;
+    for (i, fmt) in per_sheet_format.into_iter().enumerate() {
+        if let Some(tc) = &fmt.tab_color {
+            inner.worksheets[i].set_tab_color_inner(Some(tc.clone()));
+        }
+        inner.worksheets[i].set_default_row_height_inner(fmt.default_row_height);
+        inner.worksheets[i].set_default_col_width_inner(fmt.default_col_width);
+        inner.worksheets[i].set_outline_level_row_inner(fmt.outline_level_row);
+        inner.worksheets[i].set_outline_level_col_inner(fmt.outline_level_col);
+    }
+
+    // Step 3.22: parse sheet visibility states from xl/workbook.xml `<sheet>`
+    // `state` attribute, attached by index.
+    let per_sheet_states = parse_sheet_states(data, &sheet_names)?;
+    for (i, state) in per_sheet_states.into_iter().enumerate() {
+        inner.worksheets[i].set_state_inner(state);
+    }
+
     // Step 4: parse defined names from xl/workbook.xml
     let defined_names = workbook::parse_defined_names(data, &sheet_names)?;
     inner.set_defined_names(defined_names);
@@ -1733,6 +1753,170 @@ fn rel_attr(tag: &str, key: &str) -> Option<String> {
     let raw = &rest[q1 + 1..q1 + 1 + q2];
     let unescaped = quick_xml::escape::unescape(raw).unwrap_or(std::borrow::Cow::Borrowed(raw));
     Some(unescaped.into_owned())
+}
+
+/// Per-sheet worksheet-level metadata parsed from `xl/worksheets/sheetN.xml`:
+/// `<sheetPr><tabColor>` and `<sheetFormatPr>` default dimensions / outline levels.
+#[derive(Clone, Debug, Default)]
+pub struct SheetFormat {
+    pub tab_color: Option<crate::model::color::Color>,
+    pub default_row_height: Option<f64>,
+    pub default_col_width: Option<f64>,
+    pub outline_level_row: Option<u8>,
+    pub outline_level_col: Option<u8>,
+}
+
+/// Parse `<sheetFormatPr>` and `<sheetPr><tabColor>` from each sheet XML,
+/// returning one `SheetFormat` per sheet (index aligned with worksheets).
+fn parse_sheet_format_pr(
+    data: &[u8],
+    sheet_count: usize,
+) -> Result<Vec<SheetFormat>, ExcelrsError> {
+    use std::io::Cursor;
+    let cursor = Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
+    let scheme = crate::model::color::ThemeColorScheme::default();
+
+    let mut per_sheet = Vec::with_capacity(sheet_count);
+    for _ in 0..sheet_count {
+        per_sheet.push(SheetFormat::default());
+    }
+
+    for (i, fmt) in per_sheet.iter_mut().enumerate().take(sheet_count) {
+        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+        let entry = match archive.by_name(&path) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let mut xml = String::new();
+        entry.take(MAX_ENTRY_BYTES).read_to_string(&mut xml)?;
+        *fmt = parse_sheet_format_from_xml(&xml, &scheme)?;
+    }
+
+    Ok(per_sheet)
+}
+
+fn parse_sheet_format_from_xml(
+    xml: &str,
+    scheme: &crate::model::color::ThemeColorScheme,
+) -> Result<SheetFormat, ExcelrsError> {
+    use quick_xml::events::Event;
+    let mut reader = quick_xml::Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut fmt = SheetFormat::default();
+    let mut events: u64 = 0;
+
+    loop {
+        events += 1;
+        if events > MAX_EVENTS as u64 {
+            break;
+        }
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                let tag = e.local_name();
+                match tag.as_ref() {
+                    b"tabColor" => {
+                        let attrs: Vec<_> = e.attributes().filter_map(|a| a.ok()).collect();
+                        fmt.tab_color = styles::parse_color(&attrs, scheme);
+                    }
+                    x if x == b"sheetFormatPr" => {
+                        for attr in e.attributes().flatten() {
+                            let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
+                            let val = attr.unescape_value().unwrap_or_default().to_string();
+                            match key {
+                                "defaultRowHeight" => {
+                                    fmt.default_row_height = val.parse().ok();
+                                }
+                                "defaultColWidth" => {
+                                    fmt.default_col_width = val.parse().ok();
+                                }
+                                "outlineLevelRow" => {
+                                    fmt.outline_level_row = val.parse().ok();
+                                }
+                                "outlineLevelCol" => {
+                                    fmt.outline_level_col = val.parse().ok();
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => {
+                return Err(ExcelrsError::Parse(format!(
+                    "Failed to parse sheet XML for sheetFormatPr: {e}"
+                )))
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(fmt)
+}
+
+/// Parse `state` attribute from each `<sheet>` element in `xl/workbook.xml`,
+/// returning one `SheetState` per sheet (index aligned). Sheets with no
+/// `state` attribute default to `Visible`.
+fn parse_sheet_states(
+    data: &[u8],
+    sheet_names: &[String],
+) -> Result<Vec<crate::model::worksheet::SheetState>, ExcelrsError> {
+    use quick_xml::events::Event;
+    use std::io::{Cursor, Read};
+    let cursor = Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
+
+    let mut states: Vec<crate::model::worksheet::SheetState> =
+        vec![crate::model::worksheet::SheetState::visible; sheet_names.len()];
+
+    let entry = match archive.by_name("xl/workbook.xml") {
+        Ok(e) => e,
+        Err(_) => return Ok(states),
+    };
+    let mut xml = String::new();
+    entry.take(MAX_ENTRY_BYTES).read_to_string(&mut xml)?;
+
+    let mut reader = quick_xml::Reader::from_str(&xml);
+    let mut buf = Vec::new();
+    let mut events: u64 = 0;
+    let mut idx: usize = 0;
+    // <sheets> order matches sheet_names order (calamine / OOXML guarantee).
+    loop {
+        events += 1;
+        if events > MAX_EVENTS as u64 {
+            break;
+        }
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e))
+                if e.local_name().as_ref() == b"sheet" =>
+            {
+                if let Some(st) = e
+                    .attributes()
+                    .filter_map(|a| a.ok())
+                    .find(|a| a.key.as_ref() == b"state")
+                {
+                    let s = st.unescape_value().unwrap_or_default().to_string();
+                    if idx < states.len() {
+                        states[idx] = crate::model::worksheet::SheetState::from(s.as_str());
+                    }
+                }
+                idx += 1;
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => {
+                return Err(ExcelrsError::Parse(format!(
+                    "Failed to parse xl/workbook.xml sheet states: {e}"
+                )))
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(states)
 }
 
 /// Parse `xl/commentsN.xml` for every sheet, returning `(cellRef, CellComment)`

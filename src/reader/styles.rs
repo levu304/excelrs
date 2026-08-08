@@ -249,7 +249,7 @@ fn str_attr<'a>(attrs: &'a [Attribute], name: &[u8]) -> Option<&'a str> {
 /// originating theme reference when present).
 ///
 /// Priority: `theme` → `indexed` → `rgb`. Returns `None` when none are present.
-fn parse_color(attrs: &[Attribute], scheme: &ThemeColorScheme) -> Option<Color> {
+pub fn parse_color(attrs: &[Attribute], scheme: &ThemeColorScheme) -> Option<Color> {
     // Prefer theme, then indexed, then rgb
     if let Some(theme_str) = str_attr(attrs, b"theme") {
         if let Ok(index) = theme_str.parse::<usize>() {

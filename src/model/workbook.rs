@@ -17,7 +17,7 @@ use super::sheet_protection::SheetProtection;
 use super::sheet_view::SheetView;
 use super::workbook_inner::WorkbookInner;
 use super::workbook_view::{CalcProperties, WorkbookView};
-use super::worksheet::Worksheet;
+use super::worksheet::{SheetState, Worksheet, WorksheetProperties};
 use crate::csv::WorkbookCsv;
 use crate::stream_handle::WorkbookStream;
 use crate::xlsx::WorkbookXlsx;
@@ -34,6 +34,8 @@ pub struct AddWorksheetOptions {
     pub header_footer: Option<HeaderFooter>,
     pub protection: Option<SheetProtection>,
     pub auto_filter: Option<String>,
+    pub state: Option<SheetState>,
+    pub properties: Option<WorksheetProperties>,
 }
 
 /// Top-level workbook document.
@@ -65,7 +67,7 @@ impl Workbook {
     #[napi]
     pub fn add_worksheet(&mut self, name: String, options: Option<AddWorksheetOptions>) -> Worksheet {
         let mut inner = self.inner.lock().expect("Workbook lock poisoned");
-        let ws = inner.add_worksheet(name);
+        let mut ws = inner.add_worksheet(name);
 
         // Apply options on the returned clone (interior mutability propagates back)
         if let Some(opts) = options {
@@ -83,6 +85,12 @@ impl Workbook {
             }
             if let Some(af) = opts.auto_filter {
                 ws.set_auto_filter_range(Some(af));
+            }
+            if let Some(state) = opts.state {
+                ws.set_state_inner(state);
+            }
+            if let Some(props) = opts.properties {
+                ws.set_properties(props);
             }
         }
 
@@ -415,6 +423,8 @@ mod tests {
                 header_footer: None,
                 protection: None,
                 auto_filter: None,
+                state: None,
+                properties: None,
             }),
         );
         let ps = ws.page_setup().expect("pageSetup should be set");
@@ -441,6 +451,8 @@ mod tests {
                 auto_filter: Some("A1:C10".into()),
                 protection: None,
                 header_footer: None,
+                state: None,
+                properties: None,
             }),
         );
         assert!(ws.page_setup().is_some());
