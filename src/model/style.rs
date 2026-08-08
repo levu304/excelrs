@@ -216,7 +216,7 @@ impl From<&str> for AlignmentVertical {
 
 /// Font properties: name, size (points), weight, style, and color.
 #[napi(object)]
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct Font {
     /// Font name (e.g. "Calibri", "Arial"). Default: "Calibri".
@@ -254,6 +254,26 @@ impl Default for Font {
         }
     }
 }
+
+// f64 doesn't impl Hash (not Eq-compatible), so hash its bit pattern. Used for
+// the shared-string dedupe key (`SharedString::Rich`), which only compares
+// values that were inserted, so NaN payloads are a non-issue in practice.
+impl std::hash::Hash for Font {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+        self.size.map(|s| s.to_bits()).hash(state);
+        self.bold.hash(state);
+        self.italic.hash(state);
+        self.underline.hash(state);
+        self.color.hash(state);
+        self.color_theme.hash(state);
+        self.color_tint.map(|t| t.to_bits()).hash(state);
+    }
+}
+
+// f64 fields bar a derived Eq; manual impl is sound because rich-text runs are
+// validated (finite) before they reach the shared-string table, so no NaN keys.
+impl Eq for Font {}
 
 impl Font {
     /// Validate font fields that appear in rich-text runs.

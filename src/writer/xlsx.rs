@@ -26,7 +26,7 @@ use std::path::Path;
 use quick_xml::escape::escape;
 
 use crate::error::ExcelrsError;
-use crate::model::cell::{Cell, CellType};
+use crate::model::cell::{Cell, CellType, RichTextRun};
 use crate::model::comment::CellComment;
 use crate::model::defined_name::DefinedName;
 use crate::model::image::{AnchorType, WorksheetImage};
@@ -364,16 +364,24 @@ fn effective_cell_style_with_fallback(cell: &Cell, col_style_map: &BTreeMap<u32,
 // Shared strings table
 // ---------------------------------------------------------------------------
 
+/// value of a shared-string table entry. Plain holds ordinary strings,
+/// `Rich` holds a rich-text run sequence (written as `<si><r>…</r></si>`).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum SharedString {
+    Plain(String),
+    Rich(Vec<RichTextRun>),
+}
+
 /// Walk all worksheets and deduplicate string values.
 ///
 /// Returns `(string_table, string_indices)` where:
-/// - `string_table` is an index-ordered `Vec<String>` suitable for
+/// - `string_table` is an index-ordered `Vec<SharedString>` suitable for
 ///   `xl/sharedStrings.xml`
-/// - `string_indices` is a `HashMap<String, u32>` for fast look-up when
+/// - `string_indices` is a `HashMap<SharedString, u32>` for fast look-up when
 ///   writing cell references as `<c t="s"><v>idx</v></c>`
-fn build_shared_strings(worksheets: &[Worksheet]) -> (Vec<String>, HashMap<String, u32>) {
-    let mut string_table: Vec<String> = Vec::new();
-    let mut string_indices: HashMap<String, u32> = HashMap::new();
+fn build_shared_strings(worksheets: &[Worksheet]) -> (Vec<SharedString>, HashMap<SharedString, u32>) {
+    let mut string_table: Vec<SharedString> = Vec::new();
+    let mut string_indices: HashMap<SharedString, u32> = HashMap::new();
 
     for ws in worksheets {
         for row in ws.rows() {
@@ -382,9 +390,9 @@ fn build_shared_strings(worksheets: &[Worksheet]) -> (Vec<String>, HashMap<Strin
                 match CellType::from_tag(&cv.value_type) {
                     Some(CellType::String) => {
                         if let Some(s) = cv.string {
-                            string_indices.entry(s.clone()).or_insert_with(|| {
+                            string_indices.entry(SharedString::Plain(s.clone())).or_insert_with(|| {
                                 let idx = string_table.len() as u32;
-                                string_table.push(s);
+                                string_table.push(SharedString::Plain(s));
                                 idx
                             });
                         }
@@ -393,9 +401,21 @@ fn build_shared_strings(worksheets: &[Worksheet]) -> (Vec<String>, HashMap<Strin
                         // Collect display text (prefer hyperlink_text, fallback to URL)
                         let text = cv.hyperlink_text.as_deref().or(cv.hyperlink.as_deref());
                         if let Some(s) = text {
-                            string_indices.entry(s.to_string()).or_insert_with(|| {
+                            let key = SharedString::Plain(s.to_string());
+                            string_indices.entry(key.clone()).or_insert_with(|| {
                                 let idx = string_table.len() as u32;
-                                string_table.push(s.to_string());
+                                string_table.push(key);
+                                idx
+                            });
+                        }
+                    }
+                    Some(CellType::RichText) => {
+                        // Keyed by run content so identical runs share one entry (dedupe).
+                        if let Some(runs) = &cv.rich_text {
+                            let key = SharedString::Rich(runs.clone());
+                            string_indices.entry(key.clone()).or_insert_with(|| {
+                                let idx = string_table.len() as u32;
+                                string_table.push(key);
                                 idx
                             });
                         }
@@ -1068,7 +1088,46 @@ fn write_sheet_rels<W: Write>(
 // xl/sharedStrings.xml
 // ---------------------------------------------------------------------------
 
-fn write_shared_strings<W: Write>(w: &mut W, string_table: &[String]) -> Result<(), ExcelrsError> {
+/// Serialize one rich-text run (`<r><rPr>…</rPr><t>…</t></r>`) — shared by
+/// `write_shared_strings` (Rich entries) and the inline path.
+fn write_rich_run_xml<W: Write>(w: &mut W, run: &RichTextRun) -> Result<(), ExcelrsError> {
+    write_str(w, "<r>")?;
+    if let Some(ref font) = run.font {
+        write_str(w, "<rPr>")?;
+        if let Some(ref name) = font.name {
+            write_str(w, &format!("<rFont val=\"{}\"/>", escape(name)))?;
+        }
+        if let Some(true) = font.bold {
+            write_str(w, "<b/>")?;
+        }
+        if let Some(true) = font.italic {
+            write_str(w, "<i/>")?;
+        }
+        if let Some(true) = font.underline {
+            write_str(w, "<u/>")?;
+        }
+        if let Some(ref color) = font.color {
+            write_str(w, &format!("<color rgb=\"{}\"/>", escape(color)))?;
+        }
+        if let Some(sz) = font.size {
+            write_str(w, &format!("<sz val=\"{}\"/>", sz))?;
+        }
+        write_str(w, "</rPr>")?;
+    }
+    // xml:space="preserve" when leading/trailing whitespace or a newline would
+    // otherwise be collapsed by consumers (task 3.2).
+    if run.text.starts_with(' ') || run.text.ends_with(' ') || run.text.contains('\n') {
+        write_str(w, &format!("<t xml:space=\"preserve\">{}</t>", escape(&run.text)))?;
+    } else {
+        write_str(w, &format!("<t>{}</t>", escape(&run.text)))?;
+    }
+    write_str(w, "</r>")?;
+    Ok(())
+}
+
+fn write_shared_strings<W: Write>(w: &mut W, string_table: &[SharedString]) -> Result<(), ExcelrsError> {
+    // OOXML `count` is the number of cell references (not recoverable after
+    // dedupe), so it tracks uniqueCount — pre-existing behavior, kept.
     let count = string_table.len();
     write_str(w, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#)?;
     write_str(
@@ -1079,11 +1138,22 @@ fn write_shared_strings<W: Write>(w: &mut W, string_table: &[String]) -> Result<
         ),
     )?;
     for s in string_table {
-        // xml:space="preserve" when the string has leading/trailing whitespace
-        if s.starts_with(' ') || s.ends_with(' ') {
-            write_str(w, &format!("<si><t xml:space=\"preserve\">{}</t></si>", escape(s)))?;
-        } else {
-            write_str(w, &format!("<si><t>{}</t></si>", escape(s)))?;
+        match s {
+            SharedString::Plain(s) => {
+                // xml:space="preserve" when the string has leading/trailing whitespace
+                if s.starts_with(' ') || s.ends_with(' ') {
+                    write_str(w, &format!("<si><t xml:space=\"preserve\">{}</t></si>", escape(s)))?;
+                } else {
+                    write_str(w, &format!("<si><t>{}</t></si>", escape(s)))?;
+                }
+            }
+            SharedString::Rich(runs) => {
+                write_str(w, "<si>")?;
+                for run in runs {
+                    write_rich_run_xml(w, run)?;
+                }
+                write_str(w, "</si>")?;
+            }
         }
     }
     write_str(w, "</sst>")?;
@@ -1481,7 +1551,7 @@ fn emit_cf_rule<W: Write>(w: &mut W, rule: &crate::model::conditional_formatting
 fn write_sheet_xml<W: Write>(
     w: &mut W,
     ws: &Worksheet,
-    string_indices: &HashMap<String, u32>,
+    string_indices: &HashMap<SharedString, u32>,
     cell_style_indices: &[u32],
     row_style_indices: &[u32],
     hyperlinks: &[SheetHyperlink],
@@ -1699,7 +1769,7 @@ fn emit_worksheet_breaks<W: Write>(w: &mut W, ws: &Worksheet) -> Result<(), Exce
 fn write_cells_with_styles<W: Write>(
     w: &mut W,
     ws: &Worksheet,
-    string_indices: &HashMap<String, u32>,
+    string_indices: &HashMap<SharedString, u32>,
     cell_style_indices: &[u32],
     row_style_indices: &[u32],
 ) -> Result<(), ExcelrsError> {
@@ -1783,7 +1853,7 @@ fn write_cells_with_styles<W: Write>(
 fn write_cell_xml<W: Write>(
     w: &mut W,
     cell: &crate::model::cell::Cell,
-    string_indices: &HashMap<String, u32>,
+    string_indices: &HashMap<SharedString, u32>,
     style_index: u32,
 ) -> Result<(), ExcelrsError> {
     let cv = cell
@@ -1801,7 +1871,7 @@ fn write_cell_xml<W: Write>(
         Some(CellType::String) => Some("t=\"s\""),
         Some(CellType::Boolean) => Some("t=\"b\""),
         Some(CellType::Error) => Some("t=\"e\""),
-        Some(CellType::RichText) => Some("t=\"inlineStr\""),
+        Some(CellType::RichText) => Some("t=\"s\""),
         Some(CellType::Hyperlink) => Some("t=\"s\""),
         Some(CellType::Formula) => {
             // Formula string results carry their own cell type so calamine
@@ -1845,7 +1915,7 @@ fn write_cell_xml<W: Write>(
         }
         Some(CellType::String) => {
             if let Some(s) = &cv.string {
-                if let Some(idx) = string_indices.get(s) {
+                if let Some(idx) = string_indices.get(&SharedString::Plain(s.clone())) {
                     write_str(w, &format!("<v>{}</v>", idx))?;
                 }
             }
@@ -1876,46 +1946,21 @@ fn write_cell_xml<W: Write>(
             }
         }
         Some(CellType::RichText) => {
+            // Shared-string reference: <v> is the table index of the runs.
             if let Some(runs) = &cv.rich_text {
-                write_str(w, "<is>")?;
-                for run in runs {
-                    write_str(w, "<r>")?;
-                    if let Some(ref font) = run.font {
-                        write_str(w, "<rPr>")?;
-                        if let Some(ref name) = font.name {
-                            write_str(w, &format!("<rFont val=\"{}\"/>", escape(name)))?;
-                        }
-                        if let Some(true) = font.bold {
-                            write_str(w, "<b/>")?;
-                        }
-                        if let Some(true) = font.italic {
-                            write_str(w, "<i/>")?;
-                        }
-                        if let Some(true) = font.underline {
-                            write_str(w, "<u/>")?;
-                        }
-                        if let Some(ref color) = font.color {
-                            write_str(w, &format!("<color rgb=\"{}\"/>", escape(color)))?;
-                        }
-                        if let Some(sz) = font.size {
-                            write_str(w, &format!("<sz val=\"{}\"/>", sz))?;
-                        }
-                        write_str(w, "</rPr>")?;
-                    }
-                    write_str(w, &format!("<t>{}</t>", escape(&run.text)))?;
-                    write_str(w, "</r>")?;
+                if let Some(idx) = string_indices.get(&SharedString::Rich(runs.clone())) {
+                    write_str(w, &format!("<v>{}</v>", idx))?;
                 }
-                write_str(w, "</is>")?;
             }
         }
         Some(CellType::Hyperlink) => {
             // Write the display text as a shared string value
             if let Some(text) = &cv.hyperlink_text {
-                if let Some(idx) = string_indices.get(text) {
+                if let Some(idx) = string_indices.get(&SharedString::Plain(text.clone())) {
                     write_str(w, &format!("<v>{}</v>", idx))?;
                 }
             } else if let Some(url) = &cv.hyperlink {
-                if let Some(idx) = string_indices.get(url) {
+                if let Some(idx) = string_indices.get(&SharedString::Plain(url.clone())) {
                     write_str(w, &format!("<v>{}</v>", idx))?;
                 }
             }
@@ -3303,30 +3348,169 @@ mod tests {
         assert!(sheet_xml.contains(r#"c r="A1""#), "sheet must contain real cell A1");
     }
 
-    /// Rich-text with a valid font color is emitted correctly.
+    /// Rich-text with a valid font color is emitted through shared strings:
+    /// cell carries `t="s"` + `<v>idx</v>`, runs live in `xl/sharedStrings.xml`.
     /// Note: XML injection through font color is now blocked at the validation
     /// layer (Font::validate rejects non-hex colors before they reach the writer).
     #[test]
     fn test_rich_text_valid_font_color_emitted() {
-        let mut cell = Cell::new("A1".into(), 1, 1);
-        cell.set_value_raw(CellValue::rich_text(vec![RichTextRun {
+        let runs = vec![RichTextRun {
             text: "hello".into(),
             font: Some(Font {
                 color: Some("FFFF0000".into()),
                 bold: Some(true),
                 ..Default::default()
             }),
-        }]));
+        }];
+        let key = SharedString::Rich(runs.clone());
+        let mut indices = HashMap::new();
+        indices.insert(key, 0u32);
+
+        let mut cell = Cell::new("A1".into(), 1, 1);
+        cell.set_value_raw(CellValue::rich_text(runs));
         let mut buf = Vec::new();
-        write_cell_xml(&mut buf, &cell, &HashMap::new(), 0).unwrap();
+        write_cell_xml(&mut buf, &cell, &indices, 0).unwrap();
         let xml = String::from_utf8(buf).unwrap();
+        assert!(xml.contains(r##"t="s""##), "no shared-string type: {xml}");
+        assert!(xml.contains("<v>0</v>"), "shared-string index missing: {xml}");
+        assert!(!xml.contains("inlineStr"), "must not emit inline string: {xml}");
+        assert!(!xml.contains("<is>"), "must not emit inline <is>: {xml}");
+
+        let runs = vec![RichTextRun {
+            text: "hello".into(),
+            font: Some(Font {
+                color: Some("FFFF0000".into()),
+                bold: Some(true),
+                ..Default::default()
+            }),
+        }];
+        let mut sst = Vec::new();
+        write_shared_strings(&mut sst, &[SharedString::Rich(runs)]).unwrap();
+        let sst = String::from_utf8(sst).unwrap();
         assert!(
-            xml.contains(r##"<color rgb="FFFF0000"/>"##),
-            "font color missing: {xml}"
+            sst.contains("<si><r>") && sst.contains("</r></si>"),
+            "sharedStrings.xml must carry the runs wrapped in <si><r>: {sst}"
         );
-        assert!(xml.contains("<b/>"), "bold missing: {xml}");
-        assert!(xml.contains("<t>hello</t>"), "text missing: {xml}");
-        assert!(xml.contains(r##"t="inlineStr""##), "must be inlineStr: {xml}");
+        assert!(
+            sst.contains(r##"<rFont val="Calibri"/>"##),
+            "run font must carry in shared string: {sst}"
+        );
+        assert!(sst.contains(r##"<color rgb="FFFF0000"/>"##), "color missing: {sst}");
+        assert!(sst.contains("<b/>"), "bold missing: {sst}");
+        assert!(sst.contains("<t>hello</t>"), "text missing: {sst}");
+    }
+
+    /// Round-trip: write a rich-text cell and read it back preserving run
+    /// text and per-run fonts.
+    #[test]
+    fn test_rich_text_round_trip_preserves_runs() {
+        use crate::model::workbook_inner::WorkbookInner;
+        use crate::reader::xlsx::read_from_buffer;
+
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("S".into());
+        ws.insert_cell_value(
+            1,
+            1,
+            CellValue::rich_text(vec![
+                RichTextRun {
+                    text: "B: (11) = (7) + (10)\n".into(),
+                    font: Some(Font {
+                        name: Some("Times New Roman".into()),
+                        ..Default::default()
+                    }),
+                },
+                RichTextRun {
+                    text: "tail".into(),
+                    font: Some(Font {
+                        name: Some("Arial".into()),
+                        bold: Some(true),
+                        ..Default::default()
+                    }),
+                },
+            ]),
+        );
+
+        let bytes = crate::writer::xlsx::workbook_to_bytes(&inner).unwrap();
+        let wb = read_from_buffer(&bytes).unwrap();
+        let cell = wb
+            .get_worksheet(serde_json::json!(1))
+            .unwrap()
+            .get_cell_by_rc(1, 1);
+        let cv = cell.value_raw();
+        let runs = cv.rich_text.as_ref().expect("rich text survives round trip");
+        assert_eq!(runs.len(), 2, "both runs preserved");
+        assert_eq!(runs[0].text, "B: (11) = (7) + (10)\n");
+        assert_eq!(
+            runs[0].font.as_ref().and_then(|f| f.name.as_deref()),
+            Some("Times New Roman")
+        );
+        assert_eq!(runs[1].font.as_ref().and_then(|f| f.bold), Some(true));
+        assert_eq!(
+            runs[1].font.as_ref().and_then(|f| f.name.as_deref()),
+            Some("Arial")
+        );
+    }
+
+    /// Identical rich text across two cells deduplicates to one shared-string index.
+    #[test]
+    fn test_rich_text_dedupes_to_one_shared_string() {
+        use crate::model::workbook_inner::WorkbookInner;
+        use std::io::Read;
+
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("S".into());
+        let runs = vec![RichTextRun {
+            text: "same".into(),
+            font: Some(Font {
+                name: Some("Courier New".into()),
+                ..Default::default()
+            }),
+        }];
+        ws.insert_cell_value(1, 1, CellValue::rich_text(runs.clone()));
+        ws.insert_cell_value(2, 1, CellValue::rich_text(runs));
+
+        let bytes = crate::writer::xlsx::workbook_to_bytes(&inner).unwrap();
+        let cursor = std::io::Cursor::new(&bytes[..]);
+        let mut archive = zip::ZipArchive::new(cursor).unwrap();
+        let mut sst = String::new();
+        archive
+            .by_name("xl/sharedStrings.xml")
+            .unwrap()
+            .read_to_string(&mut sst)
+            .unwrap();
+        assert_eq!(sst.matches("<si>").count(), 1, "one deduped entry: {sst}");
+        assert!(
+            sst.contains(r##"<rFont val="Courier New"/"##),
+            "run font in shared string: {sst}"
+        );
+
+        let mut sheet = String::new();
+        archive
+            .by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut sheet)
+            .unwrap();
+        assert_eq!(sheet.matches("<v>0</v>").count(), 2, "both cells reference index 0");
+    }
+
+    /// A run with trailing-newline text is emitted with `xml:space="preserve"`.
+    #[test]
+    fn test_rich_text_run_preserves_trailing_whitespace() {
+        let runs = vec![RichTextRun {
+            text: "B: (11) = (7) + (10)\n".into(),
+            font: Some(Font {
+                name: Some("Times New Roman".into()),
+                ..Default::default()
+            }),
+        }];
+        let mut sst = Vec::new();
+        write_shared_strings(&mut sst, &[SharedString::Rich(runs)]).unwrap();
+        let sst = String::from_utf8(sst).unwrap();
+        assert!(
+            sst.contains("<t xml:space=\"preserve\">B: (11) = (7) + (10)\n</t>"),
+            "trailing newline must be preserved: {sst}"
+        );
     }
 
     /// Invalid rich-text font color must be rejected at write time.
