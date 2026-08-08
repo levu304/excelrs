@@ -823,4 +823,29 @@ mod tests {
             "expected at least sheetPr and sheetData in sheet XML: {xml}"
         );
     }
+
+    // Regression: partial `setProperties` must not wipe fields the caller
+    // omitted — napi deserializes missing object fields as `None`.
+    #[test]
+    fn test_set_properties_partial_keeps_other_fields() {
+        use crate::model::color::Color;
+        use crate::model::worksheet::WorksheetProperties;
+        let mut inner = WorkbookInner::new();
+        let mut ws = inner.add_worksheet("Partial".into());
+        ws.set_tab_color_inner(Some(Color {
+            rgb: "FFFF0000".to_string(),
+            theme: None,
+            tint: None,
+        }));
+        // Only defaultRowHeight is set; tabColor must survive the partial update.
+        ws.set_properties(WorksheetProperties {
+            default_row_height: Some(24.0),
+            ..Default::default()
+        });
+        assert_eq!(
+            ws.get_tab_color_inner().map(|c| c.rgb),
+            Some("FFFF0000".to_string())
+        );
+        assert_eq!(ws.get_default_row_height_inner(), Some(24.0));
+    }
 }

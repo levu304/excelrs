@@ -904,31 +904,41 @@ impl Worksheet {
     }
 
     #[napi(js_name = setProperties)]
-    /// Bulk-update worksheet properties. Only `Some` fields are applied;
-    /// pass `undefined` for a field to leave it unchanged, or `null` to clear.
+    /// Bulk-update worksheet properties. Only fields that are present (`Some`)
+    /// are applied; omit a field to leave its current value unchanged. To clear
+    /// `tabColor`, set it via the `tabColor` setter to `null` — napi cannot
+    /// distinguish `null` from `undefined` on an object field, so partial clears
+    /// go through the individual setters.
     pub fn set_properties(&mut self, val: WorksheetProperties) {
-        let color = val.tab_color.filter(|s| !s.is_empty()).map(|s| Color {
-            rgb: s,
-            theme: None,
-            tint: None,
-        });
-        *self.tab_color.lock().expect("Worksheet tab_color lock poisoned") = color;
-        *self
-            .default_row_height
-            .lock()
-            .expect("Worksheet default_row_height lock poisoned") = val.default_row_height;
-        *self
-            .default_col_width
-            .lock()
-            .expect("Worksheet default_col_width lock poisoned") = val.default_col_width;
-        *self
-            .outline_level_row
-            .lock()
-            .expect("Worksheet outline_level_row lock poisoned") = val.outline_level_row;
-        *self
-            .outline_level_col
-            .lock()
-            .expect("Worksheet outline_level_col lock poisoned") = val.outline_level_col;
+        if let Some(c) = val.tab_color.filter(|s| !s.is_empty()) {
+            *self.tab_color.lock().expect("Worksheet tab_color lock poisoned") =
+                Some(Color { rgb: c, theme: None, tint: None });
+        }
+        if val.default_row_height.is_some() {
+            *self
+                .default_row_height
+                .lock()
+                .expect("Worksheet default_row_height lock poisoned") =
+                val.default_row_height;
+        }
+        if val.default_col_width.is_some() {
+            *self
+                .default_col_width
+                .lock()
+                .expect("Worksheet default_col_width lock poisoned") = val.default_col_width;
+        }
+        if val.outline_level_row.is_some() {
+            *self
+                .outline_level_row
+                .lock()
+                .expect("Worksheet outline_level_row lock poisoned") = val.outline_level_row;
+        }
+        if val.outline_level_col.is_some() {
+            *self
+                .outline_level_col
+                .lock()
+                .expect("Worksheet outline_level_col lock poisoned") = val.outline_level_col;
+        }
     }
 
     // -- protection --
