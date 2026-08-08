@@ -1,7 +1,7 @@
 # Changelog
 <!-- Release process: tag-driven main. `git tag -a vX.Y.Z -m "..."` then push tag. -->
 
-## [Unreleased]
+## [2.9.1] - 2026-08-08
 
 ### Fixed
 
