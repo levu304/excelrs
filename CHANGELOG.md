@@ -1,5 +1,11 @@
 # Changelog
-<!-- Release process: tag-driven from main. `git tag -a vX.Y.Z -m "..."` then push the tag. -->
+<!-- Release process: tag-driven main. `git tag -a vX.Y.Z -m "..."` then push tag. -->
+
+## [Unreleased]
+
+### Fixed
+
+- **Shared-string dedup key for rich text now uses the rendered run projection only (#64 follow-up)** — `SharedString::Rich` keys on `RenderedRunKey` (name, size, bold, italic, underline, color, text) instead of the full `Font` struct, so runs differing only in unrendered `color_theme`/`color_tint` collapse into one entry and the key no longer depends on `Font::validate` covering every field. Removed the hand-rolled `Font` `Hash` (f64 `to_bits`) and manual `Eq` that violated the `Hash`/`Eq` contract for signed zero. Streaming writer now shares the same `SharedString` table and render logic, with a documented guardrail that future streaming rich text MUST route through shared strings (`t="s"`), never `inlineStr`. Added golden-file + LibreOffice/XSD conformance tests.
 
 ## [2.9.0] - 2026-08-07
 

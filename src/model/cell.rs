@@ -84,7 +84,7 @@ impl CellType {
 /// path so they appear as `Null` when read back (see spec §9.2.1 item 2).
 /// A rich text run: a text fragment with optional font formatting.
 #[napi(object)]
-#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RichTextRun {
     /// Text content for this run.

@@ -36,17 +36,26 @@ use crate::error::ExcelrsError;
 use crate::model::style::Style;
 use crate::reader::styles as reader_styles;
 use crate::writer::styles as writer_styles;
+use crate::writer::xlsx::{write_shared_strings, SharedString};
 
 // ---------------------------------------------------------------------------
 // Streaming model (lightweight; reuses the `Style` model for fidelity)
 // ---------------------------------------------------------------------------
 
 /// A cell value as seen on the streaming path.
+///
+/// # Rich text (future)
+/// A future `RichText` value MUST serialize runs into the shared-string table
+/// (`<si><r><rPr>…</rPr><t>…</t></r></si>`, cell `t="s"` + `<v>idx</v>`)
+/// reusing `writer::xlsx::write_rich_run_xml` / `SharedString::Rich` — never
+/// `t="inlineStr"`. The table below is already `SharedString`-typed so both
+/// writers share the same render/key logic and cannot diverge.
 #[derive(Clone, Debug, PartialEq)]
 pub enum StreamValue {
     /// Numeric value (numbers, dates stored as serials).
     Number(f64),
-    /// Shared / inline / formula-cached string.
+    /// Shared / inline / formula-cached string. Interned into the shared-string
+    /// table (`SharedString::Plain`) and emitted as `t="s"`.
     Text(String),
     /// Boolean.
     Bool(bool),
@@ -84,8 +93,8 @@ pub struct StreamSheet {
 /// for strings and styles.
 pub struct StreamSession<W: Write + Seek> {
     zip: zip::ZipWriter<W>,
-    string_table: Vec<String>,
-    string_indices: HashMap<String, u32>,
+    string_table: Vec<SharedString>,
+    string_indices: HashMap<SharedString, u32>,
     style_acc: writer_styles::StyleAccumulator,
     current_sheet_index: usize,
 }
@@ -155,9 +164,10 @@ impl<W: Write + Seek> StreamSession<W> {
                 let (t_attr, body) = match &cell.value {
                     StreamValue::Number(n) => ("".to_string(), format!("<v>{}</v>", n)),
                     StreamValue::Text(s) => {
-                        let idx = *self.string_indices.entry(s.clone()).or_insert_with(|| {
+                        let entry = SharedString::Plain(s.clone());
+                        let idx = *self.string_indices.entry(entry.clone()).or_insert_with(|| {
                             let i = self.string_table.len() as u32;
-                            self.string_table.push(s.clone());
+                            self.string_table.push(entry);
                             i
                         });
                         (" t=\"s\"".to_string(), format!("<v>{}</v>", idx))
@@ -1286,26 +1296,6 @@ fn write_workbook_rels<W: Write>(w: &mut W, sheet_count: usize) -> Result<(), Ex
     Ok(())
 }
 
-fn write_shared_strings<W: Write>(w: &mut W, table: &[String]) -> Result<(), ExcelrsError> {
-    let count = table.len();
-    write_str(w, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#)?;
-    write_str(
-        w,
-        &format!(
-            r#"<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="{count}" uniqueCount="{count}">"#
-        ),
-    )?;
-    for s in table {
-        if s.starts_with(' ') || s.ends_with(' ') {
-            write_str(w, &format!("<si><t xml:space=\"preserve\">{}</t></si>", escape(s)))?;
-        } else {
-            write_str(w, &format!("<si><t>{}</t></si>", escape(s)))?;
-        }
-    }
-    write_str(w, "</sst>")?;
-    Ok(())
-}
-
 /// Format a cell reference (e.g. column 1, row 1 → "A1").
 fn format_cell_ref(col: u32, row: u32) -> String {
     format!("{}{}", col_to_letter(col), row)
@@ -1330,12 +1320,86 @@ fn write_str<W: Write>(w: &mut W, s: &str) -> Result<(), ExcelrsError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::cell::RichTextRun;
+    use crate::model::style::Font;
 
     fn num(v: f64) -> StreamValue {
         StreamValue::Number(v)
     }
     fn txt(s: &str) -> StreamValue {
         StreamValue::Text(s.to_string())
+    }
+
+    /// Forward-looking guard for the future `StreamValue::RichText` variant
+    /// (spec: streaming rich text MUST route through shared strings, `t="s"`,
+    /// never `t="inlineStr"`). The variant does not exist yet, so this locks
+    /// the seam it will thread: plain cells already emit `t="s"` (not inline),
+    /// and the `SharedString` table serializes rich runs as `<si><r>…</r></si>`
+    /// through the same `write_shared_strings`/`write_rich_run_xml` the
+    /// non-streaming writer uses. When `RichText` lands, extend this test with
+    /// a rich cell asserting `t="s"` + `<v>idx</v>` — everything asserted
+    /// here must keep passing.
+    #[test]
+    fn stream_rich_text_would_route_through_shared_strings() {
+        // A plain cell already goes out as t="s" → the shared-string table.
+        let sheets = vec![StreamSheet {
+            name: "S".into(),
+            rows: vec![StreamRow {
+                r: 1,
+                cells: vec![StreamCell {
+                    col: 1,
+                    value: txt("rich-friendly"),
+                    style: None,
+                }],
+                style: None,
+            }],
+        }];
+        let bytes = stream_write(&sheets).expect("write");
+        let cursor = std::io::Cursor::new(std::sync::Arc::from(&bytes[..]));
+        let mut archive = zip::ZipArchive::new(cursor).expect("archive");
+        let sheet_xml = {
+            let name = "xl/worksheets/sheet1.xml";
+            let mut file = archive.by_name(name).expect(name);
+            let mut s = String::new();
+            std::io::Read::read_to_string(&mut file, &mut s).expect("read");
+            s
+        };
+        assert!(
+            sheet_xml.contains(r#"t="s""#),
+            "sheet element must emit t=\"s\", got: {sheet_xml}"
+        );
+        assert!(
+            !sheet_xml.contains("inlineStr"),
+            "streaming writer must never emit inlineStr: {sheet_xml}"
+        );
+
+        // The Rich arm of the shared table — the path a future RichText
+        // variant will ride — serializes runs, not inline strings.
+        let runs = vec![
+            RichTextRun {
+                text: "Bold ".into(),
+                font: Some(Font {
+                    name: Some("Arial".into()),
+                    bold: Some(true),
+                    ..Default::default()
+                }),
+            },
+            RichTextRun {
+                text: "tail".into(),
+                font: None,
+            },
+        ];
+        let mut sst = Vec::new();
+        write_shared_strings(&mut sst, &[SharedString::from_rich_runs(&runs)]).expect("sst");
+        let sst_xml = String::from_utf8(sst).expect("utf8");
+        assert!(
+            sst_xml.contains("<si><r><rPr><rFont val=\"Arial\"/><b/>"),
+            "rich run must render rPr, got: {sst_xml}"
+        );
+        assert!(
+            !sst_xml.contains("inlineStr"),
+            "rich shared strings must not be inlineStr: {sst_xml}"
+        );
     }
 
     #[test]

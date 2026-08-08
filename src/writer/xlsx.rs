@@ -364,12 +364,70 @@ fn effective_cell_style_with_fallback(cell: &Cell, col_style_map: &BTreeMap<u32,
 // Shared strings table
 // ---------------------------------------------------------------------------
 
+/// Projection of a `RichTextRun` onto exactly the fields
+/// `write_rich_run_xml` serializes — the single source of truth for the
+/// shared-string dedup key. Unrendered fields (`color_theme`, `color_tint`)
+/// never participate, so runs that render identically share one entry even
+/// when their internal theme/tint links differ.
+///
+/// The manual `Hash` normalizes `size` signed zero so `+0.0` and `-0.0` hash
+/// equally, keeping `Hash` consistent with `Eq` (f64 equality treats them
+/// as equal; `to_bits` would not).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RenderedRunKey {
+    text: String,
+    name: Option<String>,
+    size: Option<f64>,
+    bold: Option<bool>,
+    italic: Option<bool>,
+    underline: Option<bool>,
+    color: Option<String>,
+}
+
+impl Eq for RenderedRunKey {}
+
+impl std::hash::Hash for RenderedRunKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.text.hash(state);
+        self.name.hash(state);
+        self.size
+            .map(|s| (if s == 0.0 { 0.0 } else { s }).to_bits())
+            .hash(state);
+        self.bold.hash(state);
+        self.italic.hash(state);
+        self.underline.hash(state);
+        self.color.hash(state);
+    }
+}
+
+impl From<&RichTextRun> for RenderedRunKey {
+    fn from(run: &RichTextRun) -> Self {
+        let font = run.font.as_ref();
+        RenderedRunKey {
+            text: run.text.clone(),
+            name: font.and_then(|f| f.name.clone()),
+            size: font.and_then(|f| f.size),
+            bold: font.and_then(|f| f.bold),
+            italic: font.and_then(|f| f.italic),
+            underline: font.and_then(|f| f.underline),
+            color: font.and_then(|f| f.color.clone()),
+        }
+    }
+}
+
 /// value of a shared-string table entry. Plain holds ordinary strings,
-/// `Rich` holds a rich-text run sequence (written as `<si><r>…</r></si>`).
+/// `Rich` holds the rendered-run projection (written as `<si><r>…</r></si>`).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum SharedString {
+pub(crate) enum SharedString {
     Plain(String),
-    Rich(Vec<RichTextRun>),
+    Rich(Vec<RenderedRunKey>),
+}
+
+impl SharedString {
+    /// Project rich runs onto their rendered fields for dedup lookup.
+    pub(crate) fn from_rich_runs(runs: &[RichTextRun]) -> SharedString {
+        SharedString::Rich(runs.iter().map(RenderedRunKey::from).collect())
+    }
 }
 
 /// Walk all worksheets and deduplicate string values.
@@ -410,9 +468,11 @@ fn build_shared_strings(worksheets: &[Worksheet]) -> (Vec<SharedString>, HashMap
                         }
                     }
                     Some(CellType::RichText) => {
-                        // Keyed by run content so identical runs share one entry (dedupe).
+                        // Keyed by the rendered-run projection so identical
+                        // output runs share one entry (dedupe), and unrendered
+                        // theme/tint links do not split entries.
                         if let Some(runs) = &cv.rich_text {
-                            let key = SharedString::Rich(runs.clone());
+                            let key = SharedString::from_rich_runs(runs);
                             string_indices.entry(key.clone()).or_insert_with(|| {
                                 let idx = string_table.len() as u32;
                                 string_table.push(key);
@@ -1088,28 +1148,40 @@ fn write_sheet_rels<W: Write>(
 // xl/sharedStrings.xml
 // ---------------------------------------------------------------------------
 
-/// Serialize one rich-text run (`<r><rPr>…</rPr><t>…</t></r>`) — shared by
-/// `write_shared_strings` (Rich entries) and the inline path.
-fn write_rich_run_xml<W: Write>(w: &mut W, run: &RichTextRun) -> Result<(), ExcelrsError> {
+/// Serialize one rich-text run (`<r><rPr>…</rPr><t>…</t></r>`) from its
+/// `RenderedRunKey` projection — shared by the whole-workbook writer and the
+/// streaming writer.
+///
+/// MUST stay in lockstep with `RenderedRunKey::from` below: the key holds
+/// every field emitted here, nothing more.
+pub(crate) fn write_rich_run_xml<W: Write>(w: &mut W, run: &RenderedRunKey) -> Result<(), ExcelrsError> {
     write_str(w, "<r>")?;
-    if let Some(ref font) = run.font {
+    // `<rPr>` open/close mirrors the old `font.is_some()` gate: emitted only
+    // when at least one font property is set.
+    let has_font = run.name.is_some()
+        || run.size.is_some()
+        || run.bold.is_some()
+        || run.italic.is_some()
+        || run.underline.is_some()
+        || run.color.is_some();
+    if has_font {
         write_str(w, "<rPr>")?;
-        if let Some(ref name) = font.name {
+        if let Some(ref name) = run.name {
             write_str(w, &format!("<rFont val=\"{}\"/>", escape(name)))?;
         }
-        if let Some(true) = font.bold {
+        if let Some(true) = run.bold {
             write_str(w, "<b/>")?;
         }
-        if let Some(true) = font.italic {
+        if let Some(true) = run.italic {
             write_str(w, "<i/>")?;
         }
-        if let Some(true) = font.underline {
+        if let Some(true) = run.underline {
             write_str(w, "<u/>")?;
         }
-        if let Some(ref color) = font.color {
+        if let Some(ref color) = run.color {
             write_str(w, &format!("<color rgb=\"{}\"/>", escape(color)))?;
         }
-        if let Some(sz) = font.size {
+        if let Some(sz) = run.size {
             write_str(w, &format!("<sz val=\"{}\"/>", sz))?;
         }
         write_str(w, "</rPr>")?;
@@ -1125,7 +1197,7 @@ fn write_rich_run_xml<W: Write>(w: &mut W, run: &RichTextRun) -> Result<(), Exce
     Ok(())
 }
 
-fn write_shared_strings<W: Write>(w: &mut W, string_table: &[SharedString]) -> Result<(), ExcelrsError> {
+pub(crate) fn write_shared_strings<W: Write>(w: &mut W, string_table: &[SharedString]) -> Result<(), ExcelrsError> {
     // OOXML `count` is the number of cell references (not recoverable after
     // dedupe), so it tracks uniqueCount — pre-existing behavior, kept.
     let count = string_table.len();
@@ -1948,7 +2020,7 @@ fn write_cell_xml<W: Write>(
         Some(CellType::RichText) => {
             // Shared-string reference: <v> is the table index of the runs.
             if let Some(runs) = &cv.rich_text {
-                if let Some(idx) = string_indices.get(&SharedString::Rich(runs.clone())) {
+                if let Some(idx) = string_indices.get(&SharedString::from_rich_runs(runs)) {
                     write_str(w, &format!("<v>{}</v>", idx))?;
                 }
             }
@@ -3362,7 +3434,7 @@ mod tests {
                 ..Default::default()
             }),
         }];
-        let key = SharedString::Rich(runs.clone());
+        let key = SharedString::from_rich_runs(&runs);
         let mut indices = HashMap::new();
         indices.insert(key, 0u32);
 
@@ -3385,7 +3457,7 @@ mod tests {
             }),
         }];
         let mut sst = Vec::new();
-        write_shared_strings(&mut sst, &[SharedString::Rich(runs)]).unwrap();
+        write_shared_strings(&mut sst, &[SharedString::from_rich_runs(&runs)]).unwrap();
         let sst = String::from_utf8(sst).unwrap();
         assert!(
             sst.contains("<si><r>") && sst.contains("</r></si>"),
@@ -3494,6 +3566,150 @@ mod tests {
         assert_eq!(sheet.matches("<v>0</v>").count(), 2, "both cells reference index 0");
     }
 
+    /// Golden-file: a known rich-text workbook emits byte-exact
+    /// `xl/sharedStrings.xml` + `xl/worksheets/sheet1.xml` — run `<rPr>`
+    /// contents, `xml:space="preserve"` for whitespace/newline text, cell
+    /// `t="s"` + `<v>idx</v>`. A revert to `inlineStr` or any change to run
+    /// property emission fails this test (task 3.1).
+    #[test]
+    fn test_rich_text_golden_file_shared_strings_and_sheet() {
+        use crate::model::workbook_inner::WorkbookInner;
+        use std::io::Read;
+
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("S".into());
+        ws.insert_cell_value(
+            1,
+            1,
+            CellValue::rich_text(vec![
+                RichTextRun {
+                    text: "Hello ".into(),
+                    font: Some(Font {
+                        name: Some("Arial".into()),
+                        size: Some(14.0),
+                        bold: Some(true),
+                        italic: Some(true),
+                        ..Default::default()
+                    }),
+                },
+                RichTextRun {
+                    text: "world\n".into(),
+                    font: Some(Font {
+                        name: Some("Times New Roman".into()),
+                        color: Some("FF0000".into()),
+                        underline: Some(true),
+                        ..Default::default()
+                    }),
+                },
+            ]),
+        );
+
+        let bytes = crate::writer::xlsx::workbook_to_bytes(&inner).unwrap();
+        let cursor = std::io::Cursor::new(&bytes[..]);
+        let mut archive = zip::ZipArchive::new(cursor).unwrap();
+
+        let mut sst = String::new();
+        archive
+            .by_name("xl/sharedStrings.xml")
+            .unwrap()
+            .read_to_string(&mut sst)
+            .unwrap();
+        assert_eq!(
+            sst,
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><sst xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" count=\"1\" uniqueCount=\"1\"><si><r><rPr><rFont val=\"Arial\"/><b/><i/><sz val=\"14\"/></rPr><t xml:space=\"preserve\">Hello </t></r><r><rPr><rFont val=\"Times New Roman\"/><u/><color rgb=\"FF0000\"/><sz val=\"11\"/></rPr><t xml:space=\"preserve\">world\n</t></r></si></sst>",
+            "sharedStrings.xml golden: {sst}"
+        );
+
+        let mut sheet = String::new();
+        archive
+            .by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut sheet)
+            .unwrap();
+        assert_eq!(
+            sheet,
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><dimension ref="A1:A1"/><sheetData><row r="1"><c r="A1" s="0" t="s"><v>0</v></c></row></sheetData></worksheet>"#,
+            "sheet1.xml must be byte-exact: {sheet}"
+        );
+    }
+
+    /// Conformance smoke test — validates the rich-text workbook from the
+    /// golden-file test against a strict consumer:
+    ///   1. LibreOffice headless (`soffice --headless --convert-to xlsx`) if
+    ///      installed — a full parse+reserialize that fails on malformed XML.
+    ///   2. Fallback (no soffice): OOXML XSD validation via `xmllint --schema`,
+    ///      pointing the env var `EXCELRS_OOXML_XSD` at an ECMA-376
+    ///      `xl/sharedStrings`+`sheet` XSD bundle when one is available.
+    ///
+    /// Neither is present → test skips (feature-gated, CI must not hard-fail
+    /// where LibreOffice is unavailable). Rich runs live in sharedStrings; a
+    /// revert to inlineStr historically broke strict consumers (Apple Numbers).
+    #[test]
+    fn test_rich_text_ooxml_conformance_smoke() {
+        use crate::model::workbook_inner::WorkbookInner;
+        use std::process::Command;
+
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("Conf".into());
+        ws.insert_cell_value(
+            1,
+            1,
+            CellValue::rich_text(vec![
+                RichTextRun {
+                    text: "Bold red ".into(),
+                    font: Some(Font {
+                        name: Some("Arial".into()),
+                        bold: Some(true),
+                        color: Some("FFFF0000".into()),
+                        ..Default::default()
+                    }),
+                },
+                RichTextRun {
+                    text: "tail\n".into(),
+                    font: Some(Font {
+                        name: Some("Times New Roman".into()),
+                        ..Default::default()
+                    }),
+                },
+            ]),
+        );
+        let bytes = crate::writer::xlsx::workbook_to_bytes(&inner).unwrap();
+
+        let dir = std::env::temp_dir().join(format!("excelrs-conformance-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let xlsx = dir.join("rich-text.xlsx");
+        std::fs::write(&xlsx, &bytes).unwrap();
+        let out = dir.join("out");
+
+        // 1) LibreOffice headless (primary gate).
+        if Command::new("soffice").arg("--version").output().is_ok() {
+            let out_dir = out.to_str().unwrap();
+            std::fs::create_dir_all(out_dir).unwrap();
+            let status = Command::new("soffice")
+                .args(["--headless", "--convert-to", "xlsx", "--outdir", out_dir])
+                .arg(&xlsx)
+                .status()
+                .unwrap();
+            assert!(status.success(), "soffice rejected the workbook");
+            return;
+        }
+
+        // 2) XSD fallback via xmllint (needs EXCELRS_OOXML_XSD).
+        if let Some(xsd) = std::env::var_os("EXCELRS_OOXML_XSD") {
+            let status = Command::new("xmllint")
+                .args(["--schema", xsd.to_str().unwrap()])
+                .arg(&xlsx)
+                .status()
+                .unwrap();
+            assert!(status.success(), "xmllint rejected the workbook");
+            return;
+        }
+
+        eprintln!(
+            "skipping conformance smoke: no soffice on PATH and no EXCELRS_OOXML_XSD set"
+        );
+    }
+
     /// A run with trailing-newline text is emitted with `xml:space="preserve"`.
     #[test]
     fn test_rich_text_run_preserves_trailing_whitespace() {
@@ -3505,7 +3721,7 @@ mod tests {
             }),
         }];
         let mut sst = Vec::new();
-        write_shared_strings(&mut sst, &[SharedString::Rich(runs)]).unwrap();
+        write_shared_strings(&mut sst, &[SharedString::from_rich_runs(&runs)]).unwrap();
         let sst = String::from_utf8(sst).unwrap();
         assert!(
             sst.contains("<t xml:space=\"preserve\">B: (11) = (7) + (10)\n</t>"),
