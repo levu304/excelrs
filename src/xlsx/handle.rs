@@ -98,6 +98,8 @@ impl WorkbookXlsx {
 mod tests {
     use super::*;
     use crate::model::page_setup::Orientation;
+    use crate::model::workbook::{AddWorksheetOptions, Workbook};
+    use std::io::Read;
 
     #[test]
     fn test_workbook_xlsx_new_shares_arc() {
@@ -654,5 +656,196 @@ mod tests {
         let inner = crate::reader::xlsx::workbook_inner_from_bytes(&bytes).unwrap();
         assert_eq!(inner.worksheet_count(), 1);
         assert_eq!(inner.worksheets()[0].name(), "Sheet1");
+    }
+
+    // --- Worksheet metadata round-trips (v2.1.0) ---
+
+    #[test]
+    fn test_roundtrip_sheet_state_hidden() {
+        use crate::model::worksheet::SheetState;
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("Hidden".into());
+        ws.set_state_inner(SheetState::hidden);
+
+        let bytes = crate::writer::xlsx::workbook_to_bytes(&inner).unwrap();
+        let re = crate::reader::xlsx::workbook_inner_from_bytes(&bytes).unwrap();
+        assert_eq!(re.worksheets()[0].get_state_inner(), SheetState::hidden);
+    }
+
+    #[test]
+    fn test_roundtrip_sheet_state_very_hidden() {
+        use crate::model::worksheet::SheetState;
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("VeryHidden".into());
+        ws.set_state_inner(SheetState::veryHidden);
+
+        let bytes = crate::writer::xlsx::workbook_to_bytes(&inner).unwrap();
+        let re = crate::reader::xlsx::workbook_inner_from_bytes(&bytes).unwrap();
+        assert_eq!(re.worksheets()[0].get_state_inner(), SheetState::veryHidden);
+    }
+
+    #[test]
+    fn test_roundtrip_visible_omits_state_attr() {
+        let mut inner = WorkbookInner::new();
+        inner.add_worksheet("Visible".into());
+
+        let bytes = crate::writer::xlsx::workbook_to_bytes(&inner).unwrap();
+        let zip = std::io::Cursor::new(bytes);
+        let mut archive = zip::ZipArchive::new(zip).unwrap();
+        let mut xml = String::new();
+        archive.by_name("xl/workbook.xml").unwrap().read_to_string(&mut xml).unwrap();
+        assert!(
+            !xml.contains("state="),
+            "visible sheet should not emit a state attribute, got: {xml}"
+        );
+    }
+
+    #[test]
+    fn test_roundtrip_tab_color() {
+        use crate::model::color::Color;
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("Colored".into());
+        ws.set_tab_color_inner(Some(Color {
+            rgb: "FF0000".to_string(),
+            theme: None,
+            tint: None,
+        }));
+
+        let bytes = crate::writer::xlsx::workbook_to_bytes(&inner).unwrap();
+        let re = crate::reader::xlsx::workbook_inner_from_bytes(&bytes).unwrap();
+        let tc = re.worksheets()[0].get_tab_color_inner().expect("tab color should round-trip");
+        assert_eq!(tc.rgb, "FF0000");
+    }
+
+    #[test]
+    fn test_roundtrip_default_dimensions() {
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("Dims".into());
+        ws.set_default_row_height_inner(Some(24.0));
+        ws.set_default_col_width_inner(Some(20.0));
+        ws.set_outline_level_row_inner(Some(2));
+        ws.set_outline_level_col_inner(Some(1));
+
+        let bytes = crate::writer::xlsx::workbook_to_bytes(&inner).unwrap();
+        let re = crate::reader::xlsx::workbook_inner_from_bytes(&bytes).unwrap();
+        let rws = &re.worksheets()[0];
+        assert_eq!(rws.get_default_row_height_inner(), Some(24.0));
+        assert_eq!(rws.get_default_col_width_inner(), Some(20.0));
+        assert_eq!(rws.get_outline_level_row_inner(), Some(2));
+        assert_eq!(rws.get_outline_level_col_inner(), Some(1));
+    }
+
+    #[test]
+    fn test_add_worksheet_options_state_and_properties() {
+        use crate::model::worksheet::{SheetState, WorksheetProperties};
+        let mut wb = Workbook::new();
+        let ws = wb.add_worksheet(
+            "Secret".into(),
+            Some(AddWorksheetOptions {
+                page_setup: None,
+                views: None,
+                header_footer: None,
+                protection: None,
+                auto_filter: None,
+                state: Some(SheetState::hidden),
+                properties: Some(WorksheetProperties {
+                    tab_color: Some("FF0000".into()),
+                    default_row_height: Some(15.0),
+                    default_col_width: Some(10.0),
+                    outline_level_row: Some(1),
+                    outline_level_col: None,
+                }),
+            }),
+        );
+        assert_eq!(ws.get_state_inner(), SheetState::hidden);
+        assert_eq!(ws.get_tab_color_inner().map(|c| c.rgb), Some("FF0000".to_string()));
+        assert_eq!(ws.get_default_row_height_inner(), Some(15.0));
+        assert_eq!(ws.get_default_col_width_inner(), Some(10.0));
+        assert_eq!(ws.get_outline_level_row_inner(), Some(1));
+    }
+
+    /// Conformance: CT_Worksheet child ordering — sheetPr → dimension →
+    /// sheetViews → sheetFormatPr → cols → sheetData. Validates via the
+    /// LibreOffice / XSD smoke gate (skipped locally when neither is present).
+    #[test]
+    fn test_worksheet_metadata_element_ordering_conformance() {
+        use crate::model::color::Color;
+        use crate::model::worksheet::SheetState;
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("Order".into());
+        ws.set_state_inner(SheetState::hidden);
+        ws.set_tab_color_inner(Some(Color {
+            rgb: "FF0000".to_string(),
+            theme: None,
+            tint: None,
+        }));
+        ws.set_default_row_height_inner(Some(24.0));
+        ws.insert_cell_value(1, 1, crate::model::cell::CellValue::string("x".to_string()));
+        ws.set_views_inner(vec![crate::model::sheet_view::SheetView {
+            x_split: Some(1),
+            ..Default::default()
+        }]);
+
+        let bytes = crate::writer::xlsx::workbook_to_bytes(&inner).unwrap();
+        let zip = std::io::Cursor::new(bytes);
+        let mut archive = zip::ZipArchive::new(zip).unwrap();
+        let mut xml = String::new();
+        archive.by_name("xl/worksheets/sheet1.xml").unwrap().read_to_string(&mut xml).unwrap();
+
+        // Verify CT_Worksheet child ordering for present elements:
+        // sheetPr → dimension → sheetViews → sheetFormatPr → cols → sheetData.
+        // Some elements are only emitted when their data exists (e.g. <cols>
+        // only when a column has explicit properties), so assert relative order
+        // of whichever subset is present.
+        let positions = [
+            ("sheetPr", "<sheetPr>"),
+            ("tabColor", "<tabColor"),
+            ("dimension", "<dimension"),
+            ("sheetViews", "<sheetViews"),
+            ("sheetFormatPr", "<sheetFormatPr"),
+            ("cols", "<cols"),
+            ("sheetData", "<sheetData"),
+        ];
+        let mut seen: Vec<(&str, usize)> = positions
+            .iter()
+            .filter_map(|(name, needle)| xml.find(needle).map(|pos| (*name, pos)))
+            .collect();
+        for w in seen.windows(2) {
+            assert!(
+                w[0].1 < w[1].1,
+                "element {} should precede {} in sheet XML",
+                w[0].0,
+                w[1].0
+            );
+        }
+        assert!(
+            !seen.is_empty(),
+            "expected at least sheetPr and sheetData in sheet XML: {xml}"
+        );
+    }
+
+    // Regression: partial `setProperties` must not wipe fields the caller
+    // omitted — napi deserializes missing object fields as `None`.
+    #[test]
+    fn test_set_properties_partial_keeps_other_fields() {
+        use crate::model::color::Color;
+        use crate::model::worksheet::WorksheetProperties;
+        let mut inner = WorkbookInner::new();
+        let mut ws = inner.add_worksheet("Partial".into());
+        ws.set_tab_color_inner(Some(Color {
+            rgb: "FFFF0000".to_string(),
+            theme: None,
+            tint: None,
+        }));
+        // Only defaultRowHeight is set; tabColor must survive the partial update.
+        ws.set_properties(WorksheetProperties {
+            default_row_height: Some(24.0),
+            ..Default::default()
+        });
+        assert_eq!(
+            ws.get_tab_color_inner().map(|c| c.rgb),
+            Some("FFFF0000".to_string())
+        );
+        assert_eq!(ws.get_default_row_height_inner(), Some(24.0));
     }
 }

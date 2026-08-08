@@ -13,6 +13,8 @@
 //! - Shared strings are resolved automatically by calamine — the reader never sees shared string
 //!   indices.
 
+#![allow(clippy::needless_range_loop)] // loop index = worksheet display ordinal, aligned with inner.worksheets[i]
+
 use std::io::{Cursor, Read, Seek};
 use std::path::Path;
 
@@ -56,6 +58,7 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
         .map_err(|e| ExcelrsError::Parse(format!("Failed to open workbook from buffer: {e}")))?;
     let sheet_names = workbook.sheet_names().to_owned();
     let sheet_count = sheet_names.len();
+    let sheet_paths = resolve_sheet_paths(data, sheet_count);
 
     // Step 2: parse styles + sheet cell-style maps from the same buffer via zip
     let (style_table, sheet_style_maps) = styles::parse_styles_and_sheet_maps(data, sheet_count)?;
@@ -64,7 +67,7 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
     let mut inner = workbook_to_inner_model(&mut workbook, &style_table, &sheet_style_maps)?;
 
     // Step 3.5: parse data validations from sheet XML and attach to worksheets
-    let per_sheet_validations = parse_sheet_data_validations(data, sheet_count)?;
+    let per_sheet_validations = parse_sheet_data_validations(data, &sheet_paths)?;
     for (i, dvs) in per_sheet_validations.into_iter().enumerate() {
         for dv in dvs {
             inner.worksheets[i].insert_data_validation(dv);
@@ -72,7 +75,7 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
     }
 
     // Step 3.55: parse conditional formatting from sheet XML and attach to worksheets
-    let per_sheet_cf = parse_sheet_conditional_formattings(data, sheet_count, &style_table.dxfs)?;
+    let per_sheet_cf = parse_sheet_conditional_formattings(data, &sheet_paths, &style_table.dxfs)?;
     for (i, cfs) in per_sheet_cf.into_iter().enumerate() {
         for cf in cfs {
             inner.worksheets[i].insert_conditional_formatting(cf);
@@ -82,7 +85,7 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
     inner.dxfs = style_table.dxfs.clone();
 
     // Step 3.6: parse auto-filter ranges from sheet XML and attach
-    let per_sheet_auto_filters = parse_sheet_auto_filters(data, sheet_count)?;
+    let per_sheet_auto_filters = parse_sheet_auto_filters(data, &sheet_paths)?;
     for (i, af) in per_sheet_auto_filters.into_iter().enumerate() {
         if let Some(ref range) = af {
             inner.worksheets[i].set_auto_filter_range(Some(range.clone()));
@@ -90,7 +93,7 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
     }
 
     // Step 3.7: parse sheet views (freeze/split panes) and attach
-    let per_sheet_views = parse_sheet_views(data, sheet_count)?;
+    let per_sheet_views = parse_sheet_views(data, &sheet_paths)?;
     for (i, views) in per_sheet_views.into_iter().enumerate() {
         if !views.is_empty() {
             inner.worksheets[i].set_views_inner(views);
@@ -98,7 +101,7 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
     }
 
     // Step 3.8: parse sheet protection flags and attach
-    let per_sheet_protection = parse_sheet_protection(data, sheet_count)?;
+    let per_sheet_protection = parse_sheet_protection(data, &sheet_paths)?;
     for (i, prot) in per_sheet_protection.into_iter().enumerate() {
         if let Some(sp) = prot {
             inner.worksheets[i].set_protection_inner(Some(sp));
@@ -106,7 +109,7 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
     }
 
     // Step 3.9: parse hyperlinks + resolve r:id via sheet rels
-    let per_sheet_hyperlinks = parse_sheet_hyperlinks(data, sheet_count)?;
+    let per_sheet_hyperlinks = parse_sheet_hyperlinks(data, &sheet_paths)?;
     for (i, links) in per_sheet_hyperlinks.into_iter().enumerate() {
         for (ref_, url) in &links {
             // Resolve cell address to set a Hyperlink CellValue
@@ -120,7 +123,7 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
     }
 
     // Step 3.10: parse rich-text inline strings and attach
-    let per_sheet_rich_text = parse_sheet_rich_text(data, sheet_count, &style_table.scheme);
+    let per_sheet_rich_text = parse_sheet_rich_text(data, &sheet_paths, &style_table.scheme);
     for (i, cells) in per_sheet_rich_text.into_iter().enumerate() {
         for (row, col, runs) in &cells {
             let cv = CellValue::rich_text(runs.clone());
@@ -131,18 +134,18 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
     // Step 3.10b: parse rich-text shared strings and overlay onto cells
     if let Ok(rich_strings) = parse_shared_string_rich_text(data, &style_table.scheme) {
         if !rich_strings.is_empty() {
-            overlay_shared_string_rich_text(data, sheet_count, &rich_strings, &mut inner);
+            overlay_shared_string_rich_text(data, &sheet_paths, &rich_strings, &mut inner);
         }
     }
 
     // Step 3.11: parse header/footer and page setup and attach (v1.0.0)
-    let per_sheet_hf = parse_sheet_header_footers(data, sheet_count)?;
+    let per_sheet_hf = parse_sheet_header_footers(data, &sheet_paths)?;
     for (i, hf) in per_sheet_hf.into_iter().enumerate() {
         if let Some(hf) = hf {
             inner.worksheets[i].set_header_footer_inner(Some(hf));
         }
     }
-    let per_sheet_ps = parse_sheet_page_setups(data, sheet_count)?;
+    let per_sheet_ps = parse_sheet_page_setups(data, &sheet_paths)?;
     for (i, ps) in per_sheet_ps.into_iter().enumerate() {
         if let Some(ps) = ps {
             inner.worksheets[i].set_page_setup_inner(Some(ps));
@@ -150,7 +153,7 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
     }
 
     // Step 3.12: parse cell comments and attach (v1.0.0)
-    let per_sheet_comments = parse_sheet_comments(data, sheet_count)?;
+    let per_sheet_comments = parse_sheet_comments(data, &sheet_paths)?;
     for (i, comments) in per_sheet_comments.into_iter().enumerate() {
         for (ref_addr, comment) in comments {
             if let Some((row, col)) = ref_to_rowcol(&ref_addr) {
@@ -160,7 +163,7 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
     }
 
     // Step 3.13: parse images and attach (v1.0.0)
-    let per_sheet_images = parse_sheet_images(data, sheet_count)?;
+    let per_sheet_images = parse_sheet_images(data, &sheet_paths)?;
     for (i, imgs) in per_sheet_images.into_iter().enumerate() {
         for img in imgs {
             inner.worksheets[i].insert_image(img);
@@ -168,7 +171,7 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
     }
 
     // Step 3.14: parse worksheet tables and attach (v1.1.0)
-    let per_sheet_tables = parse_sheet_tables(data, sheet_count)?;
+    let per_sheet_tables = parse_sheet_tables(data, &sheet_paths)?;
     for (i, tables) in per_sheet_tables.into_iter().enumerate() {
         for mut t in tables {
             t.rows = reconstruct_table_rows(&inner.worksheets[i], &t);
@@ -178,7 +181,7 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
 
     // Step 3.15: merged cell ranges — writer emits <mergeCells> since v0.5.0,
     // but the reader never restored them. Attach per-sheet ranges.
-    let per_sheet_merges = parse_sheet_merge_cells(data, sheet_count)?;
+    let per_sheet_merges = parse_sheet_merge_cells(data, &sheet_paths)?;
     for (i, ranges) in per_sheet_merges.into_iter().enumerate() {
         for range in ranges {
             inner.worksheets[i].insert_merge_range(range);
@@ -188,7 +191,7 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
     // Step 3.16: row-level styles — writer emits <row s="N">, but the reader
     // never restored Row.style. Resolve the xf index through the same style
     // table used for cells and attach to the row (mirrors insert_cell_style).
-    let per_sheet_row_styles = parse_sheet_row_styles(data, sheet_count, &style_table)?;
+    let per_sheet_row_styles = parse_sheet_row_styles(data, &sheet_paths, &style_table)?;
     for (i, styles) in per_sheet_row_styles.into_iter().enumerate() {
         for (row_num, style) in styles {
             inner.worksheets[i].insert_row_style(row_num, style);
@@ -196,7 +199,7 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
     }
 
     // Step 3.17: row outline levels (grouping) — writer emits <row outlineLevel="N">.
-    let per_sheet_row_outline = parse_sheet_row_outline_levels(data, sheet_count)?;
+    let per_sheet_row_outline = parse_sheet_row_outline_levels(data, &sheet_paths)?;
     for (i, levels) in per_sheet_row_outline.into_iter().enumerate() {
         for (row_num, level) in levels {
             inner.worksheets[i].insert_row_outline_level(row_num, level);
@@ -204,7 +207,7 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
     }
 
     // Step 3.18: column outline levels (grouping) — writer emits <col outlineLevel="N">.
-    let per_sheet_col_outline = parse_sheet_col_outline_levels(data, sheet_count)?;
+    let per_sheet_col_outline = parse_sheet_col_outline_levels(data, &sheet_paths)?;
     for (i, levels) in per_sheet_col_outline.into_iter().enumerate() {
         for (col_num, level) in levels {
             inner.worksheets[i].insert_column_outline_level(col_num, level);
@@ -212,7 +215,7 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
     }
 
     // Step 3.19: row page breaks — writer emits <rowBreaks>.
-    let per_sheet_row_breaks = parse_sheet_row_breaks(data, sheet_count)?;
+    let per_sheet_row_breaks = parse_sheet_row_breaks(data, &sheet_paths)?;
     for (i, breaks) in per_sheet_row_breaks.into_iter().enumerate() {
         for b in breaks {
             inner.worksheets[i].insert_row_break(b);
@@ -220,11 +223,31 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
     }
 
     // Step 3.20: column page breaks — writer emits <colBreaks>.
-    let per_sheet_col_breaks = parse_sheet_col_breaks(data, sheet_count)?;
+    let per_sheet_col_breaks = parse_sheet_col_breaks(data, &sheet_paths)?;
     for (i, breaks) in per_sheet_col_breaks.into_iter().enumerate() {
         for b in breaks {
             inner.worksheets[i].insert_col_break(b);
         }
+    }
+
+    // Step 3.21: parse worksheet metadata from sheet XML: sheetPr/tabColor and
+    // sheetFormatPr (default row/col dimensions + outline levels).
+    let per_sheet_format = parse_sheet_format_pr(data, &sheet_paths)?;
+    for (i, fmt) in per_sheet_format.into_iter().enumerate() {
+        if let Some(tc) = &fmt.tab_color {
+            inner.worksheets[i].set_tab_color_inner(Some(tc.clone()));
+        }
+        inner.worksheets[i].set_default_row_height_inner(fmt.default_row_height);
+        inner.worksheets[i].set_default_col_width_inner(fmt.default_col_width);
+        inner.worksheets[i].set_outline_level_row_inner(fmt.outline_level_row);
+        inner.worksheets[i].set_outline_level_col_inner(fmt.outline_level_col);
+    }
+
+    // Step 3.22: parse sheet visibility states from xl/workbook.xml `<sheet>`
+    // `state` attribute, attached by index.
+    let per_sheet_states = parse_sheet_states(data, &sheet_names)?;
+    for (i, state) in per_sheet_states.into_iter().enumerate() {
+        inner.worksheets[i].set_state_inner(state);
     }
 
     // Step 4: parse defined names from xl/workbook.xml
@@ -292,16 +315,16 @@ pub fn read_from_file(path: &Path) -> Result<Workbook, ExcelrsError> {
 /// Returns a Vec of Vec where each inner Vec corresponds to a sheet's data validations.
 fn parse_sheet_data_validations(
     data: &[u8],
-    sheet_count: usize,
+    sheet_paths: &[String],
 ) -> Result<Vec<Vec<crate::model::data_validation::DataValidation>>, ExcelrsError> {
     use std::io::Cursor;
     let cursor = Cursor::new(data);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
 
-    let mut all_dv: Vec<Vec<crate::model::data_validation::DataValidation>> = Vec::with_capacity(sheet_count);
+    let mut all_dv: Vec<Vec<crate::model::data_validation::DataValidation>> = Vec::with_capacity(sheet_paths.len());
 
-    for i in 0..sheet_count {
-        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+    for i in 0..sheet_paths.len() {
+        let path = sheet_paths[i].clone();
         let dv = match archive.by_name(&path) {
             Ok(entry) => {
                 let mut xml = String::new();
@@ -320,17 +343,17 @@ fn parse_sheet_data_validations(
 /// Returns a Vec of Vec where each inner Vec corresponds to a sheet's conditional formats.
 fn parse_sheet_conditional_formattings(
     data: &[u8],
-    sheet_count: usize,
+    sheet_paths: &[String],
     dxfs: &[crate::model::style::Dxf],
 ) -> Result<Vec<Vec<crate::model::conditional_formatting::ConditionalFormat>>, ExcelrsError> {
     use std::io::Cursor;
     let cursor = Cursor::new(data);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
 
-    let mut all_cf: Vec<Vec<crate::model::conditional_formatting::ConditionalFormat>> = Vec::with_capacity(sheet_count);
+    let mut all_cf: Vec<Vec<crate::model::conditional_formatting::ConditionalFormat>> = Vec::with_capacity(sheet_paths.len());
 
-    for i in 0..sheet_count {
-        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+    for i in 0..sheet_paths.len() {
+        let path = sheet_paths[i].clone();
         let cfs = match archive.by_name(&path) {
             Ok(entry) => {
                 let mut xml = String::new();
@@ -662,14 +685,14 @@ fn parse_datavalidations_from_xml(
 // Sheet auto-filter reader (v0.11.0)
 // ---------------------------------------------------------------------------
 
-fn parse_sheet_auto_filters(data: &[u8], sheet_count: usize) -> Result<Vec<Option<String>>, ExcelrsError> {
+fn parse_sheet_auto_filters(data: &[u8], sheet_paths: &[String]) -> Result<Vec<Option<String>>, ExcelrsError> {
     use std::io::Cursor;
     let cursor = Cursor::new(data);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
-    let mut per_sheet = Vec::with_capacity(sheet_count);
+    let mut per_sheet = Vec::with_capacity(sheet_paths.len());
 
-    for i in 0..sheet_count {
-        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+    for i in 0..sheet_paths.len() {
+        let path = sheet_paths[i].clone();
         let af = match archive.by_name(&path) {
             Ok(entry) => {
                 let mut xml = String::new();
@@ -720,15 +743,15 @@ fn parse_autofilter_from_xml(xml: &str) -> Option<String> {
 
 fn parse_sheet_views(
     data: &[u8],
-    sheet_count: usize,
+    sheet_paths: &[String],
 ) -> Result<Vec<Vec<crate::model::sheet_view::SheetView>>, ExcelrsError> {
     use std::io::Cursor;
     let cursor = Cursor::new(data);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
-    let mut per_sheet = Vec::with_capacity(sheet_count);
+    let mut per_sheet = Vec::with_capacity(sheet_paths.len());
 
-    for i in 0..sheet_count {
-        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+    for i in 0..sheet_paths.len() {
+        let path = sheet_paths[i].clone();
         let views = match archive.by_name(&path) {
             Ok(entry) => {
                 let mut xml = String::new();
@@ -831,15 +854,15 @@ fn parse_boolean_flag(val: &[u8]) -> Option<bool> {
 
 fn parse_sheet_protection(
     data: &[u8],
-    sheet_count: usize,
+    sheet_paths: &[String],
 ) -> Result<Vec<Option<crate::model::sheet_protection::SheetProtection>>, ExcelrsError> {
     use std::io::Cursor;
     let cursor = Cursor::new(data);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
-    let mut per_sheet = Vec::with_capacity(sheet_count);
+    let mut per_sheet = Vec::with_capacity(sheet_paths.len());
 
-    for i in 0..sheet_count {
-        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+    for i in 0..sheet_paths.len() {
+        let path = sheet_paths[i].clone();
         let prot = match archive.by_name(&path) {
             Ok(entry) => {
                 let mut xml = String::new();
@@ -913,14 +936,14 @@ fn parse_sheet_protection_from_xml(xml: &str) -> Option<crate::model::sheet_prot
 // Header/footer reader (v1.0.0)
 // ---------------------------------------------------------------------------
 
-fn parse_sheet_header_footers(data: &[u8], sheet_count: usize) -> Result<Vec<Option<HeaderFooter>>, ExcelrsError> {
+fn parse_sheet_header_footers(data: &[u8], sheet_paths: &[String]) -> Result<Vec<Option<HeaderFooter>>, ExcelrsError> {
     use std::io::Cursor;
     let cursor = Cursor::new(data);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
-    let mut per_sheet = Vec::with_capacity(sheet_count);
+    let mut per_sheet = Vec::with_capacity(sheet_paths.len());
 
-    for i in 0..sheet_count {
-        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+    for i in 0..sheet_paths.len() {
+        let path = sheet_paths[i].clone();
         let hf = match archive.by_name(&path) {
             Ok(entry) => {
                 let mut xml = String::new();
@@ -1021,13 +1044,13 @@ fn parse_header_footer_from_xml(xml: &str) -> Option<HeaderFooter> {
 /// Parse merged cell ranges from every worksheet part. Returns one vector
 /// per sheet (index aligned with `sheet_count`), each holding the raw `ref`
 /// strings from `<mergeCell ref="A1:C3"/>`.
-fn parse_sheet_merge_cells(data: &[u8], sheet_count: usize) -> Result<Vec<Vec<String>>, ExcelrsError> {
+fn parse_sheet_merge_cells(data: &[u8], sheet_paths: &[String]) -> Result<Vec<Vec<String>>, ExcelrsError> {
     use std::io::{Cursor, Read};
     let cursor = Cursor::new(data);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
-    let mut all: Vec<Vec<String>> = Vec::with_capacity(sheet_count);
-    for i in 0..sheet_count {
-        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+    let mut all: Vec<Vec<String>> = Vec::with_capacity(sheet_paths.len());
+    for i in 0..sheet_paths.len() {
+        let path = sheet_paths[i].clone();
         let ranges = match archive.by_name(&path) {
             Ok(entry) => {
                 let mut xml = String::new();
@@ -1076,15 +1099,15 @@ fn parse_merge_cells_from_xml(xml: &str) -> Vec<String> {
 /// pairs resolved from the `<row r="N" s="M">` attribute via `style_table`.
 fn parse_sheet_row_styles(
     data: &[u8],
-    sheet_count: usize,
+    sheet_paths: &[String],
     style_table: &StyleTableRead,
 ) -> Result<Vec<Vec<(u32, Style)>>, ExcelrsError> {
     use std::io::{Cursor, Read};
     let cursor = Cursor::new(data);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
-    let mut all: Vec<Vec<(u32, Style)>> = Vec::with_capacity(sheet_count);
-    for i in 0..sheet_count {
-        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+    let mut all: Vec<Vec<(u32, Style)>> = Vec::with_capacity(sheet_paths.len());
+    for i in 0..sheet_paths.len() {
+        let path = sheet_paths[i].clone();
         let styles = match archive.by_name(&path) {
             Ok(entry) => {
                 let mut xml = String::new();
@@ -1143,13 +1166,13 @@ fn parse_row_styles_from_xml(xml: &str, style_table: &StyleTableRead) -> Vec<(u3
 /// Parse row outline levels from every worksheet part. Returns one vector per
 /// sheet (index aligned with `sheet_count`), each holding `(row_number, level)`
 /// pairs from the `<row r="N" outlineLevel="M">` attribute.
-fn parse_sheet_row_outline_levels(data: &[u8], sheet_count: usize) -> Result<Vec<Vec<(u32, u8)>>, ExcelrsError> {
+fn parse_sheet_row_outline_levels(data: &[u8], sheet_paths: &[String]) -> Result<Vec<Vec<(u32, u8)>>, ExcelrsError> {
     use std::io::{Cursor, Read};
     let cursor = Cursor::new(data);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
-    let mut all: Vec<Vec<(u32, u8)>> = Vec::with_capacity(sheet_count);
-    for i in 0..sheet_count {
-        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+    let mut all: Vec<Vec<(u32, u8)>> = Vec::with_capacity(sheet_paths.len());
+    for i in 0..sheet_paths.len() {
+        let path = sheet_paths[i].clone();
         let levels = match archive.by_name(&path) {
             Ok(entry) => {
                 let mut xml = String::new();
@@ -1205,13 +1228,13 @@ fn parse_row_outline_levels_from_xml(xml: &str) -> Vec<(u32, u8)> {
 /// Parse column outline levels from every worksheet part. Returns one vector
 /// per sheet (index aligned with `sheet_count`), each holding `(col_number, level)`
 /// pairs from `<cols><col min="N" max="N" outlineLevel="M"/>`.
-fn parse_sheet_col_outline_levels(data: &[u8], sheet_count: usize) -> Result<Vec<Vec<(u32, u8)>>, ExcelrsError> {
+fn parse_sheet_col_outline_levels(data: &[u8], sheet_paths: &[String]) -> Result<Vec<Vec<(u32, u8)>>, ExcelrsError> {
     use std::io::{Cursor, Read};
     let cursor = Cursor::new(data);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
-    let mut all: Vec<Vec<(u32, u8)>> = Vec::with_capacity(sheet_count);
-    for i in 0..sheet_count {
-        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+    let mut all: Vec<Vec<(u32, u8)>> = Vec::with_capacity(sheet_paths.len());
+    for i in 0..sheet_paths.len() {
+        let path = sheet_paths[i].clone();
         let levels = match archive.by_name(&path) {
             Ok(entry) => {
                 let mut xml = String::new();
@@ -1272,13 +1295,13 @@ fn parse_col_outline_levels_from_xml(xml: &str) -> Vec<(u32, u8)> {
 
 /// Parse row page breaks from every worksheet part. Returns one vector per
 /// sheet (index aligned with `sheet_count`) of 1-indexed row numbers.
-fn parse_sheet_row_breaks(data: &[u8], sheet_count: usize) -> Result<Vec<Vec<u32>>, ExcelrsError> {
+fn parse_sheet_row_breaks(data: &[u8], sheet_paths: &[String]) -> Result<Vec<Vec<u32>>, ExcelrsError> {
     use std::io::{Cursor, Read};
     let cursor = Cursor::new(data);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
-    let mut all: Vec<Vec<u32>> = Vec::with_capacity(sheet_count);
-    for i in 0..sheet_count {
-        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+    let mut all: Vec<Vec<u32>> = Vec::with_capacity(sheet_paths.len());
+    for i in 0..sheet_paths.len() {
+        let path = sheet_paths[i].clone();
         let breaks = match archive.by_name(&path) {
             Ok(entry) => {
                 let mut xml = String::new();
@@ -1293,13 +1316,13 @@ fn parse_sheet_row_breaks(data: &[u8], sheet_count: usize) -> Result<Vec<Vec<u32
 }
 
 /// Parse column page breaks from every worksheet part.
-fn parse_sheet_col_breaks(data: &[u8], sheet_count: usize) -> Result<Vec<Vec<u32>>, ExcelrsError> {
+fn parse_sheet_col_breaks(data: &[u8], sheet_paths: &[String]) -> Result<Vec<Vec<u32>>, ExcelrsError> {
     use std::io::{Cursor, Read};
     let cursor = Cursor::new(data);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
-    let mut all: Vec<Vec<u32>> = Vec::with_capacity(sheet_count);
-    for i in 0..sheet_count {
-        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+    let mut all: Vec<Vec<u32>> = Vec::with_capacity(sheet_paths.len());
+    for i in 0..sheet_paths.len() {
+        let path = sheet_paths[i].clone();
         let breaks = match archive.by_name(&path) {
             Ok(entry) => {
                 let mut xml = String::new();
@@ -1356,14 +1379,14 @@ fn parse_breaks_from_xml(xml: &str, tag: &[u8]) -> Vec<u32> {
 // Page setup / print reader (v1.0.0)
 // ---------------------------------------------------------------------------
 
-fn parse_sheet_page_setups(data: &[u8], sheet_count: usize) -> Result<Vec<Option<PageSetup>>, ExcelrsError> {
+fn parse_sheet_page_setups(data: &[u8], sheet_paths: &[String]) -> Result<Vec<Option<PageSetup>>, ExcelrsError> {
     use std::io::Cursor;
     let cursor = Cursor::new(data);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
-    let mut per_sheet = Vec::with_capacity(sheet_count);
+    let mut per_sheet = Vec::with_capacity(sheet_paths.len());
 
-    for i in 0..sheet_count {
-        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+    for i in 0..sheet_paths.len() {
+        let path = sheet_paths[i].clone();
         let ps = match archive.by_name(&path) {
             Ok(entry) => {
                 let mut xml = String::new();
@@ -1567,16 +1590,15 @@ fn parse_calc_pr_from_xml(xml: &str) -> Option<crate::model::workbook_view::Calc
 // Hyperlinks reader (v0.11.0)
 // ---------------------------------------------------------------------------
 
-fn parse_sheet_hyperlinks(data: &[u8], sheet_count: usize) -> Result<Vec<Vec<(String, String)>>, ExcelrsError> {
+fn parse_sheet_hyperlinks(data: &[u8], sheet_paths: &[String]) -> Result<Vec<Vec<(String, String)>>, ExcelrsError> {
     use std::io::Cursor;
     let cursor = Cursor::new(data);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
-    let mut per_sheet = Vec::with_capacity(sheet_count);
+    let mut per_sheet = Vec::with_capacity(sheet_paths.len());
 
-    for i in 0..sheet_count {
-        let sheet_num = i + 1;
-        let path = format!("xl/worksheets/sheet{}.xml", sheet_num);
-        let rels_path = format!("xl/worksheets/_rels/sheet{}.xml.rels", sheet_num);
+    for i in 0..sheet_paths.len() {
+                let path = sheet_paths[i].clone();
+        let rels_path = sheet_rels_path(&sheet_paths[i]);
 
         let rels = parse_sheet_rels(&mut archive, &rels_path);
         let links = match archive.by_name(&path) {
@@ -1592,6 +1614,100 @@ fn parse_sheet_hyperlinks(data: &[u8], sheet_count: usize) -> Result<Vec<Vec<(St
 
     Ok(per_sheet)
 }
+
+/// Resolve the on-disk `xl/worksheets/sheetN.xml` path for each worksheet, in
+/// display (workbook) order, using the workbook relationship graph.
+///
+/// Reads the `<sheet r:id="rIdN">` display order from `xl/workbook.xml` and maps
+/// each rId through `xl/workbook.xml.rels` (`rId -> target`). Falls back to
+/// positional `xl/worksheets/sheet{i+1}.xml` when the relationship map or a
+/// `<sheet r:id>` is missing, preserving historical behavior for minimal or
+/// malformed workbooks. The returned vector is index-aligned with
+/// `inner.worksheets` (display order), so `sheet_paths[i]` is the file for
+/// `inner.worksheets[i]`.
+pub fn resolve_sheet_paths(data: &[u8], sheet_count: usize) -> Vec<String> {
+    use std::io::Cursor;
+
+    let cursor = Cursor::new(data);
+    let mut archive = match zip::ZipArchive::new(cursor) {
+        Ok(a) => a,
+        Err(_) => return fallback_sheet_paths(sheet_count),
+    };
+
+    let rels = parse_sheet_rels(&mut archive, "xl/_rels/workbook.xml.rels");
+
+    let ordered_rids = match archive.by_name("xl/workbook.xml") {
+        Ok(mut e) => {
+            let mut xml = String::new();
+            let _ = e.read_to_string(&mut xml);
+            let mut ids = Vec::with_capacity(sheet_count);
+            let mut reader = quick_xml::Reader::from_str(&xml);
+            let mut buf = Vec::new();
+            let mut events: u64 = 0;
+            loop {
+                buf.clear();
+                events += 1;
+                if events > MAX_EVENTS as u64 {
+                    break;
+                }
+                match reader.read_event_into(&mut buf) {
+                    Ok(quick_xml::events::Event::Empty(ref e))
+                    | Ok(quick_xml::events::Event::Start(ref e))
+                        if e.name().as_ref() == b"sheet" =>
+                    {
+                        if let Some(rid) = e
+                            .attributes()
+                            .flatten()
+                            .find(|a| a.key.as_ref() == b"r:id")
+                            .map(|a| String::from_utf8_lossy(&a.value).into_owned())
+                        {
+                            ids.push(rid);
+                        }
+                    }
+                    Ok(quick_xml::events::Event::Eof) => break,
+                    Err(_) => break,
+                    _ => {}
+                }
+            }
+            ids
+        }
+        Err(_) => Vec::new(),
+    };
+
+    let mut paths = Vec::with_capacity(sheet_count);
+    for i in 0..sheet_count {
+        let p = ordered_rids
+            .get(i)
+            .and_then(|rid| rels.get(rid))
+            .map(|target| {
+                if target.starts_with('/') {
+                    target.trim_start_matches('/').to_string()
+                } else {
+                    format!("xl/{}", target)
+                }
+            })
+            .unwrap_or_else(|| format!("xl/worksheets/sheet{}.xml", i + 1));
+        paths.push(p);
+    }
+    paths
+}
+
+fn fallback_sheet_paths(sheet_count: usize) -> Vec<String> {
+    (0..sheet_count)
+        .map(|i| format!("xl/worksheets/sheet{}.xml", i + 1))
+        .collect()
+}
+
+/// Per-sheet rels path derived from the resolved sheet XML path, e.g.
+/// `xl/worksheets/sheet3.xml` -> `xl/worksheets/_rels/sheet3.xml.rels`.
+fn sheet_rels_path(sheet_path: &str) -> String {
+    let name = std::path::Path::new(sheet_path)
+        .file_name()
+        .map(|f| f.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    format!("xl/worksheets/_rels/{}.rels", name)
+}
+
 
 fn parse_sheet_rels(
     archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
@@ -1735,17 +1851,180 @@ fn rel_attr(tag: &str, key: &str) -> Option<String> {
     Some(unescaped.into_owned())
 }
 
+/// Per-sheet worksheet-level metadata parsed from `xl/worksheets/sheetN.xml`:
+/// `<sheetPr><tabColor>` and `<sheetFormatPr>` default dimensions / outline levels.
+#[derive(Clone, Debug, Default)]
+pub struct SheetFormat {
+    pub tab_color: Option<crate::model::color::Color>,
+    pub default_row_height: Option<f64>,
+    pub default_col_width: Option<f64>,
+    pub outline_level_row: Option<u8>,
+    pub outline_level_col: Option<u8>,
+}
+
+/// Parse `<sheetFormatPr>` and `<sheetPr><tabColor>` from each sheet XML,
+/// returning one `SheetFormat` per sheet (index aligned with worksheets).
+fn parse_sheet_format_pr(
+    data: &[u8],
+    sheet_paths: &[String],
+) -> Result<Vec<SheetFormat>, ExcelrsError> {
+    use std::io::Cursor;
+    let cursor = Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
+    let scheme = crate::model::color::ThemeColorScheme::default();
+
+    let mut per_sheet = Vec::with_capacity(sheet_paths.len());
+    for _ in 0..sheet_paths.len() {
+        per_sheet.push(SheetFormat::default());
+    }
+
+    for (i, fmt) in per_sheet.iter_mut().enumerate().take(sheet_paths.len()) {
+        let path = sheet_paths[i].clone();
+        let entry = match archive.by_name(&path) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let mut xml = String::new();
+        entry.take(MAX_ENTRY_BYTES).read_to_string(&mut xml)?;
+        *fmt = parse_sheet_format_from_xml(&xml, &scheme)?;
+    }
+
+    Ok(per_sheet)
+}
+
+fn parse_sheet_format_from_xml(
+    xml: &str,
+    scheme: &crate::model::color::ThemeColorScheme,
+) -> Result<SheetFormat, ExcelrsError> {
+    use quick_xml::events::Event;
+    let mut reader = quick_xml::Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut fmt = SheetFormat::default();
+    let mut events: u64 = 0;
+
+    loop {
+        events += 1;
+        if events > MAX_EVENTS as u64 {
+            break;
+        }
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                let tag = e.local_name();
+                match tag.as_ref() {
+                    b"tabColor" => {
+                        let attrs: Vec<_> = e.attributes().filter_map(|a| a.ok()).collect();
+                        fmt.tab_color = styles::parse_color(&attrs, scheme);
+                    }
+                    x if x == b"sheetFormatPr" => {
+                        for attr in e.attributes().flatten() {
+                            let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
+                            let val = attr.unescape_value().unwrap_or_default().to_string();
+                            match key {
+                                "defaultRowHeight" => {
+                                    fmt.default_row_height = val.parse().ok();
+                                }
+                                "defaultColWidth" => {
+                                    fmt.default_col_width = val.parse().ok();
+                                }
+                                "outlineLevelRow" => {
+                                    fmt.outline_level_row = val.parse().ok();
+                                }
+                                "outlineLevelCol" => {
+                                    fmt.outline_level_col = val.parse().ok();
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => {
+                return Err(ExcelrsError::Parse(format!(
+                    "Failed to parse sheet XML for sheetFormatPr: {e}"
+                )))
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(fmt)
+}
+
+/// Parse `state` attribute from each `<sheet>` element in `xl/workbook.xml`,
+/// returning one `SheetState` per sheet (index aligned). Sheets with no
+/// `state` attribute default to `Visible`.
+fn parse_sheet_states(
+    data: &[u8],
+    sheet_names: &[String],
+) -> Result<Vec<crate::model::worksheet::SheetState>, ExcelrsError> {
+    use quick_xml::events::Event;
+    use std::io::{Cursor, Read};
+    let cursor = Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
+
+    let mut states: Vec<crate::model::worksheet::SheetState> =
+        vec![crate::model::worksheet::SheetState::visible; sheet_names.len()];
+
+    let entry = match archive.by_name("xl/workbook.xml") {
+        Ok(e) => e,
+        Err(_) => return Ok(states),
+    };
+    let mut xml = String::new();
+    entry.take(MAX_ENTRY_BYTES).read_to_string(&mut xml)?;
+
+    let mut reader = quick_xml::Reader::from_str(&xml);
+    let mut buf = Vec::new();
+    let mut events: u64 = 0;
+    let mut idx: usize = 0;
+    // <sheets> order matches sheet_names order (calamine / OOXML guarantee).
+    loop {
+        events += 1;
+        if events > MAX_EVENTS as u64 {
+            break;
+        }
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e))
+                if e.local_name().as_ref() == b"sheet" =>
+            {
+                if let Some(st) = e
+                    .attributes()
+                    .filter_map(|a| a.ok())
+                    .find(|a| a.key.as_ref() == b"state")
+                {
+                    let s = st.unescape_value().unwrap_or_default().to_string();
+                    if idx < states.len() {
+                        states[idx] = crate::model::worksheet::SheetState::from(s.as_str());
+                    }
+                }
+                idx += 1;
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => {
+                return Err(ExcelrsError::Parse(format!(
+                    "Failed to parse xl/workbook.xml sheet states: {e}"
+                )))
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(states)
+}
+
 /// Parse `xl/commentsN.xml` for every sheet, returning `(cellRef, CellComment)`
 /// pairs per sheet.
-fn parse_sheet_comments(data: &[u8], sheet_count: usize) -> Result<Vec<Vec<(String, CellComment)>>, ExcelrsError> {
+fn parse_sheet_comments(data: &[u8], sheet_paths: &[String]) -> Result<Vec<Vec<(String, CellComment)>>, ExcelrsError> {
     use std::io::Cursor;
 
     let cursor = Cursor::new(data);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
-    let mut per_sheet = Vec::with_capacity(sheet_count);
-    for i in 0..sheet_count {
-        let sheet_num = i + 1;
-        let rels_path = format!("xl/worksheets/_rels/sheet{}.xml.rels", sheet_num);
+    let mut per_sheet = Vec::with_capacity(sheet_paths.len());
+    for i in 0..sheet_paths.len() {
+                let rels_path = sheet_rels_path(&sheet_paths[i]);
         let rels = parse_sheet_rels_full(&mut archive, &rels_path);
         let comments_target = rels
             .iter()
@@ -1820,14 +2099,13 @@ fn parse_comments_from_xml(xml: &str) -> Vec<(String, CellComment)> {
 }
 
 /// Parse `xl/tables/tableN.xml` for every sheet, returning `Table` records per sheet (v1.1.0).
-fn parse_sheet_tables(data: &[u8], sheet_count: usize) -> Result<Vec<Vec<Table>>, ExcelrsError> {
+fn parse_sheet_tables(data: &[u8], sheet_paths: &[String]) -> Result<Vec<Vec<Table>>, ExcelrsError> {
     use std::io::Cursor;
     let cursor = Cursor::new(data);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
-    let mut per_sheet: Vec<Vec<Table>> = Vec::with_capacity(sheet_count);
-    for i in 0..sheet_count {
-        let sheet_num = i + 1;
-        let rels_path = format!("xl/worksheets/_rels/sheet{}.xml.rels", sheet_num);
+    let mut per_sheet: Vec<Vec<Table>> = Vec::with_capacity(sheet_paths.len());
+    for i in 0..sheet_paths.len() {
+                let rels_path = sheet_rels_path(&sheet_paths[i]);
         let rels = parse_sheet_rels_full(&mut archive, &rels_path);
         let table_targets: Vec<String> = rels
             .iter()
@@ -1922,15 +2200,14 @@ fn reconstruct_table_rows(ws: &Worksheet, table: &Table) -> Vec<TableRow> {
 
 /// Parse `xl/drawings/drawingN.xml` + media for every sheet, returning
 /// `WorksheetImage` records per sheet.
-fn parse_sheet_images(data: &[u8], sheet_count: usize) -> Result<Vec<Vec<WorksheetImage>>, ExcelrsError> {
+fn parse_sheet_images(data: &[u8], sheet_paths: &[String]) -> Result<Vec<Vec<WorksheetImage>>, ExcelrsError> {
     use std::io::Cursor;
 
     let cursor = Cursor::new(data);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
-    let mut per_sheet = Vec::with_capacity(sheet_count);
-    for i in 0..sheet_count {
-        let sheet_num = i + 1;
-        let rels_path = format!("xl/worksheets/_rels/sheet{}.xml.rels", sheet_num);
+    let mut per_sheet = Vec::with_capacity(sheet_paths.len());
+    for i in 0..sheet_paths.len() {
+                let rels_path = sheet_rels_path(&sheet_paths[i]);
         let rels = parse_sheet_rels_full(&mut archive, &rels_path);
         let drawing_target = rels
             .iter()
@@ -2171,10 +2448,10 @@ fn ref_to_rowcol(ref_: &str) -> Option<(u32, u32)> {
 /// `sheet_style_maps` is indexed by sheet index (0-based, matching the iteration
 /// order of `calamine_wb.sheet_names()`).
 ///
-/// ponytail: sheet-style-map indexing assumes sequential `sheet{N}.xml` numbering
-/// matching the workbook's sheet order.  This holds for all files we write and
-/// for most third-party files.  A correct fix would parse `xl/workbook.xml` to
-/// map rId → file number; defer that until a real-world counterexample appears.
+/// `sheet_style_maps` is built in display order by `parse_styles_and_sheet_maps`
+/// (it resolves each sheet's real file via the workbook relationship graph), so
+/// indexing it by `id` here — the calamine display-order sheet index — aligns
+/// cell styles to the correct worksheet.
 fn workbook_to_inner_model<R: Read + Seek>(
     calamine_wb: &mut Sheets<R>,
     style_table: &StyleTableRead,
@@ -2356,18 +2633,18 @@ fn apply_rpr_child(
 
 fn parse_sheet_rich_text(
     data: &[u8],
-    sheet_count: usize,
+    sheet_paths: &[String],
     scheme: &ThemeColorScheme,
 ) -> Vec<Vec<(u32, u32, Vec<RichTextRun>)>> {
     use std::io::Cursor;
     let cursor = Cursor::new(data);
     let mut archive = match zip::ZipArchive::new(cursor) {
         Ok(a) => a,
-        Err(_) => return vec![Vec::new(); sheet_count],
+        Err(_) => return vec![Vec::new(); sheet_paths.len()],
     };
-    let mut per_sheet = Vec::with_capacity(sheet_count);
-    for i in 0..sheet_count {
-        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+    let mut per_sheet = Vec::with_capacity(sheet_paths.len());
+    for i in 0..sheet_paths.len() {
+        let path = sheet_paths[i].clone();
         let cells = match archive.by_name(&path) {
             Ok(entry) => {
                 let mut xml = String::new();
@@ -2613,7 +2890,7 @@ fn parse_shared_string_rich_text(
 /// `CellValue` with a `RichText` CellValue preserving per-run fonts.
 fn overlay_shared_string_rich_text(
     data: &[u8],
-    sheet_count: usize,
+    sheet_paths: &[String],
     rich_strings: &std::collections::HashMap<u32, Vec<RichTextRun>>,
     inner: &mut WorkbookInner,
 ) {
@@ -2631,8 +2908,8 @@ fn overlay_shared_string_rich_text(
         Err(_) => return,
     };
 
-    for i in 0..sheet_count {
-        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+    for i in 0..sheet_paths.len() {
+        let path = sheet_paths[i].clone();
         let xml = match archive.by_name(&path) {
             Ok(entry) => {
                 let mut xml = String::new();
@@ -2716,6 +2993,124 @@ mod tests {
     use super::*;
     use crate::model::sheet_view::SheetViewState;
     use crate::model::style::{BorderStyleStyle, FillKind, GradientType};
+
+    // --- Reordered-workbook fixtures (display A,B,C but files reordered) ---
+    const CONTENT_TYPES: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/worksheets/sheet3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+  <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
+</Types>"#;
+    const ROOT_RELS: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"#;
+    const WORKBOOK_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="A" sheetId="1" r:id="rId1"/>
+    <sheet name="B" sheetId="2" r:id="rId2"/>
+    <sheet name="C" sheetId="3" r:id="rId3"/>
+  </sheets>
+</workbook>"#;
+    // Display order A,B,C; rId2 intentionally points at sheet3.xml so the
+    // reader must follow the relationship graph instead of file numbering.
+    const WORKBOOK_RELS: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet3.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>
+  <Relationship Id="rId10" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+  <Relationship Id="rId11" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>
+</Relationships>"#;
+    const STYLES_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>"#;
+    const SHARED_STRINGS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>"#;
+    const SHEET_A: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetPr>
+    <tabColor rgb="FFFF0000"/>
+  </sheetPr>
+</worksheet>"#;
+    const SHEET_B: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetPr>
+    <tabColor rgb="FFFF00FF"/>
+  </sheetPr>
+</worksheet>"#;
+    const SHEET_C: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetPr>
+    <tabColor rgb="FF00FF00"/>
+  </sheetPr>
+</worksheet>"#;
+
+    fn build_reordered_workbook() -> Vec<u8> {
+        use std::io::{Cursor, Write};
+        use zip::write::FileOptions;
+        use zip::CompressionMethod;
+        use zip::write::ZipWriter;
+
+        let mut buf: Vec<u8> = Vec::new();
+        {
+            let mut zip = ZipWriter::new(Cursor::new(&mut buf));
+            let opts: FileOptions<'_, ()> =
+                FileOptions::default().compression_method(CompressionMethod::Deflated);
+            let parts: &[(&str, &str)] = &[
+                ("[Content_Types].xml", CONTENT_TYPES),
+                ("_rels/.rels", ROOT_RELS),
+                ("xl/workbook.xml", WORKBOOK_XML),
+                ("xl/_rels/workbook.xml.rels", WORKBOOK_RELS),
+                ("xl/styles.xml", STYLES_XML),
+                ("xl/sharedStrings.xml", SHARED_STRINGS_XML),
+                ("xl/worksheets/sheet1.xml", SHEET_A),
+                ("xl/worksheets/sheet2.xml", SHEET_C),
+                ("xl/worksheets/sheet3.xml", SHEET_B),
+            ];
+            for (name, body) in parts {
+                zip.start_file(name, opts).unwrap();
+                zip.write_all(body.as_bytes()).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        buf
+    }
+
+    #[test]
+    fn resolve_sheet_paths_honors_workbook_relationship_order() {
+        let bytes = build_reordered_workbook();
+        let paths = resolve_sheet_paths(&bytes, 3);
+        assert_eq!(
+            paths,
+            vec![
+                "xl/worksheets/sheet1.xml".to_string(),
+                "xl/worksheets/sheet3.xml".to_string(),
+                "xl/worksheets/sheet2.xml".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_sheet_format_pr_aligns_tab_color_to_display_order() {
+        use crate::model::color::Color;
+        let bytes = build_reordered_workbook();
+        let paths = resolve_sheet_paths(&bytes, 3);
+        let formats = parse_sheet_format_pr(&bytes, &paths).expect("parse format_pr");
+        assert_eq!(formats.len(), 3);
+        // Display A -> file sheet1 (red), B -> file sheet3 (magenta), C -> file sheet2 (green).
+        let red = Color { rgb: "FFFF0000".to_string(), theme: None, tint: None };
+        let magenta = Color { rgb: "FFFF00FF".to_string(), theme: None, tint: None };
+        let green = Color { rgb: "FF00FF00".to_string(), theme: None, tint: None };
+        assert_eq!(formats[0].tab_color, Some(red));
+        assert_eq!(formats[1].tab_color, Some(magenta));
+        assert_eq!(formats[2].tab_color, Some(green));
+    }
 
     // -- map_data unit tests (no file I/O) --
 

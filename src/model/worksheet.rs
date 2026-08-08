@@ -26,8 +26,64 @@ use super::sheet_protection::SheetProtection;
 use super::sheet_view::SheetView;
 use super::style::Dxf;
 use super::table::{AddTableOptions, Table, TableColumn, TableList, TableRow};
+use crate::model::color::Color;
 use crate::model::style::{apply_style, Style};
 use crate::types;
+
+/// Worksheet visibility state, mirroring ExcelJS `WorksheetState`.
+///
+/// Maps to the `state` attribute on `<sheet>` in `xl/workbook.xml`:
+/// `visible` (default, attribute omitted on write), `hidden`, `veryHidden`.
+/// Variant names are lowercase to match ExcelJS's string values exactly.
+#[napi(string_enum)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub enum SheetState {
+    #[default]
+    visible,
+    hidden,
+    veryHidden,
+}
+
+impl std::fmt::Display for SheetState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SheetState::visible => write!(f, "visible"),
+            SheetState::hidden => write!(f, "hidden"),
+            SheetState::veryHidden => write!(f, "veryHidden"),
+        }
+    }
+}
+
+impl From<&str> for SheetState {
+    fn from(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "hidden" => SheetState::hidden,
+            "veryhidden" => SheetState::veryHidden,
+            _ => SheetState::visible,
+        }
+    }
+}
+
+/// Worksheet-level metadata properties (tab color, default dimensions,
+/// outline levels). Mirrors ExcelJS `Worksheet.properties`.
+///
+/// Returned by `Worksheet.properties` as a read-only snapshot; mutate via
+/// `Worksheet.setProperties`.
+#[napi(object)]
+#[derive(Clone, Debug, Default)]
+pub struct WorksheetProperties {
+    /// Tab color as an ARGB hex string (8 chars). `None` → no `<tabColor>`.
+    pub tab_color: Option<String>,
+    /// Default row height in points.
+    pub default_row_height: Option<f64>,
+    /// Default column width in characters.
+    pub default_col_width: Option<f64>,
+    /// Sheet-level row outline level (used for grouping/collapse).
+    pub outline_level_row: Option<u8>,
+    /// Sheet-level column outline level (used for grouping/collapse).
+    pub outline_level_col: Option<u8>,
+}
 
 /// Convert a raw JSON value (from `AddTableOptions.rows`) into a `CellValue`.
 fn table_json_to_cell_value(v: &serde_json::Value) -> CellValue {
@@ -75,6 +131,12 @@ pub struct Worksheet {
     tables: TableList,
     row_breaks: Arc<Mutex<BTreeSet<u32>>>,
     col_breaks: Arc<Mutex<BTreeSet<u32>>>,
+    state: Arc<Mutex<SheetState>>,
+    tab_color: Arc<Mutex<Option<Color>>>,
+    default_row_height: Arc<Mutex<Option<f64>>>,
+    default_col_width: Arc<Mutex<Option<f64>>>,
+    outline_level_row: Arc<Mutex<Option<u8>>>,
+    outline_level_col: Arc<Mutex<Option<u8>>>,
 }
 
 #[napi]
@@ -98,6 +160,12 @@ impl Worksheet {
             tables: Arc::new(Mutex::new(Vec::new())),
             row_breaks: Arc::new(Mutex::new(BTreeSet::new())),
             col_breaks: Arc::new(Mutex::new(BTreeSet::new())),
+            state: Arc::new(Mutex::new(SheetState::visible)),
+            tab_color: Arc::new(Mutex::new(None)),
+            default_row_height: Arc::new(Mutex::new(None)),
+            default_col_width: Arc::new(Mutex::new(None)),
+            outline_level_row: Arc::new(Mutex::new(None)),
+            outline_level_col: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -775,6 +843,104 @@ impl Worksheet {
         *self.views.lock().expect("Worksheet views lock poisoned") = val;
     }
 
+    // -- state (sheet visibility) --
+
+    #[napi(getter)]
+    /// Worksheet visibility state (`visible` | `hidden` | `veryHidden`).
+    /// Mapped to the `state` attribute on `<sheet>` in `xl/workbook.xml`.
+    pub fn state(&self) -> String {
+        self.state.lock().expect("Worksheet state lock poisoned").to_string()
+    }
+
+    #[napi(setter)]
+    /// Set worksheet visibility state.
+    pub fn set_state(&mut self, val: String) {
+        *self.state.lock().expect("Worksheet state lock poisoned") = SheetState::from(val.as_str());
+    }
+
+    // -- tab_color --
+
+    #[napi(getter)]
+    /// Tab color as an ARGB hex string (8 chars), or `None` if unset.
+    pub fn tab_color(&self) -> Option<String> {
+        self.tab_color
+            .lock()
+            .expect("Worksheet tab_color lock poisoned")
+            .as_ref()
+            .map(|c| c.rgb.clone())
+    }
+
+    #[napi(setter)]
+    /// Set the tab color. Accepts an ARGB hex string (8 chars).
+    pub fn set_tab_color(&mut self, val: Option<String>) {
+        let color = val.filter(|s| !s.is_empty()).map(|s| Color {
+            rgb: s,
+            theme: None,
+            tint: None,
+        });
+        *self.tab_color.lock().expect("Worksheet tab_color lock poisoned") = color;
+    }
+
+    // -- properties (tab_color, default dims, outline levels) --
+
+    #[napi(getter)]
+    /// Read-only snapshot of worksheet-level properties: tab color and
+    /// default row/column dimensions + outline levels. Mutate via
+    /// `setProperties`.
+    pub fn properties(&self) -> WorksheetProperties {
+        let _state = self.state.lock().expect("Worksheet state lock poisoned");
+        let tab_color = self.tab_color.lock().expect("Worksheet tab_color lock poisoned");
+        let drh = self.default_row_height.lock().expect("Worksheet default_row_height lock poisoned");
+        let dcw = self.default_col_width.lock().expect("Worksheet default_col_width lock poisoned");
+        let orl = self.outline_level_row.lock().expect("Worksheet outline_level_row lock poisoned");
+        let ocl = self.outline_level_col.lock().expect("Worksheet outline_level_col lock poisoned");
+        WorksheetProperties {
+            tab_color: tab_color.as_ref().map(|c| c.rgb.clone()),
+            default_row_height: *drh,
+            default_col_width: *dcw,
+            outline_level_row: *orl,
+            outline_level_col: *ocl,
+        }
+    }
+
+    #[napi(js_name = setProperties)]
+    /// Bulk-update worksheet properties. Only fields that are present (`Some`)
+    /// are applied; omit a field to leave its current value unchanged. To clear
+    /// `tabColor`, set it via the `tabColor` setter to `null` — napi cannot
+    /// distinguish `null` from `undefined` on an object field, so partial clears
+    /// go through the individual setters.
+    pub fn set_properties(&mut self, val: WorksheetProperties) {
+        if let Some(c) = val.tab_color.filter(|s| !s.is_empty()) {
+            *self.tab_color.lock().expect("Worksheet tab_color lock poisoned") =
+                Some(Color { rgb: c, theme: None, tint: None });
+        }
+        if val.default_row_height.is_some() {
+            *self
+                .default_row_height
+                .lock()
+                .expect("Worksheet default_row_height lock poisoned") =
+                val.default_row_height;
+        }
+        if val.default_col_width.is_some() {
+            *self
+                .default_col_width
+                .lock()
+                .expect("Worksheet default_col_width lock poisoned") = val.default_col_width;
+        }
+        if val.outline_level_row.is_some() {
+            *self
+                .outline_level_row
+                .lock()
+                .expect("Worksheet outline_level_row lock poisoned") = val.outline_level_row;
+        }
+        if val.outline_level_col.is_some() {
+            *self
+                .outline_level_col
+                .lock()
+                .expect("Worksheet outline_level_col lock poisoned") = val.outline_level_col;
+        }
+    }
+
     // -- protection --
 
     #[napi(getter)]
@@ -1332,6 +1498,83 @@ impl Worksheet {
             .lock()
             .expect("Worksheet page_setup lock poisoned")
             .clone()
+    }
+
+    // -- state / tab_color / default dims / outline levels (internal, reader/writer) --
+
+    pub fn set_state_inner(&self, val: SheetState) {
+        *self.state.lock().expect("Worksheet state lock poisoned") = val;
+    }
+
+    pub fn get_state_inner(&self) -> SheetState {
+        self.state.lock().expect("Worksheet state lock poisoned").clone()
+    }
+
+    pub fn set_tab_color_inner(&self, val: Option<Color>) {
+        *self.tab_color.lock().expect("Worksheet tab_color lock poisoned") = val;
+    }
+
+    pub fn get_tab_color_inner(&self) -> Option<Color> {
+        self.tab_color
+            .lock()
+            .expect("Worksheet tab_color lock poisoned")
+            .clone()
+    }
+
+    pub fn set_default_row_height_inner(&self, val: Option<f64>) {
+        *self
+            .default_row_height
+            .lock()
+            .expect("Worksheet default_row_height lock poisoned") = val;
+    }
+
+    pub fn get_default_row_height_inner(&self) -> Option<f64> {
+        *self
+            .default_row_height
+            .lock()
+            .expect("Worksheet default_row_height lock poisoned")
+    }
+
+    pub fn set_default_col_width_inner(&self, val: Option<f64>) {
+        *self
+            .default_col_width
+            .lock()
+            .expect("Worksheet default_col_width lock poisoned") = val;
+    }
+
+    pub fn get_default_col_width_inner(&self) -> Option<f64> {
+        *self
+            .default_col_width
+            .lock()
+            .expect("Worksheet default_col_width lock poisoned")
+    }
+
+    pub fn set_outline_level_row_inner(&self, val: Option<u8>) {
+        *self
+            .outline_level_row
+            .lock()
+            .expect("Worksheet outline_level_row lock poisoned") = val;
+    }
+
+    pub fn get_outline_level_row_inner(&self) -> Option<u8> {
+        *self
+            .outline_level_row
+            .lock()
+            .expect("Worksheet outline_level_row lock poisoned")
+    }
+
+    pub fn set_outline_level_col_inner(&self, val: Option<u8>) {
+        *self
+            .outline_level_col
+            .lock()
+            .expect("Worksheet outline_level_col lock poisoned") = val;
+    }
+
+    pub fn get_outline_level_col_inner(&self) -> Option<u8> {
+        *self
+            .outline_level_col
+            .lock()
+            .expect("Worksheet outline_level_col lock poisoned")
     }
 }
 
