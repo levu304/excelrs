@@ -22,6 +22,10 @@
   has already landed (PR #62, `Workbook::recalculate` / `Worksheet::recalculate`).
 - A **reusable analysis tool now exists**. The moment typework supplies
   representative workbooks, one command produces the real analysis.
+- A **simulated representative corpus** (6 hand-authored report workbooks,
+  §5) gives a directional read: lookups are a *tiny* share (~3%) of typical
+  report formulas; the engine's larger real gap is the criteria-aggregation
+  family (`COUNTIF`/`SUMIFS`), which is **outside #51's scope**.
 
 > This spike's durable output is the **baseline capability table** + the
 > **committed tool**, not a number. The decision is intentionally left
@@ -72,6 +76,7 @@ UNIQUE, TRANSPOSE`.
 | 1 (ideal) | Workbooks typework serves over WOPI `GetFile` | **Unavailable** — cannot contact the typework team from this environment; repo contains no typework/wopi/onlyoffice references. |
 | 2 (fallback) | Public Excel report/template workbooks | Not downloaded (binary fetch blocked in this sandbox). |
 | offline-only | `xlstream-eval` crate test fixtures (real `.xlsx`) | **Used for pipeline validation only** — see caveat. |
+| 3 (simulated) | Hand-authored "typework-style" reports (`scripts/sim-corpus.cjs`) | Used for directional validation — see §5. |
 
 ### Sample
 
@@ -169,7 +174,39 @@ No new work required there.
 
 ---
 
-## 5. Missing-lookup impact
+## 5. Simulated representative corpus (directional)
+
+To show what a *representative* run looks like (option #1 from the spike,
+simulated), six "typework-style" report workbooks were hand-authored with
+`exceljs` (`scripts/sim-corpus.cjs`) into `corpus-sim/` and analyzed with the
+committed tool.
+
+| Metric | Value |
+| -------- | ------- |
+| Workbooks / formulas | 6 / 29 (small N) |
+| Cross-sheet (`Sheet!A1`) | 9 (31.0%) |
+| Fully evaluable by shipped engine | 20 (69.0%) |
+| Needs a missing #51 lookup | 1 (3.4%) — `VLOOKUP` |
+| Needs other unsupported function | 9 (31.0%) — criteria aggregations |
+
+Function-token occurrences by class: shipped 20, lookup-gap 1 (`VLOOKUP`),
+other-gap 8 (`COUNTIF` 4, `SUMIF` 1, `SUMIFS` 1, `AVERAGEIF` 1, `TEXT` 1).
+
+**Reading:** even in a representative report shape, the #51 lookups are a
+**tiny slice** (~3%). The engine's larger real gap is the
+**criteria-aggregation family** (`COUNTIF` / `SUMIFS` / `AVERAGEIF` / `SUMIF`)
+plus `TEXT` — none of which are in #51's named set. Cross-sheet usage (31%)
+independently validates the `expose-formula-recalc` (#62) need.
+
+> ⚠️ **Caveats.** N = 29, hand-authored → directional only, not evidence.
+> Still not typework's real files; a real go/no-go needs those. Also, the
+> tool's "broader unsupported" bucket currently hard-codes its watch-list and
+> misses `COUNTIF`/`SUMIFS` etc., so they land in "needs other unsupported"
+> rather than a labeled bucket — `fullyEvaluable` itself is computed correctly.
+
+---
+
+## 6. Missing-lookup impact
 
 - In the curated suite, only **3.3% of formulas** reference one of the four
   named lookups — but that suite is built to include them, so this is an
@@ -180,7 +217,7 @@ No new work required there.
 
 ---
 
-## 6. Decision & next step (Task 11)
+## 7. Decision & next step (Task 11)
 
 **Fate of #51:** Keep open as *"fresh-value recalc shippable (#62 merged);
 lookups deferred pending corpus evidence."* **Do not** open
@@ -208,6 +245,11 @@ This spike takes **no position** — the corpus needed to choose is absent.
 ## Reproduce
 
 ```bash
+# Simulate a representative typework corpus, then analyze it:
+node scripts/sim-corpus.cjs
+cargo run --example analyze_corpus -- corpus-sim "SIM typework-style"
+
+# Or analyze any real corpus:
 cargo run --example analyze_corpus -- <corpus-dir> "<label>"
 # prints JSON to stdout; stderr shows file count + corpus label
 ```
