@@ -806,7 +806,7 @@ mod tests {
             ("cols", "<cols"),
             ("sheetData", "<sheetData"),
         ];
-        let mut seen: Vec<(&str, usize)> = positions
+        let seen: Vec<(&str, usize)> = positions
             .iter()
             .filter_map(|(name, needle)| xml.find(needle).map(|pos| (*name, pos)))
             .collect();
