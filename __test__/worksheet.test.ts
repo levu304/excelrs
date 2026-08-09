@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest'
-import { Worksheet } from '../index'
+import { Workbook, Worksheet } from '../index'
 
 test('Worksheet constructor', () => {
   const ws = new Worksheet('Sheet1')
@@ -185,12 +185,92 @@ test('getRow().getCell().value on fresh row — string', () => {
 })
 
 
-  test('getRow().getCell().value on sparse high row number persists', () => {
-  const ws = new Worksheet('Sparse')
+test('getRow().getCell().value on sparse high row number persists', () => {
+    const ws = new Worksheet('Sparse')
 
-  ws.getRow(100).getCell('A').value = 'sparse'
+    ws.getRow(100).getCell('A').value = 'sparse'
 
-  expect(ws.getCell('A100').value).toBe('sparse')
+    expect(ws.getCell('A100').value).toBe('sparse')
 
+})
+
+// ---------------------------------------------------------------------------
+// Worksheet-level metadata (v2.1.0): state, tabColor, default dimensions
+// ---------------------------------------------------------------------------
+
+test('addWorksheet with state and properties applies them', () => {
+  const wb = new Workbook()
+  const ws = wb.addWorksheet('Secret', {
+    state: 'hidden',
+    properties: { tabColor: 'FFFF0000', defaultRowHeight: 15, defaultColWidth: 10, outlineLevelRow: 1 },
+  })
+  expect(ws.state).toBe('hidden')
+  expect(ws.properties.tabColor).toBe('FFFF0000')
+  expect(ws.properties.defaultRowHeight).toBe(15)
+  expect(ws.properties.defaultColWidth).toBe(10)
+  expect(ws.properties.outlineLevelRow).toBe(1)
+})
+
+test('addWorksheet defaults to visible with no tab color', () => {
+  const wb = new Workbook()
+  const ws = wb.addWorksheet('Sheet1')
+  expect(ws.state).toBe('visible')
+  expect(ws.tabColor).toBeNull()
+  expect(ws.properties.tabColor).toBeUndefined()
+})
+
+test('state setter round-trips hidden', async () => {
+  const wb = new Workbook()
+  const ws = wb.addWorksheet('Hidden')
+  ws.state = 'hidden'
+  const buf = await wb.xlsx.write()
+  const wb2 = new Workbook()
+  await wb2.xlsx.read(buf as never)
+  expect(wb2.getWorksheet('Hidden')!.state).toBe('hidden')
+})
+
+test('state setter round-trips veryHidden', async () => {
+  const wb = new Workbook()
+  const ws = wb.addWorksheet('Very')
+  ws.state = 'veryHidden'
+  const buf = await wb.xlsx.write()
+  const wb2 = new Workbook()
+  await wb2.xlsx.read(buf as never)
+  expect(wb2.getWorksheet('Very')!.state).toBe('veryHidden')
+})
+
+test('tabColor round-trips', async () => {
+  const wb = new Workbook()
+  const ws = wb.addWorksheet('Colored')
+  ws.tabColor = 'FFFF0000'
+  const buf = await wb.xlsx.write()
+  const wb2 = new Workbook()
+  await wb2.xlsx.read(buf as never)
+  expect(wb2.getWorksheet('Colored')!.tabColor).toBe('FFFF0000')
+})
+
+test('default dimensions round-trip', async () => {
+  const wb = new Workbook()
+  const ws = wb.addWorksheet('Dims')
+  ws.setProperties({ defaultRowHeight: 24, defaultColWidth: 20, outlineLevelRow: 2, outlineLevelCol: 1 })
+  const buf = await wb.xlsx.write()
+  const wb2 = new Workbook()
+  await wb2.xlsx.read(buf as never)
+  const props = wb2.getWorksheet('Dims')!.properties
+  expect(props.defaultRowHeight).toBe(24)
+  expect(props.defaultColWidth).toBe(20)
+  expect(props.outlineLevelRow).toBe(2)
+  expect(props.outlineLevelCol).toBe(1)
+})
+
+test('cross-library parity: ExcelJS hidden sheet read by excelrs stays hidden', async () => {
+  const wbjs = new (require('exceljs').Workbook)()
+  const wsjs = wbjs.addWorksheet('Secret')
+  wsjs.state = 'hidden'
+  const buf = await wbjs.xlsx.writeBuffer()
+
+  const wb = new Workbook()
+  await wb.xlsx.read(buf as never)
+  expect(wb.getWorksheet('Secret')!.state).toBe('hidden')
 })
 

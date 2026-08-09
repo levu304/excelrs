@@ -890,13 +890,20 @@ fn write_workbook_xml<W: Write>(
         let name = ws.name();
         let name_esc = escape(&name);
         let rid = i + 3;
+        let state = ws.get_state_inner();
+        let state_attr = if state == crate::model::worksheet::SheetState::visible {
+            String::new()
+        } else {
+            format!(r#" state="{}""#, state)
+        };
         write_str(
             w,
             &format!(
-                r#"<sheet name="{}" sheetId="{}" r:id="rId{}"/>"#,
+                r#"<sheet name="{}" sheetId="{}" r:id="rId{}"{}/>"#,
                 name_esc,
                 ws.id(),
-                rid
+                rid,
+                state_attr,
             ),
         )?;
     }
@@ -1287,6 +1294,36 @@ fn emit_sheet_views<W: Write>(w: &mut W, ws: &Worksheet) -> Result<(), ExcelrsEr
     Ok(())
 }
 
+/// Emit `<sheetFormatPr>` when any default row/column dimension or outline
+/// level is set. Must be placed between `<sheetViews>` and `<cols>`
+/// (CT_Worksheet ordering: sheetViews → sheetFormatPr → cols → sheetData).
+fn emit_sheet_format_pr<W: Write>(w: &mut W, ws: &Worksheet) -> Result<(), ExcelrsError> {
+    let drh = ws.get_default_row_height_inner();
+    let dcw = ws.get_default_col_width_inner();
+    let orl = ws.get_outline_level_row_inner();
+    let ocl = ws.get_outline_level_col_inner();
+
+    if drh.is_none() && dcw.is_none() && orl.is_none() && ocl.is_none() {
+        return Ok(());
+    }
+
+    let mut attrs = String::new();
+    if let Some(v) = drh {
+        attrs.push_str(&format!(r#" defaultRowHeight="{}""#, v));
+    }
+    if let Some(v) = dcw {
+        attrs.push_str(&format!(r#" defaultColWidth="{}""#, v));
+    }
+    if let Some(v) = orl {
+        attrs.push_str(&format!(r#" outlineLevelRow="{}""#, v));
+    }
+    if let Some(v) = ocl {
+        attrs.push_str(&format!(r#" outlineLevelCol="{}""#, v));
+    }
+    write_str(w, &format!("<sheetFormatPr{}/>", attrs))?;
+    Ok(())
+}
+
 fn emit_sheet_protection<W: Write>(w: &mut W, ws: &Worksheet) -> Result<(), ExcelrsError> {
     let prot = ws.get_protection_inner();
     let sp = match prot {
@@ -1520,6 +1557,27 @@ fn emit_cf_color_attrs(col: &crate::model::conditional_formatting::CfColor) -> S
     s
 }
 
+/// Build the attribute fragment for `<tabColor .../>` from a resolved `Color`,
+/// preserving theme/indexed/ARGB variants (reuses the same resolution model
+/// as cell/conditional-format colors). Returns empty string when no color info.
+fn emit_tab_color_attrs(c: &crate::model::color::Color) -> String {
+    let mut s = String::new();
+    if let Some(rgb) = c.rgb.strip_prefix("FF") {
+        // OOXML tabColor expects sRGB (6 hex) or ARGB (8 hex). Keep ARGB.
+        let rgb_val = rgb;
+        s.push_str(&format!(r#" rgb="{}{}""#, "FF", rgb_val));
+    } else if !c.rgb.is_empty() {
+        s.push_str(&format!(r#" rgb="{}""#, c.rgb));
+    }
+    if let Some(t) = c.theme {
+        s.push_str(&format!(r#" theme="{}""#, t));
+    }
+    if let Some(t) = c.tint {
+        s.push_str(&format!(r#" tint="{}""#, t));
+    }
+    s
+}
+
 fn emit_cf_rule<W: Write>(w: &mut W, rule: &crate::model::conditional_formatting::CfRule) -> Result<(), ExcelrsError> {
     let mut attrs = format!(r#"type="{}" priority="{}""#, escape(&rule.r#type), rule.priority);
     if let Some(op) = &rule.operator {
@@ -1638,6 +1696,19 @@ fn write_sheet_xml<W: Write>(
         r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
     )?;
 
+    // <sheetPr> — tab color (if set). Must precede <dimension> per CT_Worksheet order.
+    let tab_color = ws.get_tab_color_inner();
+    if tab_color.is_some() {
+        write_str(w, "<sheetPr>")?;
+        if let Some(c) = &tab_color {
+            let attrs = emit_tab_color_attrs(c);
+            if !attrs.is_empty() {
+                write_str(w, &format!("<tabColor{}/>", attrs))?;
+            }
+        }
+        write_str(w, "</sheetPr>")?;
+    }
+
     // <dimension ref="A1:Z1000"/> — used range
     let dimension = compute_dimension(ws);
     if let Some(dim) = dimension {
@@ -1646,6 +1717,10 @@ fn write_sheet_xml<W: Write>(
 
     // <sheetViews> — freeze/split panes (v0.11.0)
     emit_sheet_views(w, ws)?;
+
+    // <sheetFormatPr> — default row/col dimensions + outline levels (must sit
+    // between <sheetViews> and <cols> per CT_Worksheet ordering).
+    emit_sheet_format_pr(w, ws)?;
 
     emit_worksheet_cols(w, ws)?;
 

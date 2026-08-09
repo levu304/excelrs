@@ -605,6 +605,33 @@ export declare class Worksheet {
   getTables(): Array<Table>
   /** Remove the named table (and its part/relationship); cells stay intact. */
   removeTable(name: string): boolean
+  /** Worksheet visibility state (`visible` | `hidden` | `veryHidden`). */
+  get state(): WorksheetState
+  set state(val: WorksheetState)
+  /** Tab color as an ARGB hex string (8 chars), or `null` if unset. */
+  get tabColor(): string | null
+  set tabColor(val: string | undefined | null)
+  /** Worksheet-level metadata: tab color, default dimensions, outline levels. */
+  get properties(): WorksheetProperties
+  /** Bulk-update worksheet properties (tab color, default dims, outline levels). */
+  setProperties(props: WorksheetProperties): void
+}
+
+/** Worksheet visibility state, mirroring ExcelJS `WorksheetState`. */
+export type WorksheetState = 'visible' | 'hidden' | 'veryHidden'
+
+/** Worksheet-level metadata (tab color, default dimensions, outline levels). */
+export interface WorksheetProperties {
+  /** Tab color as an ARGB hex string (8 chars). */
+  tabColor?: string
+  /** Default row height in points. */
+  defaultRowHeight?: number
+  /** Default column width in characters. */
+  defaultColWidth?: number
+  /** Sheet-level row outline level (grouping/collapse). */
+  outlineLevelRow?: number
+  /** Sheet-level column outline level (grouping/collapse). */
+  outlineLevelCol?: number
 }
 
 /** Active pane quadrant. */
@@ -653,6 +680,8 @@ export interface AddWorksheetOptions {
   headerFooter?: HeaderFooter
   protection?: SheetProtection
   autoFilter?: string
+  state?: WorksheetState
+  properties?: WorksheetProperties
 }
 
 /** Cell content alignment and text wrapping. */

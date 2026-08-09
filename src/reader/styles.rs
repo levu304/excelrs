@@ -24,6 +24,8 @@
 //!   ([`BUILTIN_NUMFMTS`]); custom IDs (≥164) via the `<numFmts>` element.
 //! - **cellStyleXfs**, **dxfs**, **tableStyles**, **extLst** → skipped.
 
+#![allow(clippy::needless_range_loop)] // loop index = worksheet display ordinal, aligned with inner.worksheets[i]
+
 use std::collections::HashMap;
 use std::io::Read;
 
@@ -249,7 +251,7 @@ fn str_attr<'a>(attrs: &'a [Attribute], name: &[u8]) -> Option<&'a str> {
 /// originating theme reference when present).
 ///
 /// Priority: `theme` → `indexed` → `rgb`. Returns `None` when none are present.
-fn parse_color(attrs: &[Attribute], scheme: &ThemeColorScheme) -> Option<Color> {
+pub fn parse_color(attrs: &[Attribute], scheme: &ThemeColorScheme) -> Option<Color> {
     // Prefer theme, then indexed, then rgb
     if let Some(theme_str) = str_attr(attrs, b"theme") {
         if let Ok(index) = theme_str.parse::<usize>() {
@@ -782,9 +784,10 @@ pub fn parse_styles_and_sheet_maps(
     }
 
     // Parse sheet style maps
-    let mut sheet_style_maps: Vec<SheetStyleMap> = Vec::with_capacity(sheet_count);
-    for i in 0..sheet_count {
-        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+    let sheet_paths = crate::reader::xlsx::resolve_sheet_paths(data, sheet_count);
+    let mut sheet_style_maps: Vec<SheetStyleMap> = Vec::with_capacity(sheet_paths.len());
+    for i in 0..sheet_paths.len() {
+        let path = sheet_paths[i].clone();
         let map = match read_entry(&mut archive, &path) {
             Ok(sheet_bytes) => parse_sheet_cell_styles(&sheet_bytes)?,
             Err(_) => HashMap::new(), // sheet missing → no styles
