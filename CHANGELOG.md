@@ -1,6 +1,44 @@
 # Changelog
 <!-- Release process: tag-driven main. `git tag -a vX.Y.Z -m "..."` then push tag. -->
 
+## [Unreleased]
+
+### Fixed
+
+- **CI and release builds now run the same generated-type transform as a local build** — the
+  `napi --pipe` step (`scripts/apply-glue.cjs`) that produces the `CellValue` discriminated
+  union, `CellValueInput`, the refined `Cell` value setter, and the `getCell` overload
+  declarations in `native.d.ts` had never been passed by `.github/workflows/ci.yml` or
+  `.github/workflows/release.yml`, so a published artifact's types were built by a different
+  pipeline than a developer's local build. Both workflows now pass `--pipe`.
+- **The build's glue hook no longer contains an unreachable branch** — `apply-glue.cjs`
+  dispatched its JavaScript half on `index.js`, a file the build has never emitted (`napi` is
+  pointed at `native.js` specifically so it cannot overwrite the hand-maintained entrypoint), so
+  that branch could not fire. It is removed. The type-declaration half, which is live, is
+  unchanged.
+
+### Added
+
+- **`scripts/verify-build-output.cjs`, run in CI** (and locally as `pnpm verify:build`) —
+  asserts the generated `native.d.ts` carries the pipe's transforms and that the hand-maintained
+  `index.js` still carries the runtime `getCell` glue. Nothing previously read the file the
+  build produces, so a regression in the transform could not fail CI.
+
+### Changed
+
+- **`openspec/specs/exceljs-parity` is now a historical record** (11 requirements → 2) — the
+  requirements mandating the ongoing accuracy of the hand-maintained `ROADMAP.md` parity matrix
+  are retired; no validation reads that file, so the obligations decayed undetected. The v2.0.0
+  parity-completion record and its exclusion list are retained. The `getCell` overload
+  requirement, which asserted a build-time re-injection that never ran, moved to the new
+  `package-entrypoint` capability, restated as observable behavior.
+- **`openspec/specs/spec-integrity` gains two requirements** (6 → 8) — one requiring a
+  requirement that names an enforcement mechanism to name a resolvable target, one prohibiting
+  an unenforceable value from being stated as a standing invariant.
+
+No consumer-facing behavior change: the published entrypoint, `main`/`types` fields, exported
+API, and generated types are unchanged.
+
 ## [2.9.1] - 2026-08-08
 
 ### Fixed

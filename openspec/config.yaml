@@ -12,6 +12,14 @@ context: |
   - **FFI bridge:** `#[napi(object)]` flat structs with a `value_type` discriminant.
     Rust enums with variant data cannot cross the FFI boundary. `index.js` is a
     hand-maintained JS glue layer for method overloading, which `#[napi]` cannot express.
+  - **Build outputs:** napi is pointed at `native.js` / `native.d.ts` so it cannot
+    overwrite the hand-maintained `index.js` / `index.d.ts` that the package publishes.
+    `scripts/apply-glue.cjs` runs as a `napi --pipe` hook over the *generated*
+    `native.d.ts` only, producing the `CellValue` discriminated union, `CellValueInput`,
+    the refined `Cell` value setter, and the `getCell` overload declarations. It does not
+    touch the hand-maintained files. CI and release both pass `--pipe`, and
+    `scripts/verify-build-output.cjs` (run in CI, and locally as `pnpm verify:build`)
+    asserts the generated transforms and the hand-maintained runtime glue are both present.
   - **XLSX read:** calamine for the in-memory path; a hand-rolled SAX reader for the
     streaming path. calamine resolves shared strings, so formula and rich-text reads
     require separate API calls alongside `rows()`.
