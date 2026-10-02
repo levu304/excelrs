@@ -4,14 +4,16 @@
 
 See `proposal.md` — Why for motivation. The structural facts that shape the approach:
 
-The `publish` job's Functional smoke test (`release.yml:391`) resolves its subject by
-`npm install --no-save "@levu304/excelrs@$VERSION"` from the public registry. That is why it
-runs at step 391 rather than before step 300 — it is not mis-ordered, it is *dependent*. The
+The `publish` job's Functional smoke test (renamed by this change to `Verify the published package
+set resolves from npm`) resolves its subject by
+`npm install --no-save "@levu304/excelrs@$VERSION"` from the public registry. That is why it ran
+after both publish steps rather than before them — it is not mis-ordered, it is *dependent*. The
 step order that makes the spec claim false cannot be fixed by moving lines; the check has to
-be split into a pre-publish part and a post-publish part.
+be split into a pre-publish part and a post-publish part. (Steps are named here rather than
+cited by line number, because line numbers drift with every unrelated edit to the workflow.)
 
 The `build` job already downloads nothing, but the `publish` job already has every built
-binary on disk from step 229 (`Download platform artifacts`), *before* either publish step.
+binary on disk from `Download platform artifacts`, *before* either publish step.
 A pre-publish assertion has the artifacts available; it lacks only the installed-package
 resolution that the current step uses.
 
@@ -28,7 +30,8 @@ can rot over adding a mechanism to check it*, which bounds how much machinery is
 - Make every release claim in `release-verification` and `platform-targets` true as written.
 - Preserve the post-publish npm-resolution check, which catches packaging failures (wrong
   `optionalDependencies`, missing binary, bad `main`) that a pre-publish check structurally
-  cannot see.
+  cannot see. What it gives up is the behavioral re-assertion, which the pre-publish gate
+  already makes and which cannot gate publication from where it stands.
 - Give each corrected requirement a mechanism that fails when the property it names is
   removed, rather than a check that resolves a path and reports success.
 
@@ -74,18 +77,32 @@ that is the honest claim for what npm resolution proves.
 ### D2: Narrow the post-publish step's claim to packaging
 
 **Decision:** Rename the post-publish step to state that it verifies the published package set
-resolves and loads from the registry. It keeps every assertion it has today.
+resolves and loads from the registry, and reduce its body to those assertions. It no longer
+re-asserts cell style, merged ranges, or row style — those are gated pre-publish.
 
 **Rationale:** A check that runs after publication proves something real about publication.
 Mislabeling it as a release gate is what made the corpus untrustworthy; labeling it accurately
 costs nothing and loses no coverage.
 
+**Correction made during review (the first draft kept every assertion):** renaming alone did not
+make the requirement true. The post-publish step still asserted `font.bold`, `mergedRanges`, row
+`font.color`, and `fill.foreground` *after* both publishes, so `release-verification`'s "every
+behavioral assertion runs before the first `npm publish`" and its "no package SHALL have been
+published by that run" scenario were both false on arrival — the exact defect class this change
+exists to remove, shipped inside the change meant to remove it. A behavioral failure after
+publish cannot un-publish, so it reports a release failure while the packages are already on npm.
+Keeping those assertions bought no coverage the pre-publish gate did not already provide, because
+both assert the same three guarantees through the same code. The requirement was correspondingly
+narrowed to behavioral assertions, with packaging-only assertions after publication governed by
+their own scenario.
+
 ### D3: Assert the output-phase bound, not input-phase streaming
 
-**Decision:** The requirement states the streaming round-trip runs pre-publish per non-musl
-target over a workbook whose payload materially exceeds the output phase's bound; the
-threshold lives in a scenario. The requirement references `openspec/specs/streaming-xlsx` for
-the memory model rather than restating it.
+**Decision:** The requirement states the streaming round-trip runs pre-publish against every
+build-matrix target's own binary, over a workbook whose payload materially exceeds a spot check
+and which exercises every cell value shape the streaming API accepts. The threshold lives in a
+scenario. The requirement references `openspec/specs/streaming-xlsx` for the memory model rather
+than restating it.
 
 **Correction made during implementation:** the first draft of this delta demanded that the
 smoke test detect "a regression that collects all sheets before writing". That contradicts
@@ -103,9 +120,28 @@ in scenarios. It also lets the workbook grow without amending the requirement �
 pinned row count does not.
 
 **Scale choice:** Enough cell payload spanning multiple sheets that truncation, corruption,
-and archive-format limits at scale are reachable, while staying inside the existing
-`timeout-minutes: 2` on the release runner. Measured against this build: ~8 sheets × 4,000
-rows × 5 cells completes in ~2.5 s locally.
+and archive-format limits at scale are reachable, while staying inside the release runner's step
+timeout. Measured against this build: 8 sheets × 6,000 rows × 5 cells = 240,000 cells, ~5.4 MB of
+emitted cell content, ~4.9 s locally. The step was given an explicit `timeout-minutes: 5`; the
+non-musl step previously had none and relied on the job-level cap.
+
+**Correction made during review (value shapes):** raising the row count also *narrowed* coverage.
+`main` asserted all four shapes the streaming API accepts — `number`, `text`, `boolean`,
+`formula` — on its single row. The scaled-up version emitted only `number` and `text`, so
+`StreamValue::Formula` was left with no release-path coverage and no unit test, while the delta
+claimed the streaming assertions were "added alongside the in-memory ones rather than replacing
+them". Scale and shape coverage are independent axes; growing one silently shrank the other. The
+generator now writes and asserts all four shapes, asserts that an unwritten shape does not appear
+on read-back (catching a writer that coerces `number` into `text`), and asserts up front that
+every shape was actually produced, so the fidelity loop cannot pass vacuously.
+
+**Correction made during review (the payload floor measured the wrong quantity):** the floor was
+accumulated from each cell's template string, including column 1 — which is written as a
+*number*, so its template text is never emitted. That overstated the payload by ~25% (7.43 MB
+reported against 5.95 MB actually written), which is precisely the quantity the delta's "materially
+larger than a spot check" scenario reasons about. The floor now sums per-shape emitted length:
+digits for a number, `TRUE`/`FALSE` for a boolean, the expression text for a formula, the string
+for text. The floor could previously be satisfied in part by bytes that never reached the archive.
 
 **Why no memory assertion (second correction, from measurement):** the first rescope assumed
 the output phase was observably bounded and asserted peak heap stayed flat relative to payload.
@@ -135,6 +171,33 @@ inspecting a build, which is what makes it fast and hermetic.
 **Alternative considered:** Have CI run `pnpm build` and diff resolved artifacts. Rejected —
 slower, and it would prove the outputs agree rather than the *declared* feature sets agree,
 which is what the requirement is about. The declarations are the thing that can silently drift.
+
+**Corrections made during review (the first draft could pass while the invariant was broken):**
+the checker compared one feature set per workflow *step chunk*, with chunk boundaries matched at a
+fixed six-space indent. Executing it against mutated copies of `.github/` showed three silent
+passes:
+
+- *A source disappears.* Deleting `release.yml` left "every invocation that exists agrees"
+  trivially true. `REQUIRED_SOURCES` now asserts `package.json`, `ci.yml`, and `release.yml` are
+  all present, so absence is a failure rather than a smaller comparison set.
+- *A step is re-indented.* An eight-space-indented `napi build` with no `--features`, placed after
+  a `cargo test --features formula-eval` step, merged into that chunk and inherited its feature
+  set — reported `OK` while the build declared nothing. Boundaries are now matched at any indent,
+  and, more importantly, each `napi build` occurrence is compared on its own rather than per
+  chunk, so the same holds when two builds share one step.
+- *All flags are stripped.* Every source dropping `--features` yields mutual agreement on the
+  empty set, which passed. An empty reference set is now a failure: every `napi build` in this
+  project declares at least one feature, so agreement on nothing is a degenerate comparison.
+
+A YAML block scalar folds newlines into the command, and `--features \` continues the value onto
+the next line; the first draft read the trailing `\` as a feature literally named `\`. Values are
+now flattened across continuations before parsing.
+
+Note the asymmetry these fixes preserve: a *disagreement* in any direction fails, a missing source
+fails, and a degenerate empty agreement fails — while legitimate reformattings (quoted
+`--features=`, backslash continuation, a feature added consistently to every source, an unrelated
+new workflow) still pass. Each case is covered by a probe that asserts the mutation applied before
+recording the result, so a broken probe cannot read as a passing check.
 
 ### D5: Correct the ADR citations in the specs, not the ADR
 

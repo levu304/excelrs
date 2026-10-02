@@ -8,8 +8,13 @@
 //   scripts/musl-smoke-test.cjs   requires a .node path directly
 //
 // They were previously one assertion body inlined in each script. Sharing them
-// means a new guarantee is added once, and the two release paths cannot drift
-// into verifying different things.
+// means a new guarantee is added once and both in-process release paths assert it.
+//
+// Scope: this covers the two paths that run in-process against a binary. It does
+// NOT cover the post-publish registry check in release.yml, which asserts
+// packaging (that the published set resolves and loads) rather than behavior —
+// behavioral guarantees there would contradict the requirement that assertions
+// complete before publication.
 //
 // Kept dependency-free and side-effect-free apart from its own logging: these run
 // inside release jobs where an unexpected require or an early process.exit would
