@@ -2,7 +2,7 @@
 
 ## Purpose
 
-TBD - created by archiving change v2-0-0-streaming-parity-capstone. Update Purpose after archive.
+Defines the streaming XLSX reader and writer — SAX-based paths for workbooks too large to hold in memory. Covers incremental row parsing and emission, the per-part size and event caps that bound resource use on untrusted input, sheet resolution through workbook relationships, and shared-formula expansion.
 ## Requirements
 ### Requirement: Streaming reader parses a workbook from a byte stream
 

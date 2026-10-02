@@ -1,7 +1,7 @@
 # release-verification Specification
 
 ## Purpose
-TBD - created by archiving change fix-issue-3-release-hardening. Update Purpose after archive.
+Defines what the release pipeline must prove before publishing: smoke tests that round-trip styled, merged, row-styled, and streamed workbooks through the native addon, plus the npm trusted-publishing (OIDC) requirements that keep write credentials out of the repository.
 ## Requirements
 ### Requirement: Release smoke test verifies styled round-trip
 

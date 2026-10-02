@@ -1,7 +1,7 @@
 # csv Specification
 
 ## Purpose
-TBD - created by archiving change v0-9-0-csv-read-write. Update Purpose after archive.
+Defines CSV import and export: the `workbook.csv` handle, an RFC 4180 parser that materializes a single worksheet on read, and a serializer that writes the first worksheet back out.
 ## Requirements
 ### Requirement: Workbook exposes a CSV read/write handle
 

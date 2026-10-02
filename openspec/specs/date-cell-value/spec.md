@@ -2,7 +2,7 @@
 
 ## Purpose
 
-TBD - created by archiving change v0-13-0-date-theme-write. Update Purpose after archive.
+Defines how date-valued cells cross the FFI boundary: Excel date serials are surfaced to JavaScript as native `Date` objects rather than ISO strings, written back as serial numbers paired with an appropriate number format, and anchored to UTC to match ExcelJS behavior.
 
 ## Requirements
 

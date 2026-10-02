@@ -2,7 +2,7 @@
 
 Produce, publish, and resolve static musl native addon packages (`linux-x64-musl` and `linux-arm64-musl`) so consumers on Alpine/musl Linux hosts can load `@levu304/excelrs` without a source build or pinning to a glibc base image.
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Release build matrix includes musl targets
 
@@ -30,11 +30,3 @@ The release SHALL verify each musl binary loads and round-trips a workbook (writ
 
 - **WHEN** the publish job loads `@levu304/excelrs-linux-x64-musl` in a musl-capable Node.js process and builds, writes, then reads back a styled workbook
 - **THEN** `require('@levu304/excelrs')` SHALL succeed, the write SHALL produce a non-empty XLSX, and the read-back SHALL preserve a cell style (`font.bold` and `fill.foreground`)
-
-## REMOVED Requirements
-
-(none — this is an additive capability)
-
-## MODIFIED Requirements
-
-(none — no existing requirement changes; the gnu variants in `linux-arm64-support` are untouched)

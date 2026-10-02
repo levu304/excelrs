@@ -2,7 +2,7 @@
 
 ## Purpose
 
-TBD - created by archiving change v0-11-0. Update Purpose after archive.
+Defines worksheet view state: the `ws.views` property covering frozen and split panes, and the `<sheetViews>` / `<pane>` elements emitted and parsed for them.
 
 ## Requirements
 

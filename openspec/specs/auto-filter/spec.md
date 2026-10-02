@@ -1,7 +1,7 @@
 # auto-filter Specification
 
 ## Purpose
-TBD - created by archiving change v0-11-0. Update Purpose after archive.
+Defines the worksheet auto-filter capability: the `ws.autoFilter` property and the `<autoFilter>` element it maps to, round-tripped on both the write and read path so a filtered range survives read-then-write unchanged.
 ## Requirements
 ### Requirement: Worksheet exposes an autoFilter property
 

@@ -1,8 +1,8 @@
 # excelrs → ExcelJS Porting Roadmap
 
-**Generated:** 2026-07-14 | **ExcelJS version pinned:** [4.4.0](https://www.npmjs.com/package/exceljs/v/4.4.0) | **excelrs version:** 1.1.0 (released 2026-07-16)
+**Generated:** 2026-08-09 | **ExcelJS version pinned:** [4.4.0](https://www.npmjs.com/package/exceljs/v/4.4.0) | **excelrs version:** 2.9.1 (released 2026-08-08)
 
-> **Next:** v2.0.0 is the planned capstone (see *Post-v1 Roadmap* below). The v1.1.0 → v2.0.0 scope **provisional**, gated on an ExcelJS 4.4.0 API audit (Step 0) before each feature's design. *Audit complete: streaming surface is non-breaking (new `stream` namespace only); v2.0.0 is now in implementation.*
+> **Status:** the v1.x drop-in ExcelJS-4.4.0 parity program was declared **complete** at v2.0.0. Since then, work has continued on post-capstone gaps and on the opt-in `formula-eval` engine. See the matrix below for current per-area status; areas marked `unreleased` are merged to `main` but not yet published.
 
 ---
 
@@ -55,9 +55,9 @@
 | Themes (write) | planned | — | Read-only via theme1.xml |
 | **Worksheet** | | | |
 | Data validation | shipped | v0.8.0 | Full read/write, all types |
-| State (visible/hidden) | planned | — | Not implemented |
-| Tab color | planned | — | Not implemented |
-| Properties (defaultRowHeight, etc.) | planned | — | Not implemented |
+| State (visible/hidden) | shipped | unreleased | `ws.state` (`visible`/`hidden`/`veryHidden`) read/write; `state` attr on `<sheet>` |
+| Tab color | shipped | unreleased | `ws.properties.tabColor` read/write; `<sheetPr><tabColor>` |
+| Properties (defaultRowHeight, etc.) | shipped | unreleased | `defaultRowHeight`/`defaultColWidth`/`outlineLevelRow`/`outlineLevelCol` read/write; `<sheetFormatPr>` |
 | Page setup / print | shipped | v1.0.0 | `pageMargins`, `paperSize`, `orientation`, `printArea`, `printTitles` read/write |
 | Headers and footers | shipped | v1.0.0 | `<headerFooter>` read/write with format codes |
 | Sheet protection | shipped | v0.11.0 | `<sheetProtection>` read/write; `ws.protection` |

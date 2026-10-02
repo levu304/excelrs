@@ -1,7 +1,7 @@
 # sheet-protection Specification
 
 ## Purpose
-TBD - created by archiving change v0-11-0. Update Purpose after archive.
+Defines worksheet protection: the `ws.protection` flags and the `<sheetProtection>` element they serialize to, so a protected sheet is not silently unprotected by a read/write round-trip.
 ## Requirements
 ### Requirement: Worksheet exposes protection flags
 

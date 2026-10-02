@@ -1,7 +1,7 @@
 # comments Specification
 
 ## Purpose
-TBD - created by archiving change v1-0-0. Update Purpose after archive.
+Defines cell comments (ExcelJS `Cell.note` / `Cell.comment`): the `xl/commentsN.xml` package part, its relationship, and the author list, so annotations attached to cells survive a read/write round-trip.
 ## Requirements
 ### Requirement: Cell exposes a comment/note
 

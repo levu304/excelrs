@@ -2,7 +2,7 @@
 
 ## Purpose
 
-TBD - created by archiving change v1-0-0. Update Purpose after archive.
+Defines embedded images: the `ws.addImage` / `getImages` API, the `xl/media/` payloads, and the `xl/drawings/` part and anchor XML that position them on a worksheet.
 
 ## Requirements
 

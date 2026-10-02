@@ -1,7 +1,7 @@
 # page-setup Specification
 
 ## Purpose
-TBD - created by archiving change v1-0-0. Update Purpose after archive.
+Defines print configuration: the `ws.pageSetup` property, its page margins, paper size and orientation, and the print area and print titles that are carried as workbook-scoped defined names.
 ## Requirements
 ### Requirement: Worksheet exposes pageSetup
 

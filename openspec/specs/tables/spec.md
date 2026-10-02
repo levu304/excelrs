@@ -1,7 +1,7 @@
 # tables Specification
 
 ## Purpose
-TBD - created by archiving change v1-1-0. Update Purpose after archive.
+Defines worksheet tables: the `ws.addTable` / `getTables` / `removeTable` API, the `xl/tables/` part and its relationship, header and totals row handling, and the table-embedded autoFilter — all round-tripped.
 ## Requirements
 ### Requirement: Worksheet exposes table add/get/remove
 
