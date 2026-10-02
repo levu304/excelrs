@@ -1,10 +1,18 @@
-# images Specification
+## REMOVED Requirements
 
-## Purpose
+### Requirement: Worksheet exposes image add/get
 
-Defines embedded images: the `ws.addImage` / `getImages` API, the `xl/media/` payloads, and the `xl/drawings/` part and anchor XML that position them on a worksheet.
+**Reason**: Bundled the `addImage`/`getImages` surface, the two anchor variants, anchor-type inference, fractional EMU math, and the TypeScript-versus-runtime `Buffer` typing contract into one 1,419-character requirement.
 
-## Requirements
+**Migration**: Replaced by six focused requirements covering the API surface, anchor variants, anchor inference, EMU math, and Buffer typing.
+
+### Requirement: Writer embeds media and emits drawing part
+
+**Reason**: Combined the media/drawing/relationship emission contract with the `oneCellAnchor` ext-child rule and the `twoCellAnchor` shape rule into one over-long requirement.
+
+**Migration**: Replaced by three requirements covering writer emission, the one-cell anchor shape, and the two-cell anchor shape.
+
+## ADDED Requirements
 
 ### Requirement: Worksheet exposes addImage and getImages
 
@@ -138,20 +146,3 @@ child.
 
 - **WHEN** a `twoCellAnchor` is written
 - **THEN** it SHALL contain an `<xdr:to>` child and no `<xdr:ext>` child
-
-### Requirement: Reader parses drawing part and media
-
-The reader SHALL parse each sheet's drawing part (resolved via the sheet
-`.rels`), resolve media rels to `xl/media/`, and populate `ws.getImages()`
-with `{ extension, buffer }` and anchor metadata. A sheet without a drawing
-relationship SHALL report no images.
-
-#### Scenario: Read image bytes back
-
-- **WHEN** a PNG was embedded and the workbook is read back
-- **THEN** `ws.getImages()[0].extension === "png"` and its `buffer` equals the originally embedded bytes
-
-#### Scenario: Round-trip preserves anchor
-
-- **WHEN** an image was anchored at `{ tl: { col: 2, row: 3 }, br: { col: 6, row: 8 } }` and the workbook is read back
-- **THEN** the read-back image's anchor reports `tl.col === 2`, `tl.row === 3`, `br.col === 6`, and `br.row === 8`

@@ -44,38 +44,45 @@ regression fails the release before publish.
 - **WHEN** the release smoke test runs both the in-memory and streaming round-trips
 - **THEN** both SHALL pass, and the streaming assertions SHALL be added alongside the in-memory ones rather than replacing them
 
-### Requirement: Release publishes via npm trusted publishing (OIDC)
+### Requirement: Release publishes via npm trusted publishing rather than a stored token
 
-The `release.yml` publish job SHALL authenticate to npm via trusted publishing
-(OIDC) rather than a long-lived token. No write credential SHALL be stored in
-repository secrets or written to a `.npmrc` during release. Each of the **seven**
-published packages (`@levu304/excelrs`, `@levu304/excelrs-darwin-arm64`,
+The `release.yml` publish job SHALL authenticate to npm via trusted publishing (OIDC)
+rather than a long-lived token. No write credential SHALL be stored in repository secrets
+or written to a `.npmrc` during release.
+
+#### Scenario: Release publishes without a stored npm token
+
+- **WHEN** the publish job runs a release
+- **THEN** it SHALL authenticate via trusted publishing and no write credential SHALL be present in repository secrets or a generated `.npmrc`
+
+### Requirement: Trusted publishing is configured for the seven published packages
+
+Each of the seven published packages SHALL have a trusted-publisher configuration on
+npmjs.com authorizing the `release.yml` workflow to perform `npm publish`:
+`@levu304/excelrs`, `@levu304/excelrs-darwin-arm64`,
 `@levu304/excelrs-linux-x64-gnu`, `@levu304/excelrs-linux-arm64-gnu`,
-`@levu304/excelrs-linux-x64-musl`, `@levu304/excelrs-linux-arm64-musl`,
-`@levu304/excelrs-win32-x64-msvc`) SHALL have a trusted-publisher configuration
-on npmjs.com authorizing the `release.yml` workflow to perform `npm publish`. The
-package count and names in this requirement SHALL match the set the publish job
+`@levu304/excelrs-linux-x64-musl`, `@levu304/excelrs-linux-arm64-musl`, and
+`@levu304/excelrs-win32-x64-msvc`.
+
+#### Scenario: Every published package can be trusted-published
+
+- **WHEN** each of the seven packages is published by the release workflow
+- **THEN** each SHALL have an npm trusted-publisher configuration authorizing the `release.yml` workflow
+
+#### Scenario: Both musl platform packages are covered
+
+- **WHEN** the trusted-publisher configurations are reviewed
+- **THEN** `@levu304/excelrs-linux-x64-musl` and `@levu304/excelrs-linux-arm64-musl` SHALL both be present
+
+### Requirement: Release package set matches the release-verification spec
+
+The package count and names listed in this capability SHALL match the set the publish job
 publishes and verifies.
 
-#### Scenario: Publish succeeds without NPM_TOKEN
+#### Scenario: Spec and workflow agree on the package set
 
-- **WHEN** a `v*` tag triggers `release.yml` and no `NPM_TOKEN` secret is
-  present in the environment
-- **THEN** the seven `npm publish` calls SHALL succeed via OIDC token exchange,
-  and the publish job SHALL fail if OIDC is not configured
-
-#### Scenario: No long-lived credential persists
-
-- **WHEN** the release pipeline runs
-- **THEN** no `_authToken` SHALL be written to any `.npmrc` file, and the
-  repository SHALL hold no npm write token in its secrets store
-
-#### Scenario: Spec package set matches the workflow
-
-- **WHEN** the set of packages named in this requirement is compared to the set the
-  publish job publishes and the set its verification step checks
-- **THEN** all three sets SHALL be identical, and the same change that adds or removes a
-  published platform package SHALL update this requirement
+- **WHEN** the package names in this capability are compared with those the publish job publishes
+- **THEN** the two sets SHALL be identical in both count and names
 
 ### Requirement: Patch release SHALL follow existing release process
 
@@ -87,4 +94,3 @@ No new requirements beyond what the release-verification spec already defines.
 - **WHEN** a `v2.2.1` patch tag is pushed
 - **THEN** the existing Release workflow SHALL build, test, verify, and publish
   all **5** npm packages without workflow modifications
-

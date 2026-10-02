@@ -1,56 +1,18 @@
-# cached-formula-value Specification
+## REMOVED Requirements
 
-## Purpose
+### Requirement: writer emits `<v>` for each cached scalar on Formula cells
 
-Define the behavior for authoring and round-tripping **cached formula results** (the `<v>` paired
-with a `<f>`) without depending on a formula-evaluation engine. A formula cell authored with an
-explicit cached scalar SHALL be serialized as `<f>{formula}</f><v>{cached}</v>` and SHALL read
-back so that `cell.value` returns the cached scalar and `cell.formula` returns the formula text.
+**Reason**: Bundled two independent behaviors (cached-value emission and `t`-attribute priority) into one requirement whose prose exceeded the 500-character guideline.
 
-This is the minimal, engine-independent half of issue #54 ("Formula cached results cannot be
-authored on write"). It does **not** attempt in-process formula evaluation — cached values are
-supplied by the caller (JS authoring) or by Excel itself.
+**Migration**: Replaced by "Writer emits `<v>` for each cached scalar on Formula cells", "Writer sets the Formula cell `t` attribute by cached-scalar priority", and "Writer emits a `date_serial` cached branch on Formula cells".
 
-## Requirements
+### Requirement: Cell.cachedValue is recalc-only
 
-### Requirement: setter accepts cached scalar fields on a Formula cell
+**Reason**: Combined the observable getter contract with the internal `recalc_only` flag implementation detail, producing over-long prose.
 
-`Cell.value = { valueType: "Formula" | formula, <cached scalar field> }` SHALL store the supplied
-cached scalar on the `Formula` `CellValue` alongside the formula string, folding into the
-existing `number`, `string`, `boolean`, `error_value`, `date_serial` fields (no new fields, no
-new variants).
+**Migration**: Replaced by "Cell.cachedValue is recalc-only" (observable contract) and "Cached values from authoring and reader paths are not exposed as recalc results".
 
-#### Scenario: numeric cached value round-trips
-
-WHEN a cell is assigned `{ valueType: "Formula", formula: "SUM(A2:B2)", number: 3 }`, written
-to xlsx, and read back
-THEN `cell.value` is `3` (a number), and `cell.formula` contains the formula text.
-
-#### Scenario: boolean cached value round-trips
-
-WHEN a cell is assigned `{ formula: "A1>B1", boolean: true }` and round-tripped
-THEN `cell.value` is `true` and `cell.formula` is `"A1>B1"`.
-
-#### Scenario: string cached value round-trips
-
-WHEN a cell is assigned `{ formula: "CONCAT(\"a\",\"b\")", string: "ab" }` and round-tripped
-THEN `cell.value` is `"ab"` and `cell.formula` is present.
-
-#### Scenario: error cached value round-trips
-
-WHEN a cell is assigned `{ formula: "1/0", errorValue: "#DIV/0!" }` and round-tripped
-THEN `cell.value` is the error and `cell.formula` is `"1/0"`.
-
-#### Scenario: date cached value round-trips
-
-WHEN a cell is assigned a formula with a `dateSerial` cached value and round-tripped
-THEN the date-serial scalar is preserved and the formula text is preserved.
-
-#### Scenario: formula authored without a cached value still reads back
-
-WHEN a cell is assigned `{ formula: "SUM(A1:B1)" }` with no cached scalar and round-tripped
-THEN `cell.value` is `null` and `cell.formula` is `"SUM(A1:B1)"` (no regression vs. current
-behavior).
+## ADDED Requirements
 
 ### Requirement: Writer emits `<f>` and `<v>` for each cached scalar on Formula cells
 
@@ -124,24 +86,3 @@ recalculation path SHALL make a cached scalar observable there.
 
 - **WHEN** a JS caller sets a `Formula` cell's value carrying a cached scalar
 - **THEN** `Cell.cachedValue` SHALL return `null` until recalculation runs
-
-### Requirement: Excel-authored cached formula reads back
-
-A committed fixture containing `<f>..</f><v>..</v>` (authored by Excel or ExcelJS via
-`result`) SHALL read back so the cached value is available.
-
-#### Scenario: disk/Excel-authored cached formula returns cached scalar
-
-WHEN a workbook authored in Excel (or by ExcelJS with `{ formula, result }`) containing
-`<f>A2+B2</f><v>3</v>` is read
-THEN `cell.value` is `3` and `cell.formula` is `"A2+B2"`.
-
-### Requirement: date cached formula round-trip test coverage
-
-The JS-authored date-formula round-trip scenario SHALL be covered by an automated test in
-`__test__/cached-formula.test.ts`.
-
-#### Scenario: JS-authored cached date formula round-trips as bare number
-
-WHEN a cell is assigned `{ formula: "DATE(2025,1,1)", dateSerial: 45657 }` and round-tripped
-THEN `cell.value` is `45657` (a bare number, not a JS `Date`).

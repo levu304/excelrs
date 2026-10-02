@@ -6,59 +6,193 @@ Rich-text cell content round-trip: `CellValue.rich_text` runs with per-run `Font
 
 ## Requirements
 
-### Requirement: Reader parses rich-text cell content (theme/val-aware fonts)
+### Requirement: Reader parses rich-text runs into ordered RichText cell values
 
-When reading an `.xlsx`, the reader SHALL parse rich-text cell values (inline `<is><r>` and shared-string `<si><r>` runs) into a `CellValue` with `value_type === "RichText"` and `rich_text` equal to the ordered `Vec<RichTextRun>`, where each run carries its `text` and per-run `Font` whose attributes are resolved per run-level `<rPr>`:
+When reading an `.xlsx`, the reader SHALL parse rich-text cell values — inline `<is><r>` and
+shared-string `<si><r>` runs — into a `CellValue` with `value_type === "RichText"` and
+`rich_text` equal to the ordered runs, where each run carries its `text` and a per-run
+`Font` resolved from the run's own `<rPr>`.
 
-- **name** from `<rFont val="N"/>`. When a run's `<rPr>` contains no `<rFont>` element, `font.name` SHALL be `null` — the reader SHALL NOT inject the default font name (`"Calibri"`); the run inherits the cell's default font on render.
-- **size** from `<sz val="P"/>` (points). When `<rPr>` contains no `<sz>`, `font.size` SHALL be `null`.
-- **bold/italic/underline** from `<b/>`/`<i/>`/`<u/>` honoring `val`: `val` absent or `"1"`/`"true"` ⇒ `Some(true)`; `val` `"0"`/`"false"`/`"none"` ⇒ `Some(false)`; `<u val="double"/>` ⇒ `Some(true)` (double not distinguishable in bool field).
-- **color** resolved from `<color>` to a single ARGB hex string (`FFRRGGBB`) on `Font.color`: `rgb` attribute used directly; `theme="N"` resolved via the workbook `xl/theme/theme1.xml` scheme (slot + optional `tint`); `indexed="N"` resolved via the workbook color palette; `auto` ⇒ `"FF000000"`.
+#### Scenario: Inline rich text parses into ordered runs
 
-#### Scenario: Read rich text written by excelrs
+- **WHEN** the reader parses a cell containing an inline `<is><r>` run
+- **THEN** the cell SHALL yield `value_type === "RichText"` with the run in `rich_text` in document order
 
-- **WHEN** a cell was written with `cell.value = { richText: [{ text: "Hello ", font: { bold: true } }, { text: "World" }] }`, the workbook is written and read back
-- **THEN** `cell.value.value_type === "RichText"` and `cell.value.rich_text` equals the two runs with the bold flag preserved on the first run
+#### Scenario: Shared-string rich text parses into ordered runs
 
-#### Scenario: Plain string cell is not rich text
+- **WHEN** the reader parses a cell whose shared string contains an `<si><r>` run
+- **THEN** the cell SHALL yield `value_type === "RichText"` with the run in `rich_text` in document order
 
-- **WHEN** a cell holds a plain string value
-- **THEN** `cell.value.value_type === "String"` and `rich_text` is `undefined`/`null`
+### Requirement: Reader resolves run font name from rFont, defaulting to null
 
-#### Scenario: Read rich text from shared strings (Excel/ExcelJS output)
+`Font.name` SHALL be resolved from `<rFont val="N"/>`. When a run's `<rPr>` contains no
+`<rFont>` element, `font.name` SHALL be `null`; the reader SHALL NOT inject the default font
+name (`"Calibri"`), because the run inherits the cell's default font on render.
 
-- **WHEN** a workbook stores rich-text runs as shared strings (`<si><r><rPr><rFont/></rPr><t></t></r></si>` in `xl/sharedStrings.xml`) referenced by `<c t="s"><v>idx</v></c>` cells
-- **THEN** the reader SHALL resolve the shared-string index, find the rich-text runs, and return `cell.value.type === "RichText"` with `cell.richText` containing the runs and per-run fonts preserved
+#### Scenario: rFont supplies the run font name
 
-#### Scenario: Read rich text preserves font from shared strings
+- **WHEN** a run's `<rPr>` contains `<rFont val="Arial"/>`
+- **THEN** `font.name` SHALL be `"Arial"`
 
-- **WHEN** a shared-strings rich-text cell has runs with distinct fonts (e.g., run 1: name=Arial size=12 bold; run 2: name=Times New Roman size=10 color=FF0000FF)
-- **THEN** `cell.richText[0].font.name === "Arial"`, `cell.richText[0].font.size ≈ 12`, `cell.richText[0].font.bold === true`, `cell.richText[1].font.color === "FF0000FF"`
+#### Scenario: Missing rFont yields null
 
-#### Scenario: Rich-text run honors `val="0"` to turn bold/italic off
+- **WHEN** a run's `<rPr>` contains no `<rFont>` element
+- **THEN** `font.name` SHALL be `null` and SHALL NOT be the default font name
 
-- **WHEN** a run's `<rPr>` is `<b val="0"/><i/><u val="none"/>`
-- **THEN** `font.bold === Some(false)`, `font.italic === Some(true)`, `font.underline === Some(false)`
+### Requirement: Reader resolves run font size from sz, defaulting to null
 
-#### Scenario: Rich-text run resolves theme color + tint to ARGB
+`Font.size` SHALL be resolved from `<sz val="P"/>` in points. When `<rPr>` contains no
+`<sz>`, `font.size` SHALL be `null`.
 
-- **WHEN** a shared-strings run font is `<color theme="4" tint="0.5"/>` and the workbook `xl/theme/theme1.xml` defines `accent1` = `4F81BD`
-- **THEN** `font.color` equals the theme resolver's ARGB for accent1 lightened by tint 0.5 (`FFA7C0DE` for the OOXML default accent1 `4F81BD`); the result is a non-null `FFRRGGBB` string. If `theme1.xml` is absent, the default scheme's `4F81BD` is used (same resolver); if a custom `theme1.xml` defines a different `accent1`, that value is resolved instead.
+#### Scenario: sz supplies the run font size
 
-#### Scenario: Rich-text run resolves indexed / auto color to ARGB
+- **WHEN** a run's `<rPr>` contains `<sz val="14"/>`
+- **THEN** `font.size` SHALL be `14`
 
-- **WHEN** a run font uses `<color indexed="8"/>` and another uses `<color auto="1"/>`
-- **THEN** `font.color` is a non-null ARGB string derived from the workbook indexed palette (or OOXML system default) for the indexed run, and `font.color === "FF000000"` for the auto run
+#### Scenario: Missing sz yields null
 
-#### Scenario: Run without `<rFont>` inherits no default font name
+- **WHEN** a run's `<rPr>` contains no `<sz>` element
+- **THEN** `font.size` SHALL be `null`
 
-- **WHEN** a rich-text run's `<rPr>` contains formatting (e.g. `<b/>` or `<sz val="12"/>`) but no `<rFont>` element
-- **THEN** `font.name` SHALL be `null` (not `"Calibri"`), and `font.size` SHALL be `null` when no `<sz>` is present; the run inherits the cell's default font and size on render
+### Requirement: Reader resolves bold, italic, and underline honoring val
 
-#### Scenario: Run with `<rFont>` keeps its name
+`bold`, `italic`, and `underline` SHALL be resolved from `<b/>`, `<i/>`, and `<u/>` honoring
+the `val` attribute: absent or `"1"` / `"true"` yields `Some(true)`, while `"0"` / `"false"`
+/ `"none"` yields `Some(false)`. `<u val="double"/>` yields `Some(true)`, because the double
+style is not distinguishable in the boolean field.
 
-- **WHEN** a rich-text run's `<rPr>` contains `<rFont val="Arial"/>`
-- **THEN** `font.name` SHALL equal `"Arial"` (unchanged from prior behavior)
+#### Scenario: Bare toggle element means true
+
+- **WHEN** a run's `<rPr>` contains `<b/>` with no `val`
+- **THEN** `font.bold` SHALL be `Some(true)`
+
+#### Scenario: Explicitly false val means false
+
+- **WHEN** a run's `<rPr>` contains `<i val="0"/>`
+- **THEN** `font.italic` SHALL be `Some(false)`
+
+#### Scenario: Underline none means false
+
+- **WHEN** a run's `<rPr>` contains `<u val="none"/>`
+- **THEN** `font.underline` SHALL be `Some(false)`
+
+#### Scenario: Underline double collapses to true
+
+- **WHEN** a run's `<rPr>` contains `<u val="double"/>`
+- **THEN** `font.underline` SHALL be `Some(true)`
+
+### Requirement: Reader resolves run color from rgb, theme, indexed, and auto
+
+`Font.color` SHALL be resolved from `<color>` to a single ARGB hex string (`FFRRGGBB`): the
+`rgb` attribute used directly, `theme="N"` resolved via the workbook `xl/theme/theme1.xml`
+scheme with any `tint`, `indexed="N"` resolved via the workbook color palette, and `auto`
+yielding `"FF000000"`.
+
+#### Scenario: rgb attribute is used directly
+
+- **WHEN** a run's color element carries `rgb="FF112233"`
+- **THEN** `font.color` SHALL be `"FF112233"`
+
+#### Scenario: theme color resolves through the theme scheme
+
+- **WHEN** a run's color element carries `theme="4"` with a `tint`
+- **THEN** `font.color` SHALL be the ARGB hex resolved from theme slot 4 with the tint applied
+
+#### Scenario: indexed color resolves through the workbook palette
+
+- **WHEN** a run's color element carries `indexed="12"`
+- **THEN** `font.color` SHALL be the ARGB hex for index 12 in the workbook color palette
+
+#### Scenario: auto color yields black
+
+- **WHEN** a run's color element carries `auto="1"`
+- **THEN** `font.color` SHALL be `"FF000000"`
+
+### Requirement: Writer emits rich text through the shared-strings table
+
+When writing a rich-text cell (`cell.value.value_type === "RichText"`), the writer SHALL
+serialize the runs into the shared-string table (`xl/sharedStrings.xml`) as
+`<si><r><rPr>…</rPr><t>…</t></r></si>` and emit the cell as `t="s"` with the shared-string
+index in `<v>…</v>`.
+
+#### Scenario: Rich-text cell emits a shared-string reference
+
+- **WHEN** a rich-text cell is written
+- **THEN** the run SHALL be serialized into `xl/sharedStrings.xml` as an `<si><r>` entry and the cell SHALL be emitted as `t="s"` with that index in `<v>`
+
+#### Scenario: Run properties and text survive serialization
+
+- **WHEN** a rich-text run carrying `<rPr>` properties and text is written
+- **THEN** the emitted `<si><r>` SHALL carry `<rPr>…</rPr><t>…</t>`
+
+### Requirement: Rich text uses shared strings for cross-app compatibility
+
+The writer SHALL emit rich text through the shared-strings table because Apple Numbers' XLSX
+importer ignores inline-string rich-text run fonts and falls back to the cell's default font
+(Calibri). Shared-string rich text SHALL be imported correctly by Numbers, Excel, and
+LibreOffice. The writer output remains schema-valid OOXML either way — the shared-strings
+path is a compatibility improvement, not a correctness fix.
+
+#### Scenario: Rich text is importable by strict consumers
+
+- **WHEN** the workbook is opened in Apple Numbers
+- **THEN** the run font SHALL be honored rather than falling back to the cell's default font
+
+#### Scenario: Shared-strings path does not affect schema validity
+
+- **WHEN** the workbook is validated against the OOXML schema
+- **THEN** the shared-strings output SHALL be schema-valid
+
+#### Scenario: Rich-text cell emits a shared-string reference
+
+- **WHEN** a rich-text cell is written
+- **THEN** the run SHALL be serialized into `xl/sharedStrings.xml` as an `<si><r>` entry and the cell SHALL be emitted as `t="s"` with that index in `<v>`
+
+#### Scenario: Rich text is importable by strict consumers
+
+- **WHEN** the workbook is opened in Apple Numbers
+- **THEN** the run font SHALL be honored rather than falling back to the cell's default font
+
+### Requirement: Writer does not emit rich text as inline strings
+
+The writer SHALL NOT emit rich text as inline strings (`t="inlineStr"`).
+
+#### Scenario: Rich-text cell never uses inlineStr
+
+- **WHEN** a rich-text cell is written
+- **THEN** the emitted cell SHALL NOT use `t="inlineStr"`
+
+### Requirement: Rich-text writer output is covered by a golden-file test
+
+The rich-text shared-string writer SHALL be covered by a golden-file test asserting the
+exact emitted `xl/sharedStrings.xml` and `xl/worksheets/sheetN.xml` for a known rich-text
+cell, including run `<rPr>` contents, `xml:space="preserve"`, and `t="s"` with `<v>`.
+
+#### Scenario: Golden-file test pins the emitted shared strings
+
+- **WHEN** the golden-file test runs for a known rich-text cell
+- **THEN** it SHALL assert the exact `xl/sharedStrings.xml` and `xl/worksheets/sheetN.xml`, including run `<rPr>` contents, `xml:space="preserve"`, and `t="s"` with `<v>`
+
+### Requirement: Rich-text writer output is covered by an OOXML conformance smoke test
+
+The rich-text shared-string writer SHALL be covered by an OOXML conformance smoke test
+validating the generated workbook against the OOXML schema and/or opening it headless in
+LibreOffice.
+
+#### Scenario: OOXML conformance smoke test runs
+
+- **WHEN** the conformance smoke test runs
+- **THEN** it SHALL validate the generated workbook against the OOXML schema and/or open it headless in LibreOffice
+
+### Requirement: Manual Apple Numbers verification stays documented
+
+A manual open in Apple Numbers via `scripts/rich-text-repro.cjs` SHALL remain a documented
+verification step.
+
+#### Scenario: Manual Numbers verification stays documented
+
+- **WHEN** a developer verifies rich-text compatibility manually
+- **THEN** `scripts/rich-text-repro.cjs` SHALL remain the documented path for opening the workbook in Apple Numbers
 
 ### Requirement: Cell.richText accessor returns runs without a cast
 
@@ -91,32 +225,6 @@ The public `Cell.value` setter SHALL accept a rich-text object so the rich-text 
 
 - **WHEN** a cell is written via `cell.value = { richText: [{ text: "Hello ", font: { bold: true } }, { text: "World" }] }`, the workbook is saved and read back
 - **THEN** `cell.value.value_type` SHALL be `"RichText"` and `cell.value.rich_text` SHALL equal the two runs with the bold flag preserved on the first run
-### Requirement: Writer emits rich text via shared strings for cross-app compatibility
-
-When writing a rich-text cell (`cell.value.value_type === "RichText"`), the writer SHALL serialize the runs into the shared-string table (`xl/sharedStrings.xml`) as `<si><r><rPr>…</rPr><t>…</t></r></si>` and emit the cell as `t="s"` with the shared-string index in `<v>…</v>`. The writer SHALL NOT emit rich text as inline strings (`t="inlineStr"`).
-
-This requirement exists because Apple Numbers' XLSX importer ignores inline-string rich-text run fonts and falls back to the cell's default font (Calibri); shared-string rich text is imported correctly by Numbers, Excel, and LibreOffice. The writer output remains schema-valid OOXML either way — the change is a compatibility improvement, not a correctness fix.
-
-#### Scenario: Rich text written as shared string
-
-- **WHEN** a rich-text cell with a run carrying `font.name === "Times New Roman"` is written
-- **THEN** the cell element SHALL use `t="s"` with `<v>idx</v>` (not `t="inlineStr"`)
-- **AND** `xl/sharedStrings.xml` SHALL contain an `<si>` whose `<r>` carries `<rPr><rFont val="Times New Roman"/></rPr>` and the run text in `<t>`
-
-#### Scenario: Numbers renders the specified per-run fonts
-
-- **WHEN** the written workbook is opened in Apple Numbers
-- **THEN** the rich-text runs SHALL render in their specified per-run fonts (e.g. "Times New Roman"), not the Calibri default
-
-#### Scenario: Round-trip preserves runs
-
-- **WHEN** a rich-text cell is written and the file is read back
-- **THEN** `cell.value.rich_text` SHALL match the written runs (ordered `text` and per-run `font` preserved)
-
-#### Scenario: Identical rich text deduplicates to one shared string
-
-- **WHEN** two cells contain rich text with identical runs (same text and per-run fonts)
-- **THEN** both cells SHALL reference the same shared-string index
 
 ### Requirement: Rich-text run text preserves significant whitespace
 
@@ -172,26 +280,3 @@ strings (`t="inlineStr"`).
   non-streaming writers
 - **THEN** both SHALL produce shared-string rich text with identical rendering
   (no path emits inlineStr).
-
-### Requirement: Writer output is verifiable for cross-app compatibility
-
-The rich-text shared-string writer SHALL be covered by automated confidence
-checks that catch regressions strict consumers (e.g. Apple Numbers) would hit:
-(a) a golden-file test asserting the exact emitted `xl/sharedStrings.xml` and
-`xl/worksheets/sheetN.xml` for a known rich-text cell (run `<rPr>` contents,
-`xml:space="preserve"`, `t="s"` + `<v>`); and (b) an OOXML conformance smoke
-test (validating the generated workbook against the OOXML schema and/or opening
-it headless in LibreOffice). A manual open in Apple Numbers (via
-`scripts/rich-text-repro.cjs`) SHALL remain a documented verification step.
-
-#### Scenario: Golden-file asserts exact shared-string output
-
-- **WHEN** a known rich-text workbook is written
-- **THEN** the golden-file test SHALL assert the exact `sharedStrings.xml` and
-  sheet XML, so a revert to `inlineStr` or a change to run properties fails CI.
-
-#### Scenario: Conformance smoke test passes
-
-- **WHEN** the generated workbook is checked for OOXML conformance
-- **THEN** it SHALL pass schema/XSD validation and/or open without error in
-  headless LibreOffice.
