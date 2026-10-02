@@ -195,7 +195,7 @@ await writeToWritable(read(buffer), writable)
 
 ```bash
 pnpm build              # Build Rust → native addon
-cargo test              # Rust unit tests
+cargo test --features formula-eval   # Rust unit tests (feature matches pnpm build)
 pnpm test               # JS integration tests
 cargo clippy -- -D warnings
 cargo fmt -- --check

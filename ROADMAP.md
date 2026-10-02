@@ -68,7 +68,7 @@
 | Conditional formatting | shipped | v1.2.0 | `<conditionalFormatting>` + `dxfs`; rule types `cellIs`, `expression`, `colorScale`, `dataBar`, `iconSet`, `top10`, `unique`/`duplicate`, `containsText`, `timePeriod`, blanks/errors/nonBlanks; priority ordering |
 | Charts | planned (distant) | — | Major subsystem; chart XML is very complex |
 | Pivot tables | planned (distant) | — | Major subsystem; extremely complex |
-| Formula evaluation | partial | unreleased | Behind `formula-eval` Cargo feature: SUM/AVERAGE/MIN/MAX/COUNT/IF/etc. (20 functions). Cross-sheet refs, shared formulas supported. Full 500+ funcs deferred to v3+. Not in the crate's default Cargo feature set (opt-in for source builds); published release artifacts are built with the feature enabled |
+| Formula evaluation | partial | v2.9.0 | `recalculate()` exposed on `Workbook`/`Worksheet` in v2.9.0 behind the `formula-eval` Cargo feature: SUM/AVERAGE/MIN/MAX/COUNT/IF/etc. (20 functions). Cross-sheet refs, shared formulas supported. `unreleased` covers the full 500+ function goal only, deferred to v3+. Not in the crate's default Cargo feature set (opt-in for source builds); published release artifacts are built with the feature enabled |
 
 **Status legend:**
 
