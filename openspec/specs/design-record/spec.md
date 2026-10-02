@@ -71,7 +71,10 @@ externally observable behavior, and SHALL direct readers to `openspec/specs/` fo
 
 A project document that cites a decision number as current authority SHALL cite a decision
 whose status is `current`. A document asserting policy that a superseded decision supports
-SHALL be corrected.
+SHALL be corrected. A citation SHALL name the decision that actually records the cited
+decision: where a decision has been renumbered, the citation SHALL name the current number,
+and a number that resolves to an existing decision standing for unrelated subject matter is a
+wrong citation even though that decision's status satisfies the first condition.
 
 #### Scenario: A superseded decision is not cited as current policy
 
@@ -83,3 +86,10 @@ SHALL be corrected.
 
 - **WHEN** a document's policy claim is supported by a newer decision
 - **THEN** the document SHALL cite that newer decision
+
+#### Scenario: A renumbered decision is cited by its current number
+
+- **WHEN** a decision was renumbered to resolve a collision with an unrelated decision, and a
+  document cites it by the number it held before the renumbering
+- **THEN** the citation SHALL be corrected to the current number, and SHALL NOT be left pointing
+  at the decision that now occupies the earlier number

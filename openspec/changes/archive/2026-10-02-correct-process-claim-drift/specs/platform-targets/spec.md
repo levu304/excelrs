@@ -1,5 +1,9 @@
 # Spec Delta
 
+## REMOVED Requirements
+
+### Requirement: musl binaries load without a host-matched libc
+
 ## MODIFIED Requirements
 
 ### Requirement: Every build-matrix target runs the functional smoke test
@@ -20,6 +24,8 @@ mechanism is the one that gates publication.
 - **WHEN** a reader asks what gates publication for a given matrix target
 - **THEN** the gating verification SHALL be identified as that target's own build-job
   verification, not as a check that runs once after the packages are already on npm
+
+## ADDED Requirements
 
 ### Requirement: musl binaries are dynamically linked and load only on musl hosts
 
