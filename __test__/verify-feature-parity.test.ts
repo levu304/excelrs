@@ -23,12 +23,24 @@ const sandboxChecker = (dir: string) => join(dir, 'scripts', 'verify-feature-par
 
 type Mutate = (dir: string) => boolean
 
-/** Copy the files the checker reads into a scratch tree. */
+/**
+ * Copy the files the checker reads into a scratch tree, normalising line endings
+ * to LF.
+ *
+ * A Windows checkout has CRLF, so probes written with `\n` in their search strings
+ * would silently fail to match there — and the "mutation applied" assertion below
+ * would report a probe bug rather than a checker bug. Normalising here makes every
+ * probe see the same bytes on every platform.
+ */
 function sandbox(): string {
   const dir = mkdtempSync(join(tmpdir(), 'parity-'))
   cpSync(join(ROOT, '.github'), join(dir, '.github'), { recursive: true })
   cpSync(join(ROOT, 'scripts'), join(dir, 'scripts'), { recursive: true })
   cpSync(join(ROOT, 'package.json'), join(dir, 'package.json'))
+  for (const rel of [CI, REL, 'package.json']) {
+    const p = join(dir, rel)
+    writeFileSync(p, readFileSync(p, 'utf8').replaceAll('\r\n', '\n'))
+  }
   return dir
 }
 
