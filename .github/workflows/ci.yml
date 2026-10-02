@@ -54,6 +54,10 @@ jobs:
           npx napi build --platform --release
           --features formula-eval
           --js native.js --dts native.d.ts
+          --pipe "node scripts/apply-glue.cjs"
+
+      - name: Verify build output carries the glue transforms
+        run: node scripts/verify-build-output.cjs
 
       - name: Lint types (Biome)
         run: pnpm lint:js

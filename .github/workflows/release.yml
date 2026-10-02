@@ -102,12 +102,21 @@ jobs:
           export RUSTFLAGS="$RUSTFLAGS -D warnings -C link-arg=-s"
           pnpm exec napi build --cross-compile \
             --platform --release --target "$T" \
-            --features formula-eval --js native.js
+            --features formula-eval --js native.js --dts native.d.ts \
+            --pipe "node scripts/apply-glue.cjs"
       - name: "Build native addon (non-musl: emnapi default)"
         if: ${{ !matrix.musl }}
         run: >-
           pnpm exec napi build --platform --release
           --target ${{ matrix.target }} --features formula-eval --js native.js
+          --dts native.d.ts
+          --pipe "node scripts/apply-glue.cjs"
+
+      # The --dts flag above is what makes --pipe meaningful here: without a
+      # generated native.d.ts the pipe exits early and the published types ship
+      # untransformed (flat CellValue, no CellValueInput, unknown-typed setter).
+      - name: Verify build output carries the glue transforms
+        run: node scripts/verify-build-output.cjs
 
       # Musl cdylib links musl libc dynamically (NEEDED libc.musl-*.so.1) so it
       # dlopen's cleanly on musl hosts. A fully-static musl cdylib segfaults on
