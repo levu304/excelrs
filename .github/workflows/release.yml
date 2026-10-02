@@ -149,7 +149,26 @@ jobs:
           docker run --rm \
             -v "$PWD/$f:/w/$f" \
             -v "$PWD/scripts/musl-smoke-test.cjs:/w/smoke.cjs" \
+            -v "$PWD/scripts/assert-roundtrip.cjs:/w/assert-roundtrip.cjs" \
             node:20-alpine node --no-warnings /w/smoke.cjs "/w/$f"
+      - name: Streaming round-trip smoke test (musl, via Alpine)
+        if: ${{ matrix.musl }}
+        # This step used to be skipped on musl, leaving the two musl binaries
+        # with no streaming coverage at all. It runs the same script the non-musl
+        # targets run. streaming-smoke.cjs requires '../index.js', so the script
+        # is mounted under /w/scripts/ to make that resolve to the mounted /w/index.js,
+        # and the binary is selected via NAPI_RS_NATIVE_LIBRARY_PATH (which
+        # index.js honours before any platform-specific package lookup).
+        timeout-minutes: 5
+        run: |
+          f=excelrs.${{ matrix.npm_dir }}.node
+          docker run --rm \
+            -v "$PWD/$f:/w/$f" \
+            -v "$PWD/index.js:/w/index.js" \
+            -v "$PWD/scripts/streaming-smoke.cjs:/w/scripts/streaming-smoke.cjs" \
+            -e NAPI_RS_NATIVE_LIBRARY_PATH="/w/$f" \
+            node:20-alpine node --no-warnings /w/scripts/streaming-smoke.cjs
+
       - name: Run Rust clippy (formula-eval)
         run: cargo clippy --features formula-eval -- -D warnings
 
