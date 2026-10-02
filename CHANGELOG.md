@@ -16,6 +16,15 @@
   pointed at `native.js` specifically so it cannot overwrite the hand-maintained entrypoint), so
   that branch could not fire. It is removed. The type-declaration half, which is live, is
   unchanged.
+- **Exported enums are importable from TypeScript consumers that transpile per-file** — the
+  eleven enums in the published `index.d.ts` were declared `declare const enum`, contradicting
+  the build's deliberate `--no-const-enum --runtime-string-enum` flags. An ambient const enum
+  cannot be imported at all when `isolatedModules` is enabled, which is the default under Vite,
+  Next.js, SvelteKit, ts-jest and swc/esbuild, so those consumers failed with
+  `TS2748: Cannot access ambient const enums when 'isolatedModules' is enabled` on every enum.
+  This project's own `tsconfig.json` omits the flag, so `pnpm typecheck` stayed green while the
+  published package was unusable under those toolchains. The enums are now declared in the form
+  the build emits; the runtime already supplied each one, so no runtime change accompanies it.
 
 ### Added
 
@@ -23,6 +32,20 @@
   asserts the generated `native.d.ts` carries the pipe's transforms and that the hand-maintained
   `index.js` still carries the runtime `getCell` glue. Nothing previously read the file the
   build produces, so a regression in the transform could not fail CI.
+- **`SheetState` is now declared in the published types** — it is exported at runtime by
+  `index.js` but carried no declaration, so `import { SheetState } from '@levu304/excelrs'`
+  failed with `TS2305: has no exported member` under TypeScript while working in plain
+  JavaScript. `WorksheetState` is retained as an ExcelJS-compatible alias, now derived from
+  `SheetState` rather than restating its three values so the two names cannot drift apart. It
+  still accepts bare string literals — aliasing it directly to the enum type would have broken
+  `ws.state = 'visible'` with `TS2322`, which a regression test now pins.
+- **`scripts/verify-build-output.cjs` also compares the published declarations against the
+  generated ones** — it asserts every name `native.d.ts` exports is declared in `index.d.ts`,
+  and that the two agree on whether each enum is declared `const`. The comparison is
+  one-directional, so the extra ExcelJS-compatible `WorksheetState` alias does not trip it and
+  no allowlist is needed. Both files are parsed through the TypeScript compiler API rather than
+  a keyword regex, which misreports the declarations a `.d.ts` exports without an `export`
+  keyword — thirteen false positives on the tree as it stood.
 
 ### Changed
 
@@ -36,8 +59,10 @@
   requirement that names an enforcement mechanism to name a resolvable target, one prohibiting
   an unenforceable value from being stated as a standing invariant.
 
-No consumer-facing behavior change: the published entrypoint, `main`/`types` fields, exported
-API, and generated types are unchanged.
+No runtime behavior change: the entrypoint's export set, the `main`/`types` fields, and the
+generated `native.d.ts` are unchanged. The published declarations change in two ways, both of
+which widen what a consumer can do — eleven enums lose the `const` modifier, and `SheetState`
+gains a declaration. `WorksheetState` keeps its existing assignability.
 
 ## [2.9.1] - 2026-08-08
 

@@ -15,6 +15,7 @@ const fs = require('fs')
 
 const NATIVE_DTS = 'native.d.ts'
 const INDEX_JS = 'index.js'
+const INDEX_DTS = 'index.d.ts'
 
 const failures = []
 
@@ -102,6 +103,89 @@ if (indexJs !== null) {
   }
 }
 
+// --- Published vs generated declarations: they must agree --------------------------------
+// The package publishes the hand-maintained index.d.ts while the build generates
+// native.d.ts from the native surface. Nothing read both, so the two drifted silently:
+// a runtime export with no type declaration, and enums declared `const` against a build
+// configured not to emit them.
+//
+// Both files are parsed with the TypeScript compiler API rather than a keyword regex. A
+// declaration in a .d.ts is exported WITHOUT the `export` keyword, so a keyword scan
+// reports thirteen names as missing from index.d.ts that it actually exports.
+//
+// The name comparison is deliberately one-directional: the published file may carry
+// aliases the generated one does not (WorksheetState mirrors ExcelJS), so only names the
+// build generates are required to be declared. That keeps the check free of an allowlist.
+// Returns the file's exported names, plus each declared enum mapped to whether it is
+// declared `const`. Both facts come from the compiler API: the name set from the module
+// symbol, the modifier from the declaration node. Only the modifier matters — member
+// lists are the build's business, and a napi bump that reshuffles them is not a
+// published-surface regression.
+function parseDeclarations(file) {
+  const ts = require('typescript')
+  const program = ts.createProgram([file], {
+    target: ts.ScriptTarget.ES2022,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    skipLibCheck: true,
+    noEmit: true,
+  })
+  const source = program.getSourceFile(file)
+  if (source === undefined) {
+    failures.push(`${file} could not be parsed by the TypeScript compiler API.`)
+    return null
+  }
+
+  const checker = program.getTypeChecker()
+  const names = new Set(
+    checker.getExportsOfModule(checker.getSymbolAtLocation(source)).map((s) => s.name)
+  )
+
+  const enums = new Map()
+  const visit = (node) => {
+    if (ts.isEnumDeclaration(node) && node.name !== undefined && ts.isIdentifier(node.name)) {
+      const isConst = (ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Const) !== 0
+      enums.set(node.name.text, isConst)
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(source)
+
+  return { names, enums }
+}
+
+const indexDts = expectFile(INDEX_DTS, 'published type declarations')
+const generated = dts === null ? null : parseDeclarations(NATIVE_DTS)
+
+if (indexDts !== null && generated !== null) {
+  const published = parseDeclarations(INDEX_DTS)
+
+  if (published !== null) {
+    const missing = [...generated.names].filter((n) => !published.names.has(n))
+    if (missing.length > 0) {
+      failures.push(
+        `${INDEX_DTS} does not declare ${missing.length} name(s) that ${NATIVE_DTS} ` +
+          `declares: ${missing.join(', ')}. The build generates these from the native ` +
+          `surface; a consumer cannot import a name the published types omit.`
+      )
+    }
+
+    // Enum declaration form must match, or the published file misdescribes the enum.
+    for (const [name, generatedIsConst] of generated.enums) {
+      if (!published.enums.has(name)) continue // already reported by the coverage check
+      const publishedIsConst = published.enums.get(name)
+      if (publishedIsConst !== generatedIsConst) {
+        failures.push(
+          `${INDEX_DTS} declares enum ${name} as ` +
+            `${publishedIsConst ? 'const enum' : 'enum'} but ${NATIVE_DTS} declares it as ` +
+            `${generatedIsConst ? 'const enum' : 'enum'}. A const enum cannot be imported by ` +
+            `a consumer compiling with isolatedModules; the published form must match the build.`
+        )
+      }
+    }
+  }
+}
+
 if (failures.length > 0) {
   console.error('[verify-build-output] FAILED\n')
   for (const f of failures) console.error(`  - ${f}`)
@@ -109,4 +193,7 @@ if (failures.length > 0) {
   process.exit(1)
 }
 
-console.log('[verify-build-output] OK — pipe transforms present, entrypoint glue intact')
+console.log(
+  '[verify-build-output] OK — pipe transforms present, entrypoint glue intact, ' +
+    'published declarations agree with the generated ones'
+)
