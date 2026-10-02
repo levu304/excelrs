@@ -216,6 +216,44 @@ mechanism: this is a review-enforced authoring rule, consistent with the rest of
 `current`; resolution and relevance are independent properties. This is why no citation linter
 is proposed — the bug class is semantic, and review is the honest enforcement.
 
+### D6: Invert the musl loading requirement to what dynamic linkage actually provides
+
+**Decision:** Rewrite the `platform-targets` requirement *musl binaries load without a
+host-matched libc*. It claimed a dynamically linked musl binary "loads in any Node.js process
+regardless of the host's libc", with a scenario asserting a successful round-trip on a
+non-musl-glibc host. Dynamic musl linkage is precisely what makes that impossible: the
+cdylib records its musl libc as a dynamic dependency, so a glibc host cannot resolve it.
+
+**Evidence:** `readelf -d` on `excelrs.linux-x64-musl.node` reports `NEEDED libc.so` (the
+`libc.musl-<arch>.so.1` name is the musl *loader's* SONAME, not the dependency recorded by
+the cdylib). Loading it in `node:20-bookworm-slim` (glibc 2.36) fails with `libc.so: cannot
+open shared object file`. The mirror case — aarch64 binary on x86_64 — reports `unsupported
+relocation type 1026`, and the same binary on aarch64 loads and round-trips.
+
+**Rationale:** The requirement's own title and rationale were also inverted: it required
+linking *to* a libc under the heading "load without a host-matched libc". The real reason
+dynamic linkage is mandatory is already recorded in `release.yml` and `CHANGELOG.md` — a
+fully static musl cdylib **segfaults** on `dlopen` (static TLS/pthread init collides with the
+host libc) — and the release's existing `Assert musl binary links musl libc` step already
+rejects a fully static build by failing when no `NEEDED` entry is present. So the corrected
+requirement keeps an enforced obligation, drops the false one, and gains a scenario for the
+non-musl host that the loader error actually produces. Routing away from a non-musl host is a
+consumer-side decision the loader makes from the host libc and architecture, not a property
+the binary provides.
+
+### D7: Report the load-failure cause chain, not the loader's outer message
+
+**Decision:** `scripts/streaming-smoke.cjs` printed only `err.message`'s first line on a load
+failure. Print the `err.cause` chain instead.
+
+**Rationale:** `index.js` collapses every load failure into one `Cannot find native binding …
+npm has a bug related to optional dependencies … rm -rf node_modules` message and keeps the
+actual reason only in a chained `cause`. On a real failure the outer line blames npm and the
+inner line is the truth. Walking the chain is a bounded loop over an existing field; no new
+diagnostic mechanism is introduced. The same reasoning was already applied to
+`prepublish-smoke.cjs` (task 2.6) and to `musl-smoke-test.cjs`, which had been left with an
+unguarded `require` on the one musl path that can actually hit an architecture mismatch.
+
 ## Risks / Trade-offs
 
 **[Pre-publish gate fails on a locally-loadable artifact but the published one still breaks]**

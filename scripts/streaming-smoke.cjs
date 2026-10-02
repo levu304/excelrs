@@ -34,18 +34,23 @@
 'use strict';
 
 // A load failure here is the common case on a mis-built or wrong-libc artifact, and
-// index.js reports it as "Cannot find native binding ... npm has a bug related to
-// optional dependencies", which sends the reader hunting through npm instead of at
-// the build. Name the actual cause.
+// index.js collapses every load failure into one "Cannot find native binding ... npm
+// has a bug related to optional dependencies" message, keeping the real reason only
+// in a `cause` chain. Print the chain: the outer message sends the reader hunting
+// through npm instead of at the build, and the inner one is the actual cause.
 let ex
 try {
   ex = require('../index.js')
 } catch (err) {
+  const causes = []
+  for (let cur = err; cur && causes.length < 5; cur = cur.cause) {
+    causes.push(String(cur.message).split('\n')[0])
+  }
   console.error(
     'FAIL: the native binding did not load, so no round-trip was attempted.\n' +
-      '  ' + String(err.message).split('\n')[0] + '\n' +
-      '  This is a build/artifact problem (wrong target, stale binary, or a libc ' +
-      'mismatch), not a round-trip failure.'
+      causes.map((m) => '  ' + m).join('\n') +
+      '\n  This is a build/artifact problem (wrong target, wrong architecture, ' +
+      'stale binary, or a libc mismatch), not a round-trip failure.'
   )
   process.exit(1)
 }
