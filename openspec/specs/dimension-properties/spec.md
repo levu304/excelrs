@@ -1,7 +1,7 @@
 # dimension-properties Specification
 
 ## Purpose
-TBD - created by archiving change fix-column-width-row-height. Update Purpose after archive.
+Defines row-height and column-width emission: the default dimensions and explicit sizing that produce `<cols>` entries and row `ht`/`customHeight` attributes in the written worksheet XML.
 ## Requirements
 ### Requirement: Column widths are emitted in XLSX output
 

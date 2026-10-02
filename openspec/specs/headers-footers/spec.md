@@ -1,7 +1,7 @@
 # headers-footers Specification
 
 ## Purpose
-TBD - created by archiving change v1-0-0. Update Purpose after archive.
+Defines worksheet headers and footers: the `ws.headerFooter` property, the `<headerFooter>` element, and the `&L`/`&C`/`&R` format codes that position text in each printed region.
 ## Requirements
 ### Requirement: Worksheet exposes header and footer
 

@@ -1,7 +1,7 @@
 # hyperlinks Specification
 
 ## Purpose
-TBD - created by archiving change v0-11-0. Update Purpose after archive.
+Defines cell hyperlinks: reading `<hyperlinks>` from a worksheet — resolving each `r:id` against the sheet relationships to a URL — and writing them back so link targets survive a round-trip.
 ## Requirements
 ### Requirement: Reader parses worksheet hyperlinks
 

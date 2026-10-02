@@ -2,7 +2,7 @@
 
 ## Purpose
 
-TBD - created by archiving change fix-merge-cells-sheet-data. Update Purpose after archive.
+Defines the write side of merged cells: emitting each merged range's bounding box into `sheetData`, and the consolidated helper that identifies a range's anchor cell so only the anchor carries the value and style.
 
 ## Requirements
 

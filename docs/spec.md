@@ -1,11 +1,11 @@
 # excelrs — Specification
 
 **Package:** `@levu304/excelrs` (scoped npm — unscoped name `excelrs` blocked as too similar to `exceljs`)
-**Version:** 1.0.0
+**Version:** 2.9.1
 **License:** MIT OR Apache-2.0
 **Author:** Solo maintainer (open source)
 **Status:** Implemented (published to npm as `@levu304/excelrs`)
-**Next:** v2.0.0 is the planned capstone — see §9.4 (Post-v1 / v2 Roadmap). The v1.1.0 → v2.0.0 scope is **provisional**, gated on an ExcelJS 4.4.0 API audit before each feature's design.
+**Note:** this document's body describes the **v1.0.0** architecture and API surface. It is retained as the design reference for the original drop-in-compatibility milestone and has not been rewritten for v2.x. For current per-capability behavior, read `openspec/specs/*`; for current release status, read `CHANGELOG.md` and `ROADMAP.md`.
 
 ---
 

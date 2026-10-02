@@ -1,7 +1,7 @@
 # data-validation Specification
 
 ## Purpose
-TBD - created by archiving change v0-8-0. Update Purpose after archive.
+Defines data validation rules on a worksheet — the `ws.dataValidations` API and the per-sheet `<dataValidations>` element — so constraints authored in ExcelJS are written to and read back from the sheet XML.
 ## Requirements
 ### Requirement: Worksheet exposes a data-validation API
 

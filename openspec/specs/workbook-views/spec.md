@@ -1,7 +1,7 @@
 # workbook-views Specification
 
 ## Purpose
-TBD - created by archiving change v1-0-0. Update Purpose after archive.
+Defines workbook-level view and calculation settings: the `workbook.views` and `workbook.calcProperties` properties and the `<bookViews>` and `<calcPr>` elements they map to, including `fullCalcOnLoad`.
 ## Requirements
 ### Requirement: Workbook exposes views
 

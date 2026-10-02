@@ -1,7 +1,7 @@
 # conditional-formatting Specification
 
 ## Purpose
-TBD - created by archiving change v1-2-0. Update Purpose after archive.
+Defines conditional formatting: the `ws.addConditionalFormatting` / `getConditionalFormatting` API, the rule types excelrs supports, and the `<conditionalFormatting>` + `dxfs` OOXML pair they serialize to, with priority ordering and round-trip fidelity preserved.
 ## Requirements
 ### Requirement: Worksheet exposes conditional formatting add/get
 

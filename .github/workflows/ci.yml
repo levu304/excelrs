@@ -43,6 +43,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Validate OpenSpec specs and changes
+        run: npx --yes @fission-ai/openspec@1.14.0 validate --strict --specs --changes --json --no-interactive
+
       - name: Typecheck
         run: pnpm typecheck
 
