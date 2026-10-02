@@ -136,10 +136,19 @@ function parseDeclarations(file) {
     return null
   }
 
+  // A file with no top-level export is a script, not a module, and has no module symbol.
+  // getExportsOfModule(undefined) throws a TypeError from inside the compiler, which would
+  // discard every failure collected above and replace the report with a stack trace. An empty
+  // or truncated build artifact is exactly the condition this script exists to diagnose, so it
+  // has to degrade into a reported failure instead.
   const checker = program.getTypeChecker()
-  const names = new Set(
-    checker.getExportsOfModule(checker.getSymbolAtLocation(source)).map((s) => s.name)
-  )
+  const moduleSymbol = checker.getSymbolAtLocation(source)
+  if (moduleSymbol === undefined) {
+    failures.push(`${file} declares no exports, so it cannot be compared. Is the file empty or truncated?`)
+    return null
+  }
+
+  const names = new Set(checker.getExportsOfModule(moduleSymbol).map((s) => s.name))
 
   const enums = new Map()
   const visit = (node) => {

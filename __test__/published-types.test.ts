@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
+import type { Node } from 'typescript'
 
 // Proves the published type declarations stay importable by a TypeScript consumer
 // that transpiles per-file. `declare const enum` is an *ambient* const enum, so a
@@ -25,18 +26,49 @@ const INDEX_DTS = join(ROOT, 'index.d.ts')
 // try to transform and source-map the whole compiler bundle on every run.
 const ts: typeof import('typescript') = createRequire(import.meta.url)('typescript')
 
-// Every enum index.d.ts declares. Derived from the file rather than hard-coded, so a
-// new enum is covered by this probe the day it is added instead of silently escaping.
+// Every enum index.d.ts publishes, with one member to exercise. Derived from the file
+// rather than hard-coded, so a new enum is covered the day it is added instead of
+// silently escaping.
+//
+// Discovered through the compiler API, not a keyword regex: a declaration in a .d.ts is
+// exported WITHOUT the `export` keyword, so a regex silently skips `export` on its own
+// line, `declare enum X {}` plus a trailing `export { X }`, and single-line enums. The
+// export set comes from the module symbol and the enum list from an AST walk, so a form
+// this probe has never seen cannot drop out of coverage unnoticed.
 function publishedEnums(): Array<{ name: string; member: string }> {
-  const src = readFileSync(INDEX_DTS, 'utf8')
-  const out: Array<{ name: string; member: string }> = []
-  const re = /^export declare (?:const )?enum (\w+) \{([\s\S]*?)\n\}/gm
-  let m: RegExpExecArray | null
-  while ((m = re.exec(src)) !== null) {
-    const member = /^\s*(\w+)\s*=/m.exec(m[2])
-    if (member) out.push({ name: m[1], member: member[1] })
+  const program = ts.createProgram([INDEX_DTS], {
+    target: ts.ScriptTarget.ES2022,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    skipLibCheck: true,
+    noEmit: true,
+  })
+  const source = program.getSourceFile(INDEX_DTS)
+  if (source === undefined) {
+    throw new Error(`${INDEX_DTS} could not be parsed by the TypeScript compiler API.`)
   }
-  return out
+  const checker = program.getTypeChecker()
+  const moduleSymbol = checker.getSymbolAtLocation(source)
+  if (moduleSymbol === undefined) {
+    throw new Error(`${INDEX_DTS} declares no exports, so it publishes no enums.`)
+  }
+  const exported = new Set(checker.getExportsOfModule(moduleSymbol).map((s) => s.name))
+
+  const declared = new Map<string, string>()
+  const visit = (node: Node): void => {
+    if (ts.isEnumDeclaration(node) && ts.isIdentifier(node.name)) {
+      const first = node.members[0]
+      if (first !== undefined && ts.isEnumMember(first) && ts.isIdentifier(first.name)) {
+        declared.set(node.name.text, first.name.text)
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(source)
+
+  return [...declared]
+    .filter(([name]) => exported.has(name))
+    .map(([name, member]) => ({ name, member }))
 }
 
 /**
@@ -73,10 +105,13 @@ describe('published type declarations under isolatedModules', () => {
   const enums = publishedEnums()
 
   test('the probe covers every published enum', () => {
-    // Guards the probe itself: if the extraction regex broke, every assertion below
-    // would vacuously pass on an empty list.
+    // Backstop for the discovery walk itself: if it stopped finding enums, every
+    // assertion below would vacuously pass on an empty list. FillKind is the enum the
+    // PR that introduced this file first made importable; SheetState is the one it
+    // added a declaration for.
     expect(enums.length).toBeGreaterThan(0)
     expect(enums.map((e) => e.name)).toContain('FillKind')
+    expect(enums.map((e) => e.name)).toContain('SheetState')
   })
 
   test('a consumer can import every published enum and use a member as a value', () => {
