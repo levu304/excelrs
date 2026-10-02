@@ -56,6 +56,9 @@ jobs:
           --js native.js --dts native.d.ts
           --pipe "node scripts/apply-glue.cjs"
 
+      - name: Verify build feature parity (local vs pipeline)
+        run: node scripts/verify-feature-parity.cjs
+
       - name: Verify build output carries the glue transforms
         run: node scripts/verify-build-output.cjs
 

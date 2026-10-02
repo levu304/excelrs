@@ -112,7 +112,7 @@ to a live consumer and MUST NOT corrupt the zip for a live reader.
 The JS consumer bridge (`writeToWritable`) MUST release or abandon the stream on its own
 early exit, performing `readable.cancel()` and `reader.releaseLock()` in a `finally`. This
 hardens output-phase teardown only; it does NOT implement true incremental `writeSheet()`
-(ADR-005 Path A, out of scope).
+(the streaming write buffering decision, out of scope — see `docs/adr/028-streaming-write-buffering.md`).
 
 #### Scenario: Bridge tears down on early exit
 
@@ -121,5 +121,5 @@ hardens output-phase teardown only; it does NOT implement true incremental `writ
 
 #### Scenario: Bridge teardown does not implement incremental writeSheet
 
-- **WHEN** the bridge change is reviewed against ADR-005
+- **WHEN** the bridge change is reviewed against the streaming write buffering decision
 - **THEN** it SHALL be limited to output-phase teardown and SHALL NOT introduce true incremental `writeSheet()`

@@ -26,6 +26,7 @@
     "build": "napi build --platform --features formula-eval --no-const-enum --runtime-string-enum --js native.js --dts native.d.ts --pipe \"node scripts/apply-glue.cjs\"",
     "build:release": "napi build --platform --release --features formula-eval --no-const-enum --runtime-string-enum --js native.js --dts native.d.ts --pipe \"node scripts/apply-glue.cjs\"",
     "verify:build": "node scripts/verify-build-output.cjs",
+    "verify:features": "node scripts/verify-feature-parity.cjs",
     "verify:roadmap": "node scripts/verify-roadmap-drift.cjs",
     "test": "node -e \"process.env.NODE_OPTIONS=(process.env.NODE_OPTIONS||'')+' --expose-gc';require('child_process').execFileSync(process.execPath,['./node_modules/vitest/vitest.mjs','run'],{stdio:'inherit'})\"",
     "typecheck": "tsc --noEmit",
