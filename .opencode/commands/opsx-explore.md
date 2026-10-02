@@ -22,12 +22,12 @@ Otherwise, with no root, what happens next depends on how this workflow was reac
 In both branches, never create the root as a side effect: do not run `openspec init` until the user asks for it, do not hand-create `openspec/` files, and do not let a command create it.
 
 **Input**: The argument after `/opsx-explore` is whatever the user wants to think about. Could be:
-**Provided arguments**: $@
 - A vague idea: "real-time collaboration"
 - A specific problem: "the auth system is getting unwieldy"
 - A change name: "add-dark-mode" (to explore in context of that change)
 - A comparison: "postgres vs sqlite for this"
 - Nothing (just enter explore mode)
+**Provided arguments**: $ARGUMENTS
 
 ---
 
