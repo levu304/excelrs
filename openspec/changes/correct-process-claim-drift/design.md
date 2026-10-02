@@ -254,6 +254,31 @@ diagnostic mechanism is introduced. The same reasoning was already applied to
 `prepublish-smoke.cjs` (task 2.6) and to `musl-smoke-test.cjs`, which had been left with an
 unguarded `require` on the one musl path that can actually hit an architecture mismatch.
 
+### D8: Correct this change's own record of why the pre-publish gate pins the binary
+
+**Decision:** Task 2.6 originally recorded that `NAPI_RS_NATIVE_LIBRARY_PATH` is "a preference,
+not a pin" and that `index.js` falls back to `./excelrs.<platform>.node` and then to
+`@levu304/*`. That is false, and it was introduced by this change. Correct the task record and
+the three comments in `scripts/prepublish-smoke.cjs` that repeated it. The gate's code is
+unchanged.
+
+**Evidence:** `index.js` opens with `if (process.env.NAPI_RS_NATIVE_LIBRARY_PATH) { … } else if
+(process.platform === 'android') { … }` — the variable's branch is mutually exclusive with the
+entire platform-resolution chain. Confirmed at runtime: with the variable pointing at a missing
+path and a working sibling `.node` present in the same directory, `index.js` threw
+`Cannot find native binding` with exactly one `loadErrors` entry rather than loading the
+sibling.
+
+**Rationale:** This is the same defect class the change exists to remove — a recorded process
+claim that execution contradicts — and it was in the change's own artifact, which makes it more
+worth correcting than an equivalent claim found elsewhere. Correcting the rationale does not
+weaken the gate. What remains true is that a bad artifact otherwise surfaces as `index.js`'s
+generic npm-bug message, so requiring the artifact directly (so the loader's own message and
+the artifact path are reported) is still the right thing to do. The module-identity and
+module-cache assertions are kept and reframed: they read the loader's outcome rather than its
+source, so they hold as a guard against a future napi-rs change to that branch, rather than
+being presented as a fix for behaviour the loader does not currently have.
+
 ## Risks / Trade-offs
 
 **[Pre-publish gate fails on a locally-loadable artifact but the published one still breaks]**
