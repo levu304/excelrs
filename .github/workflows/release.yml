@@ -121,8 +121,9 @@ jobs:
       - name: Verify build output carries the glue transforms
         run: node scripts/verify-build-output.cjs
 
-      # Musl cdylib links musl libc dynamically (NEEDED libc.musl-*.so.1) so it
-      # dlopen's cleanly on musl hosts. A fully-static musl cdylib segfaults on
+      # Musl cdylib links musl libc dynamically (records NEEDED libc.so — the
+      # musl loader's own SONAME is libc.musl-<arch>.so.1) so it dlopen's
+      # cleanly on musl hosts. A fully-static musl cdylib segfaults on
       # dlopen (SIGSEGV 139: static TLS/pthread init collides with host libc),
       # so assert DYNAMIC musl linkage, never glibc (libc.so.6).
       - name: Assert musl binary links musl libc (dynamic, no glibc)
@@ -142,6 +143,13 @@ jobs:
           nm -D "$f" | grep -q napi_register
           echo "✓ napi_register symbol present"
           ldd "$f" 2>&1 || true
+      # ARCH: these two musl steps inherit the container's arch from the runner,
+      # not from matrix.target, and nothing asserts the two agree. They work
+      # because every leg today is native-host (x86_64-musl on ubuntu-22.04,
+      # aarch64-musl on ubuntu-22.04-arm). Do NOT "fix" this by adding
+      # `--platform`: a pinned foreign platform runs under qemu and the smoke
+      # passes on the wrong CPU, which is worse than the loud mismatch failure.
+      # musl-smoke-test.cjs reports process.arch on a load failure for that case.
       - name: Smoke-test musl binding on Alpine (musl-host dlopen + round-trip)
         if: ${{ matrix.musl }}
         run: |
