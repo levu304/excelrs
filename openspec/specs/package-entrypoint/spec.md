@@ -74,11 +74,13 @@ regenerating the entrypoint by hand SHALL re-establish them.
 - **WHEN** the build emits its JavaScript and type-declaration outputs
 - **THEN** it SHALL NOT write to the entrypoint named by `main`
 
-### Requirement: The pipeline runs the step that produces the published type transforms
+### Requirement: The pipeline runs the step that produces the generated type transforms
 
 Every build the pipeline performs — continuous integration and release — SHALL run the same
-post-build transformation of generated type declarations that a local build runs, so a
-published artifact's types match those produced on a development machine.
+post-build transformation of generated type declarations that a local build runs. The
+transformed declarations are a build output consumed by type-checking; they are not part of
+the published package, whose type declarations are hand-maintained and unaffected by this
+transform.
 
 #### Scenario: CI and release apply the same transform as a local build
 
@@ -91,6 +93,12 @@ published artifact's types match those produced on a development machine.
 - **WHEN** a build omits the post-build type-declaration transformation
 - **THEN** its generated type declarations SHALL be treated as not equivalent to a local
   build's, and a check that reads the generated declarations SHALL fail
+
+#### Scenario: The transform does not reach a consumer
+
+- **WHEN** the package is packed for publication
+- **THEN** the transformed generated declarations SHALL NOT be among the published files,
+  and the published type declarations SHALL be unchanged by the transform
 
 ### Requirement: The generated type declarations are verified in CI
 

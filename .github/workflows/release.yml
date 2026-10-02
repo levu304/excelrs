@@ -113,8 +113,11 @@ jobs:
           --pipe "node scripts/apply-glue.cjs"
 
       # The --dts flag above is what makes --pipe meaningful here: without a
-      # generated native.d.ts the pipe exits early and the published types ship
-      # untransformed (flat CellValue, no CellValueInput, unknown-typed setter).
+      # generated native.d.ts the pipe exits early, so the transform never runs.
+      # The transformed file is a build output consumed by `tsc`, not a published
+      # type -- the package's types are the hand-maintained index.d.ts. Left
+      # untransformed, type-checking the __test__ suite loses CellValueInput and
+      # the refined Cell value setter.
       - name: Verify build output carries the glue transforms
         run: node scripts/verify-build-output.cjs
 

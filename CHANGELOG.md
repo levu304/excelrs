@@ -80,7 +80,7 @@ API, and generated types are unchanged.
 
 - **`formula-eval` Cargo feature** — opt-in formula evaluation behind a feature
   flag. Adds `xlstream-parse` + `xlstream-core` dependencies (~850KB source,
-  not included in default build; **now built into release binaries** so npm
+  not in the crate's default Cargo feature set; **now built into release binaries** so npm
   packages include formula evaluation). `FormulaEvaluator` walks the parsed AST,
   resolves cell/range references through the excelrs model, applies operators
   with sticky error propagation, and dispatches 20 built-in functions

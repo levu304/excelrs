@@ -4,7 +4,8 @@
 //
 // Run after `napi build --pipe "node scripts/apply-glue.cjs"`. Exits non-zero with a
 // specific message when an expected transform is missing, so a regression in the pipe
-// fails CI instead of reaching a published artifact.
+// fails CI. The transformed native.d.ts is a build output consumed by `tsc`; the
+// package's published types are the hand-maintained index.d.ts and are unaffected.
 //
 // This asserts the *presence of specific transforms*, not that the generated file matches
 // a committed copy — a napi version bump would otherwise turn every release into a diff
