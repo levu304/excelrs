@@ -14,38 +14,58 @@
 
 ## ADDED Requirements
 
-### Requirement: Parity matrix enumerates the ExcelJS feature areas
+### Requirement: Parity matrix enumerates workbook, worksheet, and cell feature areas
 
-The matrix SHALL enumerate, at minimum, these ExcelJS feature areas:
+The matrix SHALL enumerate, at minimum, these ExcelJS feature areas: **Workbook IO** (xlsx,
+csv, streams), **Worksheet structure** (rows, columns, cells, merge, freeze panes,
+auto-filter), and **Cell values and types**.
 
-- **Workbook IO**: xlsx, csv, streams
-- **Worksheet structure**: rows, columns, cells, merge, freeze panes, auto-filter
-- **Cell values and types**
-- **Styling**: font, fill, border, alignment, number-format, gradient fills, diagonal borders
-- **Defined names**
-- **Data validation**
-- **Hyperlinks**
-- **Rich text**
-- **Comments**
-- **Images**
-- **Charts**
-- **Pivot tables**
-- **Tables**
-- **Conditional formatting**
-- **Sheet and workbook protection**
-- **Page setup and print**
-- **Workbook views and properties**
-- **Themes**
-
-#### Scenario: Matrix lists every required feature area
+#### Scenario: Workbook IO is tracked
 
 - **WHEN** the parity matrix is read
-- **THEN** it SHALL contain a row for each listed feature area, at minimum
+- **THEN** it SHALL contain a row for Workbook IO covering xlsx, csv, and streams
+
+#### Scenario: Worksheet structure is tracked
+
+- **WHEN** the parity matrix is read
+- **THEN** it SHALL contain a row for Worksheet structure covering rows, columns, cells, merge, freeze panes, and auto-filter
+
+#### Scenario: Cell values and types are tracked
+
+- **WHEN** the parity matrix is read
+- **THEN** it SHALL contain a row for Cell values and types
+
+### Requirement: Parity matrix enumerates styling and per-cell data feature areas
+
+The matrix SHALL enumerate, at minimum, these ExcelJS feature areas: **Styling** (font, fill,
+border, alignment, number-format, gradient fills, diagonal borders), **Defined names**,
+**Data validation**, **Hyperlinks**, **Rich text**, and **Comments**.
 
 #### Scenario: Styling sub-areas are individually tracked
 
 - **WHEN** the styling row set is read
 - **THEN** font, fill, border, alignment, number-format, gradient fills, and diagonal borders SHALL each appear
+
+#### Scenario: Per-cell data feature areas are tracked
+
+- **WHEN** the parity matrix is read
+- **THEN** it SHALL contain rows for Defined names, Data validation, Hyperlinks, Rich text, and Comments
+
+### Requirement: Parity matrix enumerates embedded-object and workbook-level feature areas
+
+The matrix SHALL enumerate, at minimum, these ExcelJS feature areas: **Images**, **Charts**,
+**Pivot tables**, **Tables**, **Conditional formatting**, **Sheet and workbook protection**,
+**Page setup and print**, **Workbook views and properties**, and **Themes**.
+
+#### Scenario: Embedded-object feature areas are tracked
+
+- **WHEN** the parity matrix is read
+- **THEN** it SHALL contain rows for Images, Charts, Pivot tables, and Tables
+
+#### Scenario: Workbook-level feature areas are tracked
+
+- **WHEN** the parity matrix is read
+- **THEN** it SHALL contain rows for Conditional formatting, Sheet and workbook protection, Page setup and print, Workbook views and properties, and Themes
 
 ### Requirement: The ExcelJS-4.4.0 v1.x parity program is recorded complete at v2.0.0
 

@@ -151,15 +151,37 @@ The writer SHALL NOT emit rich text as inline strings (`t="inlineStr"`).
 - **WHEN** a rich-text cell is written
 - **THEN** the emitted cell SHALL NOT use `t="inlineStr"`
 
-### Requirement: Rich-text writer output is covered by automated confidence checks
+### Requirement: Rich-text writer output is covered by a golden-file test
 
-The rich-text shared-string writer SHALL be covered by automated confidence checks: a
-golden-file test asserting the exact emitted `xl/sharedStrings.xml` and
-`xl/worksheets/sheetN.xml` for a known rich-text cell (run `<rPr>` contents,
-`xml:space="preserve"`, and `t="s"` with `<v>`); and an OOXML conformance smoke test
+The rich-text shared-string writer SHALL be covered by a golden-file test asserting the
+exact emitted `xl/sharedStrings.xml` and `xl/worksheets/sheetN.xml` for a known rich-text
+cell, including run `<rPr>` contents, `xml:space="preserve"`, and `t="s"` with `<v>`.
+
+#### Scenario: Golden-file test pins the emitted shared strings
+
+- **WHEN** the golden-file test runs for a known rich-text cell
+- **THEN** it SHALL assert the exact `xl/sharedStrings.xml` and `xl/worksheets/sheetN.xml`, including run `<rPr>` contents, `xml:space="preserve"`, and `t="s"` with `<v>`
+
+### Requirement: Rich-text writer output is covered by an OOXML conformance smoke test
+
+The rich-text shared-string writer SHALL be covered by an OOXML conformance smoke test
 validating the generated workbook against the OOXML schema and/or opening it headless in
-LibreOffice. A manual open in Apple Numbers via `scripts/rich-text-repro.cjs` SHALL remain a
-documented verification step.
+LibreOffice.
+
+#### Scenario: OOXML conformance smoke test runs
+
+- **WHEN** the conformance smoke test runs
+- **THEN** it SHALL validate the generated workbook against the OOXML schema and/or open it headless in LibreOffice
+
+### Requirement: Manual Apple Numbers verification stays documented
+
+A manual open in Apple Numbers via `scripts/rich-text-repro.cjs` SHALL remain a documented
+verification step.
+
+#### Scenario: Manual Numbers verification stays documented
+
+- **WHEN** a developer verifies rich-text compatibility manually
+- **THEN** `scripts/rich-text-repro.cjs` SHALL remain the documented path for opening the workbook in Apple Numbers
 
 #### Scenario: Golden-file test pins the emitted shared strings
 

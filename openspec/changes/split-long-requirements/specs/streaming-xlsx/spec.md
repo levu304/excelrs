@@ -24,12 +24,6 @@
 
 **Migration**: Replaced by three requirements: shared-formula collection, member reference translation, and bounded shared-formula tables.
 
-### Requirement: Streaming reader shifts bare column and row references in shared formulas
-
-**Reason**: Combined the bare-reference shifting rule with the non-reference-token preservation rule into one over-long requirement.
-
-**Migration**: Replaced by "Streaming reader shifts bare column and row references in shared formulas" and "Streaming reader preserves non-reference tokens in shared formulas".
-
 ## ADDED Requirements
 
 ### Requirement: Streaming reader parses a workbook from a byte stream incrementally
@@ -171,24 +165,6 @@ whole-workbook reader, not its cached `<v>` value.
 
 - **WHEN** the reader encounters a shared-formula member cell
 - **THEN** it SHALL yield the translated formula text matching the whole-workbook reader, not the cached `<v>` value
-
-### Requirement: Streaming reader shifts bare references in shared formulas
-
-When resolving a shared-formula *member* cell, the streaming reader SHALL shift bare column
-references (e.g. `A`) and bare row references (e.g. `5`) in the master formula text by the
-member's offset, so that the resolved text matches what the whole-workbook (calamine) reader
-produces. This extends shared-formula member resolution beyond `Cell` references (`A1`) and
-`Cell` ranges (`A1:A3`).
-
-#### Scenario: Bare column reference shifts by the member offset
-
-- **WHEN** a shared-formula master text contains a bare column reference such as `A` (e.g. `=A+B`) and the member cell is shifted one column to the right
-- **THEN** the streaming reader resolves the member to `=B+C`, matching the whole-workbook reader, not the unshifted `=A+B`
-
-#### Scenario: Bare row reference shifts by the member offset
-
-- **WHEN** a shared-formula master text contains a bare row reference such as `5` (e.g. `=A1*5`) and the member cell is shifted one row down
-- **THEN** the streaming reader resolves the member to `=A2*6`, matching the whole-workbook reader, not the unshifted `=A1*5`
 
 ### Requirement: Streaming reader preserves non-reference tokens in shared formulas
 
