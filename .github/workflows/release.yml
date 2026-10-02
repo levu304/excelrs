@@ -316,6 +316,19 @@ jobs:
           EOF
           echo "Platform package.json files created"
 
+      # Pre-publish gate. The step below this ("Verify the published package set
+      # resolves from npm") runs AFTER publication by necessity: it resolves its
+      # subject with `npm install`, so it cannot run before the version exists on
+      # the registry. This step covers the other half — does the binary we are
+      # about to publish actually behave — and runs while nothing is on npm yet,
+      # so a style/merge/row-style regression fails the release instead of
+      # shipping. It loads the ubuntu-x64-gnu binary through the published
+      # entrypoint (index.js); the publish job runs on ubuntu-22.04 and cannot
+      # load the other five targets' binaries. Per-target verification for every
+      # matrix target lives in the `build` job, which runs each target natively.
+      - name: Pre-publish round-trip assertion (before any npm publish)
+        run: node scripts/prepublish-smoke.cjs "$PWD/npm/linux-x64-gnu/excelrs.linux-x64-gnu.node"
+
       - name: Publish platform packages
         if: ${{ !inputs.dry_run }}
         run: |
@@ -407,7 +420,15 @@ jobs:
             fi
           done
 
-      - name: Functional smoke test
+      - name: Verify the published package set resolves from npm
+        # Packaging check, deliberately AFTER publication: `npm install` of the
+        # version under test resolves to nothing until it is on the registry, so
+        # this step cannot gate publication. It catches what a pre-publish check
+        # structurally cannot -- a bad optionalDependencies set, a missing or
+        # misnamed binary, a wrong "main" entry, a platform package that failed
+        # to publish. The behavioral gate ("Pre-publish round-trip assertion")
+        # runs before any publish and covers style, merges, and row style; this
+        # step re-asserts them only because it is already resolving the package.
         timeout-minutes: 2
         run: |
           VERSION=$(node -p "require('./package.json').version")
@@ -427,13 +448,13 @@ jobs:
               fill: { kind: 'Solid', foreground: 'FFFF0000' }
             };
             ws.setCellStyle(1, 2, style);
-            // Row-level style (read-path gap closed by this change).
+            // Row-level style: must survive the read path.
             ws.getRow(3).style = {
               font: { bold: true, color: 'FFFF0000' },
               fill: { kind: 'Solid', foreground: 'FFFFFFFF' }
             };
-            // Merge (writer emits <mergeCells> since v0.5.0; reader now
-            // restores it — read-path gap closed by this change).
+            // Merged range: the writer emits <mergeCells> and the reader
+            // restores it, so it must survive the round-trip.
             ws.mergeCells('B2:D2');
             wb.xlsx.write()
               .then(buf => {
