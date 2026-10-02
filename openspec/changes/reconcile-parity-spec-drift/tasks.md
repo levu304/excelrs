@@ -53,4 +53,4 @@ time. Check now that they will not contradict §3's edits.
 - [x] 6.2 Place the step so it runs on both the `push` and `pull_request` triggers already configured on that workflow, and verify it is not gated behind an `if:` condition that would skip it
 - [x] 6.3 Verify locally that the exact command from 6.1 exits zero against the current tree
 - [x] 6.4 Confirm the step introduces no new CI secret or credential, per the `release-verification` OIDC requirement's no-long-lived-credential rule
-- [ ] 6.5 Open a PR and verify the new step runs and passes in CI on all three matrix OSes (`ubuntu-22.04`, `macos-14`, `windows-2022`) — the validation is path-independent but the runner setup is not
+- [x] 6.5 Open a PR and verify the new step runs and passes in CI on all three matrix OSes — PR #66, run 36963371449: the "Validate OpenSpec specs and changes" step reported `success` on `windows-2022`, `macos-14`, and `ubuntu-22.04` (`ubuntu-22.04`, `macos-14`, `windows-2022`) — the validation is path-independent but the runner setup is not
