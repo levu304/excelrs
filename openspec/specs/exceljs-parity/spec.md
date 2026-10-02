@@ -20,14 +20,103 @@ Tracks `excelrs`'s feature parity with [ExcelJS](https://github.com/exceljs/exce
 - **WHEN** the parity matrix is generated
 - **THEN** feature areas with no implementation (e.g., charts) are marked `planned` or `n-a`, never `shipped`
 
-### Requirement: Parity matrix covers the ExcelJS feature areas
+### Requirement: Parity matrix enumerates workbook, worksheet, and cell feature areas
 
-The matrix SHALL enumerate, at minimum, these ExcelJS feature areas: workbook IO (xlsx / csv / streams), worksheet structure (rows / columns / cells / merge / freeze panes / auto-filter), cell values & types, styling (font / fill / border / alignment / number-format / gradient fills / diagonal borders), defined names, data validation, hyperlinks, rich text, comments, images, charts, pivot tables, tables, conditional formatting, sheet & workbook protection, page setup / print, workbook views & properties, themes.
+The matrix SHALL enumerate, at minimum, these ExcelJS feature areas: **Workbook IO** (xlsx,
+csv, streams), **Worksheet structure** (rows, columns, cells, merge, freeze panes,
+auto-filter), and **Cell values and types**.
 
-#### Scenario: Every enumerated area has a status
+#### Scenario: Workbook IO is tracked
 
-- **WHEN** the matrix is generated
-- **THEN** each area in the enumerated list carries one of `shipped` / `partial` / `planned` / `n-a`
+- **WHEN** the parity matrix is read
+- **THEN** it SHALL contain a row for Workbook IO covering xlsx, csv, and streams
+
+#### Scenario: Worksheet structure is tracked
+
+- **WHEN** the parity matrix is read
+- **THEN** it SHALL contain a row for Worksheet structure covering rows, columns, cells, merge, freeze panes, and auto-filter
+
+#### Scenario: Cell values and types are tracked
+
+- **WHEN** the parity matrix is read
+- **THEN** it SHALL contain a row for Cell values and types
+
+### Requirement: Parity matrix enumerates styling and per-cell data feature areas
+
+The matrix SHALL enumerate, at minimum, these ExcelJS feature areas: **Styling** (font, fill,
+border, alignment, number-format, gradient fills, diagonal borders), **Defined names**,
+**Data validation**, **Hyperlinks**, **Rich text**, and **Comments**.
+
+#### Scenario: Styling sub-areas are individually tracked
+
+- **WHEN** the styling row set is read
+- **THEN** font, fill, border, alignment, number-format, gradient fills, and diagonal borders SHALL each appear
+
+#### Scenario: Per-cell data feature areas are tracked
+
+- **WHEN** the parity matrix is read
+- **THEN** it SHALL contain rows for Defined names, Data validation, Hyperlinks, Rich text, and Comments
+
+### Requirement: Parity matrix enumerates embedded-object and workbook-level feature areas
+
+The matrix SHALL enumerate, at minimum, these ExcelJS feature areas: **Images**, **Charts**,
+**Pivot tables**, **Tables**, **Conditional formatting**, **Sheet and workbook protection**,
+**Page setup and print**, **Workbook views and properties**, and **Themes**.
+
+#### Scenario: Embedded-object feature areas are tracked
+
+- **WHEN** the parity matrix is read
+- **THEN** it SHALL contain rows for Images, Charts, Pivot tables, and Tables
+
+#### Scenario: Workbook-level feature areas are tracked
+
+- **WHEN** the parity matrix is read
+- **THEN** it SHALL contain rows for Conditional formatting, Sheet and workbook protection, Page setup and print, Workbook views and properties, and Themes
+
+### Requirement: The ExcelJS-4.4.0 v1.x parity program is recorded complete at v2.0.0
+
+The v1.x drop-in ExcelJS-4.4.0 parity program is **complete** as of release v2.0.0: every
+feature area in the v1.x targeted roadmap (including `streaming XLSX`, and all v0.x-v1.x
+areas) was marked `shipped` (or `partial` where explicitly noted), and the ROADMAP SHALL
+record the program as complete. This requirement is a historical record.
+
+#### Scenario: v2.0.0 records the program complete
+
+- **WHEN** the v2.0.0 parity record is read
+- **THEN** every feature area in the v1.x targeted roadmap SHALL be recorded as `shipped`, or `partial` where explicitly noted
+
+### Requirement: Parity matrix status is authoritative over the historical record
+
+An area's status SHALL be whatever the parity matrix currently says, and a later release that
+ships a previously-excluded area SHALL advance that area's status without needing to amend
+the v2.0.0 completion record.
+
+#### Scenario: Matrix status is authoritative over the historical record
+
+- **WHEN** a feature area's matrix status differs from what the v2.0.0 record described
+- **THEN** the matrix status SHALL be treated as the area's current status
+
+#### Scenario: Newly shipped area advances without amending the record
+
+- **WHEN** a later release ships an area excluded at v2.0.0
+- **THEN** the area's matrix status SHALL advance without amending the v2.0.0 completion requirement
+
+### Requirement: v2.0.0 parity program exclusions
+
+The v2.0.0 parity completion record SHALL list these areas as excluded from the completed
+v1.x program: charts, pivot tables, and formula evaluation (distant / deferred), plus
+themes-write, sheet state (visible/hidden), tab color, and default worksheet properties
+(deferred to post-v2.0.0 triage).
+
+#### Scenario: Excluded areas were distant or deferred at v2.0.0
+
+- **WHEN** the v2.0.0 parity record is read
+- **THEN** charts, pivot tables, and formula evaluation SHALL be recorded as distant or deferred
+
+#### Scenario: Post-v2.0.0 deferrals are named
+
+- **WHEN** the v2.0.0 parity record is read
+- **THEN** themes-write, sheet state, tab color, and default worksheet properties SHALL be recorded as deferred to post-v2.0.0 triage
 
 ### Requirement: Roadmap prioritizes unported features
 
@@ -81,34 +170,6 @@ Each `excelrs` release SHALL implement the next roadmap item(s) and update this 
 
 - **WHEN** release v2.0.0 is cut
 - **THEN** the matrix marks `workbook IO (streams)` as `shipped` and the ROADMAP records the v1.x drop-in ExcelJS-4.4.0 parity program as complete, with charts, pivot tables, formula evaluation, themes-write, sheet state, tab color, and default properties listed as out of scope
-
-### Requirement: excelrs declares the ExcelJS-4.4.0 v1.x parity program complete
-
-The v1.x drop-in ExcelJS-4.4.0 parity program is **complete** as of release v2.0.0:
-every feature area in the v1.x targeted roadmap (including `streaming XLSX`, and all
-v0.x-v1.x areas) was marked `shipped` (or `partial` where explicitly noted), and the
-ROADMAP records the program as complete. This is a historical record, not a standing
-constraint: an area's status SHALL be whatever the parity matrix currently says, and a
-later release that ships a previously-excluded area SHALL advance that area's status
-without needing to amend this requirement. The areas excluded from the completed program
-at v2.0.0 were: charts, pivot tables, and formula evaluation (distant / deferred), plus
-themes-write, sheet state (visible/hidden), tab color, and default worksheet properties
-(deferred to post-v2.0.0 triage).
-
-#### Scenario: Streaming closes the final matrix area
-
-- **WHEN** release v2.0.0 was cut
-- **THEN** the parity matrix marked `workbook IO (streams)` as `shipped`, leaving no targeted v1.x area unshipped
-
-#### Scenario: Program declared complete with documented exclusions
-
-- **WHEN** the v2.0.0 release was recorded
-- **THEN** the ROADMAP recorded the v1.x drop-in ExcelJS-4.4.0 parity program as complete, and charts, pivot tables, formula evaluation, themes-write, sheet state, tab color, and default properties were listed as out of scope (`planned` / `n-a`)
-
-#### Scenario: A later release ships a previously-excluded area
-
-- **WHEN** a release ships an area that was excluded from the v1.x program, such as sheet state or tab color
-- **THEN** the parity matrix status for that area SHALL advance to `shipped`, and this requirement SHALL continue to hold as the v2.0.0 historical record without being modified
 
 ### Requirement: Parity matrix rows reflect shipped behavior
 

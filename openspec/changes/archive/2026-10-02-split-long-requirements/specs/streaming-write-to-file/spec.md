@@ -1,8 +1,13 @@
-# streaming-write-to-file Specification
+## REMOVED Requirements
 
-## Purpose
-Allows the streaming XLSX writer to emit a constant-memory `.xlsx` directly to disk.
-## Requirements
+### Requirement: Streaming writer can finalize directly to a file path
+
+**Reason**: Bundled the `finalizeToFile` API contract, the output-phase backpressure guarantee, and a full restatement of the deferred input-phase disclaimer into one over-long requirement.
+
+**Migration**: Replaced by "Streaming writer can finalize directly to a file path" and "finalizeToFile streams output with bounded backpressure", with the deferred-scope disclaimer replaced by a cross-reference to the `streaming-xlsx` two-phase model.
+
+## ADDED Requirements
+
 ### Requirement: Streaming writer exposes finalizeToFile for a file path
 
 The streaming writer SHALL provide a `finalizeToFile(file_path: string)` method that emits a

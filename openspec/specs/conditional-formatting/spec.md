@@ -22,54 +22,105 @@ space-separated multi-range, e.g. `"A1:A10"` or `"A1:A10 C1:C10"`) and `rules`
 - **WHEN** `ws.addConditionalFormatting({ ref: "A1:A4 C1:C4", rules: [{ type: "duplicate", style: { … } }] })`
 - **THEN** `ws.getConditionalFormatting()[0].sqref === "A1:A4 C1:C4"`
 
-### Requirement: cfRule supports all roadmap rule types
+### Requirement: CfRule supports every roadmap rule type
 
-`CfRule` SHALL support, at minimum, these `type` values with their type-specific
-fields: `cellIs` (`operator`, `formula[]`), `expression` (`formula[]`),
-`colorScale` (`cfvo[]`, `color[]`), `dataBar` (`cfvo[]`, `color`), `iconSet`
-(`iconSet`, `cfvo[]`), `top10` (`rank`, `percent?`, `bottom?`), `unique`,
-`duplicate`, `containsText` (`operator`, `text`, `formula[]`), `timePeriod`
-(`timePeriod`), `containsBlanks` / `notContainsBlanks`, `containsErrors` /
-`notContainsErrors`. Every rule SHALL carry a worksheet-global unique `priority`.
-Rules carrying a `style` (all except `colorScale` / `dataBar` / `iconSet`) SHALL
-reference a differential format via `dxfId`.
+`CfRule` SHALL support, at minimum, the roadmap's `cellIs`, `expression`, `colorScale`,
+`dataBar`, `iconSet`, `top10`, `unique`, `duplicate`, `containsText`, `timePeriod`,
+`containsBlanks`, `notContainsBlanks`, `containsErrors`, and `notContainsErrors` types.
 
-#### Scenario: cellIs rule with style
+#### Scenario: Every roadmap rule type is representable
 
-- **WHEN** `addConditionalFormatting({ ref: "B1:B9", rules: [{ type: "cellIs", operator: "greaterThanOrEqual", formula: [0], style: { fill: { type: "pattern", pattern: "solid", bgColor: { argb: "FF00FF00" } } } }] })`
-- **THEN** the stored rule has `type === "cellIs"`, `operator === "greaterThanOrEqual"`, `formula === ["0"]`, and a non-null `dxfId` pointing at a green fill `dxf`
+- **WHEN** a caller constructs a `CfRule` for any listed type
+- **THEN** the constructed rule SHALL be representable in the public `CfRule` type
 
-#### Scenario: colorScale rule is inline (no dxfId)
+### Requirement: Conditional formatting rule types and their fields
 
-- **WHEN** `addConditionalFormatting({ ref: "C1:C9", rules: [{ type: "colorScale", cfvo: [{ type: "min" }, { type: "max" }], color: [{ argb: "FFFF0000" }, { argb: "FF00FF00" }] }] })`
-- **THEN** the stored rule has `type === "colorScale"`, `dxfId == null`, and two `cfvo` + two `color` entries
+Each `CfRule` type SHALL carry the type-specific fields for that rule: `cellIs`
+(`operator`, `formula[]`), `expression` (`formula[]`), `colorScale` (`cfvo[]`, `color[]`),
+`dataBar` (`cfvo[]`, `color`), `iconSet` (`iconSet`, `cfvo[]`), `top10` (`rank`,
+`percent?`, `bottom?`), `unique`, `duplicate`, `containsText` (`operator`, `text`,
+`formula[]`), `timePeriod` (`timePeriod`), `containsBlanks` / `notContainsBlanks`, and
+`containsErrors` / `notContainsErrors`.
 
-#### Scenario: iconSet and dataBar rules are inline
+#### Scenario: cellIs rule carries its operator and formulas
 
-- **WHEN** rules of `type: "iconSet"` (`iconSet: "3TrafficLights"`, `cfvo: [...]`) and `type: "dataBar"` (`cfvo: [...], color: { argb: "…" }`) are added
-- **THEN** both rules have `dxfId == null` and their `cfvo`/`color`/`iconSet` fields preserved
+- **WHEN** a `cellIs` rule is constructed
+- **THEN** it SHALL carry an `operator` and a `formula[]` field
 
-### Requirement: Writer emits worksheet conditionalFormatting plus dxfs
+#### Scenario: dataBar rule carries cfvo and color
+
+- **WHEN** a `dataBar` rule is constructed
+- **THEN** it SHALL carry a `cfvo[]` and a `color` field
+
+#### Scenario: top10 rule carries rank with optional flags
+
+- **WHEN** a `top10` rule is constructed
+- **THEN** it SHALL carry a `rank` field and optional `percent` and `bottom` flags
+
+### Requirement: Rules carrying a style reference a differential format
+
+Every `CfRule` SHALL carry a worksheet-global unique `priority`. A rule carrying a `style`
+— every type except `colorScale`, `dataBar`, and `iconSet` — SHALL reference a differential
+format via `dxfId`.
+
+#### Scenario: Two rules on one worksheet get distinct priorities
+
+- **WHEN** two `CfRule`s are added to the same worksheet
+- **THEN** their `priority` values SHALL be distinct within that worksheet
+
+#### Scenario: Style-bearing rule references a dxfId
+
+- **WHEN** a `cellIs` rule is constructed with a style
+- **THEN** it SHALL carry a `dxfId` referencing a differential format
+
+#### Scenario: Scaleless rule types omit dxfId
+
+- **WHEN** a `colorScale`, `dataBar`, or `iconSet` rule is constructed
+- **THEN** it SHALL NOT reference a differential format via `dxfId`
+
+### Requirement: Writer emits worksheet conditionalFormatting
 
 When a worksheet has conditional formats, the writer SHALL emit a
-`<conditionalFormatting sqref="…">` element (containing one `<cfRule>` per rule
-with `type`, `operator`, `priority`, `dxfId`, and child `<formula>`/`<cfvo>`/
-`<colorScale>`/`<dataBar>`/`<iconSet>` as appropriate) at the schema-correct
-position after `<sheetData>`. The writer SHALL emit a `<dxfs>` collection in
-`xl/styles.xml` (after `cellXfs`, before `tableStyles`) for every differential
-format referenced by `dxfId`, with `count` equal to the number of `dxfs`. A
-workbook with no conditional formats SHALL NOT emit `<conditionalFormatting>`
-elements or a `<dxfs>` part.
+`<conditionalFormatting sqref="…">` element at the schema-correct position after
+`<sheetData>`, containing one `<cfRule>` per rule with its `type`, `operator`, `priority`,
+`dxfId`, and the child `<formula>` / `<cfvo>` / `<colorScale>` / `<dataBar>` / `<iconSet>
+elements appropriate to that rule.
 
-#### Scenario: Emit conditionalFormatting for a sheet with rules
+#### Scenario: Worksheet with one rule emits one conditionalFormatting element
 
-- **WHEN** a worksheet has one conditional format with two rules
-- **THEN** the sheet XML contains `<conditionalFormatting sqref="…">` with two `<cfRule>` children, each with a distinct `priority`, and `xl/styles.xml` contains a `<dxfs>` with at least the referenced `dxf` entries
+- **WHEN** a worksheet has one conditional-format rule
+- **THEN** the writer SHALL emit exactly one `<conditionalFormatting sqref="…">` element after `<sheetData>` containing that rule's `<cfRule>`
 
-#### Scenario: No rules omits parts
+#### Scenario: colorScale rule emits its scale children
 
-- **WHEN** no worksheet has conditional formats
-- **THEN** no `<conditionalFormatting>` element and no `<dxfs>` element are emitted
+- **WHEN** a worksheet has a `colorScale` rule
+- **THEN** the emitted `<cfRule>` SHALL contain `<colorScale>` with its `<cfvo>` and color children
+
+### Requirement: Writer emits dxfs for every referenced differential format
+
+The writer SHALL emit a `<dxfs>` collection in `xl/styles.xml` positioned after `cellXfs`
+and before `tableStyles`, containing one differential format per `dxfId` referenced by the
+workbook's rules, with `count` equal to the number of `dxfs`.
+
+#### Scenario: Referenced dxfIds produce a dxfs collection
+
+- **WHEN** the workbook's rules reference three differential formats
+- **THEN** the writer SHALL emit a `<dxfs>` collection with `count="3"` after `cellXfs` and before `tableStyles`
+
+### Requirement: Workbook without conditional formats emits no conditional-formatting parts
+
+A workbook whose worksheets carry no conditional formats SHALL NOT emit
+`<conditionalFormatting>` elements or a `<dxfs>` part.
+
+#### Scenario: Plain workbook has no dxfs part
+
+- **WHEN** a workbook with no conditional formats is written
+- **THEN** `xl/styles.xml` SHALL contain no `<dxfs>` element
+
+#### Scenario: Plain worksheet has no conditionalFormatting element
+
+- **WHEN** a worksheet with no conditional formats is written
+- **THEN** the sheet XML SHALL contain no `<conditionalFormatting>` element
 
 ### Requirement: Reader parses conditionalFormatting plus dxfs
 
@@ -129,4 +180,3 @@ was authored by Excel or by ExcelJS.
 
 - **WHEN** a source workbook contains `dxfs` not referenced by any `cfRule` (e.g. pivot-table dxfs)
 - **THEN** those `dxfs` are preserved on write (count and content unchanged) so the file stays valid
-

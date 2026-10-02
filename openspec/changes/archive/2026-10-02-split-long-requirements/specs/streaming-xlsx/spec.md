@@ -1,9 +1,31 @@
-# streaming-xlsx Specification
+## REMOVED Requirements
 
-## Purpose
+### Requirement: Streaming reader parses a workbook from a byte stream
 
-Defines the streaming XLSX reader and writer — SAX-based paths for workbooks too large to hold in memory. Covers incremental row parsing and emission, the per-part size and event caps that bound resource use on untrusted input, sheet resolution through workbook relationships, and shared-formula expansion.
-## Requirements
+**Reason**: Combined the incremental-yield contract, the read-fidelity contract, and the rels-based sheet-resolution contract into one over-long requirement.
+
+**Migration**: Replaced by three requirements: the incremental parse contract, the read-fidelity contract, and rels-based sheet resolution.
+
+### Requirement: Streaming writer emits a workbook to a byte stream
+
+**Reason**: At 1,959 characters this was the corpus's longest requirement. It bundled the two-phase memory model, three separate output-target contracts with distinct memory semantics, and the deferred-scope disclaimer.
+
+**Migration**: Replaced by "Streaming writer emits a workbook to a byte stream" (the two-phase model, now stated once for the whole streaming cluster), "Streaming writer finalize targets", and the per-target requirements in this delta's ADDED block.
+
+### Requirement: Streaming reader bounds resource usage on untrusted input
+
+**Reason**: Combined the per-part cap coverage, the decompressed-vs-declared-size rule, the `MAX_ENTRY_BYTES` value, and the `MAX_EVENTS` value into one over-long requirement.
+
+**Migration**: Replaced by three requirements: per-part size caps, `MAX_ENTRY_BYTES`, and `MAX_EVENTS`.
+
+### Requirement: Streaming reader resolves shared formulas
+
+**Reason**: Combined shared-formula collection, member translation, absolute-reference preservation, and the memory-bound constraint into one over-long requirement.
+
+**Migration**: Replaced by three requirements: shared-formula collection, member reference translation, and bounded shared-formula tables.
+
+## ADDED Requirements
+
 ### Requirement: Streaming reader parses a workbook from a byte stream incrementally
 
 The streaming reader SHALL parse a `.xlsx` from a readable byte stream and yield worksheet
@@ -37,68 +59,35 @@ sheet filename.
 
 ### Requirement: Streaming writer buffers input sheets and streams the output phase
 
-The streaming writer SHALL emit a valid `.xlsx` to a writable byte stream, in two phases: an
-input phase that buffers sheets in the writer handle, and an output phase that streams them
-to the zip writer one sheet at a time.
+The streaming writer SHALL emit a valid `.xlsx` to a writable byte stream.
 
-This pair of requirements states the writer's two-phase memory model for the whole streaming
-cluster. The `streaming-write-to-file` and `streaming-write-to-readable` capabilities
-cross-reference it rather than restating it.
+This requirement states the writer's two-phase memory model for the whole streaming cluster.
+The `streaming-write-to-file` and `streaming-write-to-readable` capabilities cross-reference
+it rather than restating it.
 
-#### Scenario: The writer emits a valid xlsx byte stream
-
-- **WHEN** the streaming writer is finalized to a writable byte stream
-- **THEN** it SHALL emit a valid `.xlsx`
-
-#### Scenario: Both phases are part of one model
-
-- **WHEN** a reader consults the streaming writer's memory contract
-- **THEN** it SHALL find both an input-phase requirement and an output-phase requirement in this capability
-
-### Requirement: Streaming writer buffers input sheets in the handle before any zip entry
-
-Sheets pushed via `writeSheet()` SHALL be accumulated in the `StreamWriter` handle
-(`sheets: Vec<StreamSheet>`) before any zip entry is written. Peak memory for this phase
-SHALL be **O(all sheets)**, NOT constant.
-
-True incremental `writeSheet()` — each sheet's XML written to the zip as it arrives, before
-`finalize` — is **deferred**; see `openspec/specs/streaming-write-incremental/spec.md` and
+**Input phase:** sheets pushed via `writeSheet()` are accumulated in the `StreamWriter`
+handle (`sheets: Vec<StreamSheet>`) before any zip entry is written. Peak memory for this
+phase is **O(all sheets)**, NOT constant. True incremental `writeSheet()` — each sheet's XML
+written to the zip as it arrives, before `finalize` — is **deferred**; see
+`openspec/specs/streaming-write-incremental/spec.md` and
 `docs/adr/005-streaming-write-buffering.md`.
+
+**Output phase:** `finalize`, `finalizeToFile`, and `finalizeToReadable` emit the accumulated
+sheets directly to the zip writer, writing each sheet's XML as it is produced and piping
+compressed bytes through a bounded mpsc channel (cap 16). `sharedStrings.xml`, `styles.xml`,
+and workbook metadata parts are emitted once at finalize time, after all sheet XML has been
+written. Peak memory for this phase is constant — one sheet's XML plus the shared-strings and
+style accumulators.
 
 #### Scenario: Input phase buffers all sheets
 
 - **WHEN** sheets are pushed via `writeSheet()` before finalize
 - **THEN** peak memory for that phase SHALL be O(all sheets)
 
-#### Scenario: No zip entry is written before finalize
-
-- **WHEN** sheets have been pushed via `writeSheet()` but finalize has not been called
-- **THEN** no zip entry SHALL have been written yet
-
-#### Scenario: True incremental writeSheet is deferred
-
-- **WHEN** a reader looks for true incremental `writeSheet()` behavior
-- **THEN** it SHALL be recorded as deferred to `openspec/specs/streaming-write-incremental/spec.md` and `docs/adr/005-streaming-write-buffering.md`
-
-### Requirement: Streaming writer streams the output phase one sheet at a time
-
-`finalize`, `finalizeToFile`, and `finalizeToReadable` SHALL emit the accumulated sheets
-directly to the zip writer, writing each sheet's XML to the zip as it is produced and piping
-compressed bytes through a bounded mpsc channel (cap 16). Peak memory for this phase SHALL be
-constant — one sheet's XML plus the shared-strings and style accumulators.
-
-`sharedStrings.xml`, `styles.xml`, and workbook metadata parts SHALL be emitted once at
-finalize time, after all sheet XML has been written.
-
 #### Scenario: Output phase holds one sheet at a time
 
 - **WHEN** finalize emits the accumulated sheets
 - **THEN** peak memory for the output phase SHALL be one sheet's XML plus the shared-strings and style accumulators
-
-#### Scenario: Compressed bytes pass through a bounded channel
-
-- **WHEN** the output phase pipes compressed bytes to the zip writer
-- **THEN** it SHALL pass through a bounded mpsc channel of cap 16
 
 #### Scenario: Metadata parts are emitted after sheet XML
 
@@ -177,6 +166,16 @@ whole-workbook reader, not its cached `<v>` value.
 - **WHEN** the reader encounters a shared-formula member cell
 - **THEN** it SHALL yield the translated formula text matching the whole-workbook reader, not the cached `<v>` value
 
+### Requirement: Streaming reader preserves non-reference tokens in shared formulas
+
+The streaming reader SHALL NOT shift tokens that are not valid references — function names
+such as `COLUMN` and `SUM`, and quoted strings — preserving them verbatim.
+
+#### Scenario: Function names and quoted strings stay verbatim
+
+- **WHEN** a shared-formula master text contains a function-name token (e.g. `COLUMN`, `SUM`) or a quoted string (e.g. `"A1"`)
+- **THEN** the streaming reader copies those tokens verbatim and does not attempt to shift them, identical to the whole-workbook reader
+
 ### Requirement: Streaming reader collects shared formulas per sheet
 
 The reader SHALL collect a per-sheet table of shared formulas, keyed by `si`, from the master
@@ -203,34 +202,6 @@ references.
 - **WHEN** a shared formula contains `$A$1` or `A$1` references
 - **THEN** those references SHALL be preserved rather than shifted
 
-### Requirement: Streaming reader shifts bare column and row references in shared formulas
-
-When resolving a shared-formula *member* cell, the streaming reader SHALL shift bare column
-references (e.g. `A`) and bare row references (e.g. `5`) in the master formula text by the
-member's offset, so that the resolved text matches what the whole-workbook (calamine) reader
-produces. This extends shared-formula member resolution beyond `Cell` references (`A1`) and
-`Cell` ranges (`A1:A3`).
-
-#### Scenario: Bare column reference shifts by the member offset
-
-- **WHEN** a shared-formula master text contains a bare column reference such as `A` (e.g. `=A+B`) and the member cell is shifted one column to the right
-- **THEN** the streaming reader resolves the member to `=B+C`, matching the whole-workbook reader, not the unshifted `=A+B`
-
-#### Scenario: Bare row reference shifts by the member offset
-
-- **WHEN** a shared-formula master text contains a bare row reference such as `5` (e.g. `=A1*5`) and the member cell is shifted one row down
-- **THEN** the streaming reader resolves the member to `=A2*6`, matching the whole-workbook reader, not the unshifted `=A1*5`
-
-### Requirement: Streaming reader preserves non-reference tokens in shared formulas
-
-The streaming reader SHALL NOT shift tokens that are not valid references — function names
-such as `COLUMN` and `SUM`, and quoted strings — preserving them verbatim.
-
-#### Scenario: Function names and quoted strings stay verbatim
-
-- **WHEN** a shared-formula master text contains a function-name token (e.g. `COLUMN`, `SUM`) or a quoted string (e.g. `"A1"`)
-- **THEN** the streaming reader copies those tokens verbatim and does not attempt to shift them, identical to the whole-workbook reader
-
 ### Requirement: Streaming reader keeps shared-formula tables bounded
 
 The shared-formula table SHALL be bounded by the number of distinct shared formulas in the
@@ -246,48 +217,3 @@ sheet, and the reader SHALL NOT materialize the whole sheet, preserving the
 
 - **WHEN** shared formulas are resolved on a large sheet
 - **THEN** the reader SHALL NOT materialize the whole sheet
-
-### Requirement: Formula-capture state resets at cell boundary
-
-The streaming XLSX reader SHALL reset its formula-capture state at the end of
-every cell, so that a malformed or truncated cell missing its `</f>` end tag
-cannot cause the next cell's value to be captured into the prior cell's formula.
-
-#### Scenario: Missing `</f>` does not leak into the next cell
-
-- **WHEN** a cell opens an `<f>` formula element but the corresponding `</f>` never arrives before the cell closes
-- **THEN** the reader resets its formula-capture flag at the cell boundary, so the following cell's text/value is captured as that cell's own value (not appended to the prior cell's formula)
-
-### Requirement: Streaming preserves empty cells distinctly from empty strings
-
-The streaming reader/writer SHALL distinguish an empty cell (no value) from a cell
-holding an empty string `""` across a round-trip. An empty cell SHALL be represented as
-a distinct empty value (not as `Text("")`), and SHALL serialize with no value element
-so it round-trips as empty rather than as a text cell.
-
-#### Scenario: Empty cell round-trips as empty
-
-- **WHEN** an empty JS cell (`{}` or `{ value: null }`) is written by the streaming writer and read back by the streaming reader
-- **THEN** the read-back cell is an empty cell, not a text cell holding `""`
-
-#### Scenario: Empty string cell round-trips as text
-
-- **WHEN** a cell holding the empty string `""` is written and read back
-- **THEN** the read-back cell is a text cell with value `""`, distinct from an empty cell
-
-### Requirement: Streaming reader resolves sheet files from rels targets tolerating absolute paths
-
-The streaming reader SHALL resolve each worksheet's XML part from the targets in
-`xl/_rels/workbook.xml.rels`. It SHALL tolerate both relative targets (relative to
-`xl/`) and absolute, package-rooted targets (leading `/`), resolving each to the
-correct package path without a doubled `xl/` prefix.
-
-#### Scenario: Absolute rels Target resolves to its package path
-
-- **WHEN** a workbook's `xl/_rels/workbook.xml.rels` declares `Target="/xl/worksheets/sheet1.xml"`
-- **THEN** the reader resolves the sheet at package path `xl/worksheets/sheet1.xml` (not `xl//xl/worksheets/sheet1.xml`) and reads its rows
-
-#### Scenario: Relative rels Target resolves as before
-
-- **WHEN** a rels `Target` is `worksheets/sheet1.xml`
-- **THEN** the reader resolves `xl/worksheets/sheet1.xml` and reads its rows

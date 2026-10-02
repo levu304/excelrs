@@ -66,25 +66,44 @@ excelrs SHALL read date cells as a `JS Date`, superseding the prior ISO-8601 str
 - **WHEN** a workbook with a date-formatted numeric cell is read
 - **THEN** the value is a `JS Date` (not the prior ISO-8601 string form)
 
-### Requirement: Date values are UTC-anchored (ExcelJS parity)
+### Requirement: Date cell values use the UTC-anchored Excel serial mapping
 
-`cell.value` for a Date cell and `cell.date` SHALL convert the Excel serial using a
-**UTC-anchored** mapping: `ms = (serial - 25569) * 86400000`, and `serial = ms / 86400000 + 25569`. This matches ExcelJS 4.4 behavior. The internal `Date` therefore represents the **UTC instant** of the serial; `toISOString()` returns the correct value, while local-formatting methods (`.toString()`, `.toLocaleDateString()`) shift the displayed day in timezones west of UTC. This is accepted, documented behavior — not a bug.
+`cell.value` for a Date cell and `cell.date` SHALL convert the Excel serial using the
+UTC-anchored mapping `ms = (serial - 25569) * 86400000`, and
+`serial = ms / 86400000 + 25569`. This matches ExcelJS 4.4 behavior.
 
-A JS `Date` assigned to `cell.value` SHALL be interpreted by its **UTC** milliseconds
-(`Date.prototype.getTime()`), not its local calendar fields.
+#### Scenario: Serial converts to a UTC instant
 
-#### Scenario: date-only serial maps to correct UTC instant
+- **WHEN** a Date cell's Excel serial is read as a `Date`
+- **THEN** the result SHALL be the UTC instant given by `ms = (serial - 25569) * 86400000`
 
-- **WHEN** a cell holds serial `45458.0` (2024-06-15, date-only)
-- **THEN** `cell.value.toISOString()` SHALL equal `2024-06-15T00:00:00.000Z`
+#### Scenario: Date converts back to the original serial
 
-#### Scenario: assigning a UTC-constructed Date round-trips exactly
+- **WHEN** a `Date` is written back to a Date cell
+- **THEN** the emitted serial SHALL be `ms / 86400000 + 25569`, round-tripping the input serial
 
-- **WHEN** `cell.value = new Date(Date.UTC(2026, 0, 15))`
-- **THEN** the stored serial SHALL be `46040.0` and reading back yields `toISOString() === '2026-01-15T00:00:00.000Z'`
+#### Scenario: toISOString returns the correct value
 
-#### Scenario: local-constructed Date is interpreted as UTC
+- **WHEN** a Date cell is read and its `Date` is formatted with `toISOString()`
+- **THEN** the output SHALL be the UTC-anchored instant
 
-- **WHEN** `cell.value = new Date(2026, 0, 15)` (local midnight) in a timezone behind UTC
-- **THEN** the value SHALL be stored/returned by its UTC milliseconds (matching ExcelJS), so local display may show the prior day; consumers wanting the local calendar date SHALL construct with `Date.UTC(...)`
+### Requirement: UTC-anchored dates shift the displayed day west of UTC
+
+Because the internal `Date` represents the UTC instant of the serial, local-formatting
+methods (`.toString()`, `.toLocaleDateString()`) SHALL shift the displayed day in timezones
+west of UTC. This is accepted, documented behavior, not a bug.
+
+#### Scenario: Local formatting shows the shifted day
+
+- **WHEN** a Date cell is read and formatted with `.toLocaleDateString()` in a timezone west of UTC
+- **THEN** the displayed day MAY differ from the day implied by the serial in that timezone
+
+### Requirement: A JS Date assigned to cell.value is read as UTC milliseconds
+
+A JS `Date` assigned to `cell.value` SHALL be interpreted by its UTC milliseconds
+(`Date.prototype.getTime()`), not by its local calendar fields.
+
+#### Scenario: Local-midnight Date uses its UTC instant
+
+- **WHEN** a JS `Date` whose local calendar day differs from its UTC day is assigned to `cell.value`
+- **THEN** the stored value SHALL be derived from the `Date`'s UTC milliseconds

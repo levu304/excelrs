@@ -1,8 +1,13 @@
-# streaming-write-to-readable Specification
+## REMOVED Requirements
 
-## Purpose
-Lets the streaming XLSX writer emit a constant-memory `.xlsx` as a JS ReadableStream.
-## Requirements
+### Requirement: Streaming writer can produce a JS ReadableStream of chunks
+
+**Reason**: Bundled the `finalizeToReadable` API contract, the output-phase backpressure guarantee, and a full restatement of the deferred input-phase disclaimer into one over-long requirement.
+
+**Migration**: Replaced by "Streaming writer can produce a JS ReadableStream of chunks" and "finalizeToReadable streams output with bounded backpressure", with the deferred-scope disclaimer replaced by a cross-reference to the `streaming-xlsx` two-phase model.
+
+## ADDED Requirements
+
 ### Requirement: Streaming writer exposes finalizeToReadable returning a ReadableStream
 
 The streaming writer SHALL provide a `finalizeToReadable()` method that returns a JS

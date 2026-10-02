@@ -69,44 +69,57 @@ the next sheet.
 - **WHEN** sheet 1 has 3 rows and sheet 2 has 5 rows
 - **THEN** sheet 2's XML starts row indexing from 1 and its string/style references resolve against the global (cross-sheet) tables
 
-### Requirement: finalizeToReadable is cancelable + self-cleaning
+### Requirement: finalizeToReadable releases its worker and resources on consumer abandon
 
-`finalizeToReadable`'s detached zip-writer worker MUST terminate promptly (≤2 s,
-not the ~55–60s GC window) and release the `ZipWriter`, `StreamSession`, and
-bounded mpsc channel whenever the consumer abandons the `ReadableStream`,
-whether by **explicit cancel** or by **drop-without-release**.
+`finalizeToReadable`'s detached zip-writer worker MUST terminate promptly (≤2 s, not the
+~55–60s GC window) and release the `ZipWriter`, `StreamSession`, and bounded mpsc channel
+whenever the consumer abandons the `ReadableStream`, whether by **explicit cancel** or by
+**drop-without-release**.
 
-A *live* consumer that keeps draining MUST receive all chunks exactly once in
-order, with cap-16 backpressure preserved (byte-identical emission to prior
-behavior); cancellation/abandon MUST NOT surface as a write error to a live
-consumer and MUST NOT corrupt the zip for a live reader.
+#### Scenario: Explicit cancel releases the worker
 
-The JS consumer bridge (`writeToWritable`) MUST release/abandon the stream on its
-own early exit (`readable.cancel()` + `reader.releaseLock()` in a `finally`) —
-this change does NOT implement true incremental `writeSheet` (ADR-005 Path A,
-out of scope); it hardens output-phase teardown only.
+- **WHEN** a consumer calls `readable.cancel()` mid-stream
+- **THEN** the detached worker SHALL terminate promptly and release its zip writer, session, and channel
 
-#### Scenario: Explicit cancel terminates the worker promptly
+#### Scenario: Drop-without-release releases the worker
 
-- **WHEN** `finalizeToReadable` is mid-emit and the consumer calls
-  `readable.cancel()` before the zip writer finishes
-- **THEN** the detached worker thread exits within a bounded window (≤2 s),
-  the held `ZipWriter` + `StreamSession` are dropped, and the channel reports
-  EOF/`Closed` (no ~55–60s GC wait)
+- **WHEN** a consumer drops the `ReadableStream` without releasing it
+- **THEN** the detached worker SHALL still terminate promptly and release its resources
 
-#### Scenario: Live consumer still gets full output plus backpressure
+#### Scenario: Worker exits within a bounded window
 
-- **WHEN** a consumer reads the full `ReadableStream` normally (does not cancel)
-- **THEN** all zip chunks are delivered exactly once in order and consumer-driven
-  backpressure is preserved (cap-16 respected, no spin, live path byte-identical
-  to prior behavior)
+- **WHEN** the consumer abandons the stream and the detached worker is joined
+- **THEN** the worker SHALL exit within ≤2 s, not after a ~55–60s GC wait
 
-#### Scenario: Abandon-without-cancel still terminates (Rust backstop)
+### Requirement: A live finalizeToReadable consumer receives all chunks exactly once
 
-- **WHEN** a caller drops/cancels at the JS level but napi defers dropping the
-  underlying Rust `Stream` (B2 uncertainty)
-- **THEN** the Rust worker MUST still self-terminate (does not park forever),
-  because `ChannelWriter::write` uses non-parking `tokio` `try_send` with
-  cap-16 backoff and returns `Err` on `Closed` (consumer gone) — the `Closed`
-  variant / `is_closed()` is the authoritative guard (no `Arc<AtomicBool>` per
-  design).
+A *live* consumer that keeps draining MUST receive all chunks exactly once in order, with
+cap-16 backpressure preserved. Cancellation or abandonment MUST NOT surface as a write error
+to a live consumer and MUST NOT corrupt the zip for a live reader.
+
+#### Scenario: Live consumer gets every chunk in order
+
+- **WHEN** a consumer drains the `ReadableStream` to completion
+- **THEN** it SHALL receive all chunks exactly once in order, byte-identical to prior behavior, with cap-16 backpressure preserved
+
+#### Scenario: Abandonment does not corrupt a live reader
+
+- **WHEN** one stream is abandoned while a separate live reader consumes the same zip
+- **THEN** the live reader SHALL observe no write error and no zip corruption
+
+### Requirement: The writeToWritable bridge releases the stream on early exit
+
+The JS consumer bridge (`writeToWritable`) MUST release or abandon the stream on its own
+early exit, performing `readable.cancel()` and `reader.releaseLock()` in a `finally`. This
+hardens output-phase teardown only; it does NOT implement true incremental `writeSheet()`
+(ADR-005 Path A, out of scope).
+
+#### Scenario: Bridge tears down on early exit
+
+- **WHEN** `writeToWritable` exits before the stream is fully drained
+- **THEN** it SHALL run `readable.cancel()` and `reader.releaseLock()` in a `finally` block
+
+#### Scenario: Bridge teardown does not implement incremental writeSheet
+
+- **WHEN** the bridge change is reviewed against ADR-005
+- **THEN** it SHALL be limited to output-phase teardown and SHALL NOT introduce true incremental `writeSheet()`
