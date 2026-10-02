@@ -1,8 +1,11 @@
 // musl native binding smoke test.
 // Usage: node scripts/musl-smoke-test.cjs <path-to-.node>
-// Loads a musl-built .node binary, round-trips a styled workbook
-// (write + read back), and asserts style preservation.
+// Loads a musl-built .node binary and asserts the release-verification
+// round-trip guarantees (style, merges, row style). The assertions are shared
+// with scripts/prepublish-smoke.cjs so the two release paths cannot drift.
 'use strict';
+
+const { assertRoundTrip } = require('./assert-roundtrip.cjs');
 
 const nodePath = process.argv[2];
 if (!nodePath) {
@@ -10,72 +13,36 @@ if (!nodePath) {
   process.exit(2);
 }
 
-const { Workbook } = require(nodePath);
+// A musl binary loads only in a process whose arch matches the binary. The
+// container's arch is whatever `docker run` resolved, so a runner/image/target
+// disagreement lands here — and musl's loader reports it as `unsupported
+// relocation type N`, which names a relocation, not an architecture. Name the
+// artifact and both arches instead of leaking a raw loader stack. This is the
+// Alpine path; prepublish-smoke.cjs gets the same treatment for the same reason.
+let Workbook;
+try {
+  Workbook = require(nodePath).Workbook;
+} catch (err) {
+  // The arch hint only applies when the file was found and then failed to
+  // relocate; a missing file is a different mistake and would be misdirected
+  // by it.
+  const hint =
+    err.code === 'MODULE_NOT_FOUND'
+      ? '  The artifact was not present at that path.'
+      : '  A musl binary loads only in a container whose arch matches the ' +
+        'binary. Check that the runner, the docker image, and the built ' +
+        'target agree.';
+  console.error(
+    `FAIL: ${nodePath} did not load in this container.\n` +
+      `  container process.arch: ${process.arch}\n` +
+      `  loader said: ${err.message.split('\n')[0]}\n` +
+      hint
+  );
+  process.exit(1);
+}
 
 async function main() {
-  const wb = new Workbook();
-  const ws = wb.addWorksheet('test');
-  ws.addRow([1, 2, 3]);
-  ws.addRow(['x', 'y', 'z']);
-  ws.addRow(['p', 'q', 'r']);
-
-  // Cell-level style: font.bold + fill
-  ws.setCellStyle(1, 2, {
-    font: { bold: true },
-    fill: { kind: 'Solid', foreground: 'FFFF0000' },
-  });
-
-  // Row-level style
-  ws.getRow(3).style = {
-    font: { bold: true, color: 'FFFF0000' },
-    fill: { kind: 'Solid', foreground: 'FFFFFFFF' },
-  };
-
-  // Merge range
-  ws.mergeCells('B2:D2');
-
-  const buf = await wb.xlsx.write();
-  if (buf.length < 100) {
-    throw new Error('xlsx too small: ' + buf.length);
-  }
-  console.log('OK native binding works, xlsx size: ' + buf.length);
-
-  const wb2 = new Workbook();
-  await wb2.xlsx.read(buf);
-  const ws2 = wb2.getWorksheet('test');
-
-  // Assert cell style preserved (font.bold and fill.foreground)
-  const s = ws2.getCellByRc(1, 2).style;
-  if (!s || !s.font || s.font.bold !== true) {
-    throw new Error('FAIL: font.bold not preserved on read-back');
-  }
-  if (!s.fill || s.fill.kind !== 'Solid' || s.fill.foreground !== 'FFFF0000') {
-    throw new Error(
-      'FAIL: fill not preserved on read-back (got ' +
-        (s.fill && s.fill.kind) +
-        '/' +
-        (s.fill && s.fill.foreground) +
-        ')',
-    );
-  }
-  console.log('OK cell style (font.bold + fill) round-trips');
-
-  // Assert merged range preserved
-  const merges = ws2.mergedRanges || [];
-  if (!merges.includes('B2:D2')) {
-    throw new Error('FAIL: merged range lost on read-back');
-  }
-  console.log('OK merged range round-trips');
-
-  // Assert row style preserved
-  const rs = ws2.getRow(3).style;
-  if (!rs || !rs.font || rs.font.bold !== true || rs.font.color !== 'FFFF0000') {
-    throw new Error('FAIL: row font.bold/color not preserved on read-back');
-  }
-  if (!rs.fill || rs.fill.foreground !== 'FFFFFFFF') {
-    throw new Error('FAIL: row fill not preserved on read-back');
-  }
-  console.log('OK row style round-trips');
+  await assertRoundTrip(Workbook, (m) => console.log(m));
 }
 
 main().catch((err) => {

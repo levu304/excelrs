@@ -121,8 +121,9 @@ jobs:
       - name: Verify build output carries the glue transforms
         run: node scripts/verify-build-output.cjs
 
-      # Musl cdylib links musl libc dynamically (NEEDED libc.musl-*.so.1) so it
-      # dlopen's cleanly on musl hosts. A fully-static musl cdylib segfaults on
+      # Musl cdylib links musl libc dynamically (records NEEDED libc.so — the
+      # musl loader's own SONAME is libc.musl-<arch>.so.1) so it dlopen's
+      # cleanly on musl hosts. A fully-static musl cdylib segfaults on
       # dlopen (SIGSEGV 139: static TLS/pthread init collides with host libc),
       # so assert DYNAMIC musl linkage, never glibc (libc.so.6).
       - name: Assert musl binary links musl libc (dynamic, no glibc)
@@ -142,6 +143,13 @@ jobs:
           nm -D "$f" | grep -q napi_register
           echo "✓ napi_register symbol present"
           ldd "$f" 2>&1 || true
+      # ARCH: these two musl steps inherit the container's arch from the runner,
+      # not from matrix.target, and nothing asserts the two agree. They work
+      # because every leg today is native-host (x86_64-musl on ubuntu-22.04,
+      # aarch64-musl on ubuntu-22.04-arm). Do NOT "fix" this by adding
+      # `--platform`: a pinned foreign platform runs under qemu and the smoke
+      # passes on the wrong CPU, which is worse than the loud mismatch failure.
+      # musl-smoke-test.cjs reports process.arch on a load failure for that case.
       - name: Smoke-test musl binding on Alpine (musl-host dlopen + round-trip)
         if: ${{ matrix.musl }}
         run: |
@@ -149,7 +157,26 @@ jobs:
           docker run --rm \
             -v "$PWD/$f:/w/$f" \
             -v "$PWD/scripts/musl-smoke-test.cjs:/w/smoke.cjs" \
+            -v "$PWD/scripts/assert-roundtrip.cjs:/w/assert-roundtrip.cjs" \
             node:20-alpine node --no-warnings /w/smoke.cjs "/w/$f"
+      - name: Streaming round-trip smoke test (musl, via Alpine)
+        if: ${{ matrix.musl }}
+        # This step used to be skipped on musl, leaving the two musl binaries
+        # with no streaming coverage at all. It runs the same script the non-musl
+        # targets run. streaming-smoke.cjs requires '../index.js', so the script
+        # is mounted under /w/scripts/ to make that resolve to the mounted /w/index.js,
+        # and the binary is selected via NAPI_RS_NATIVE_LIBRARY_PATH (which
+        # index.js honours before any platform-specific package lookup).
+        timeout-minutes: 5
+        run: |
+          f=excelrs.${{ matrix.npm_dir }}.node
+          docker run --rm \
+            -v "$PWD/$f:/w/$f" \
+            -v "$PWD/index.js:/w/index.js" \
+            -v "$PWD/scripts/streaming-smoke.cjs:/w/scripts/streaming-smoke.cjs" \
+            -e NAPI_RS_NATIVE_LIBRARY_PATH="/w/$f" \
+            node:20-alpine node --no-warnings /w/scripts/streaming-smoke.cjs
+
       - name: Run Rust clippy (formula-eval)
         run: cargo clippy --features formula-eval -- -D warnings
 
@@ -164,6 +191,10 @@ jobs:
         run: pnpm test
       - name: Streaming smoke test
         if: ${{ !matrix.musl }}
+        # This step grew from a 4-cell spot check to ~240k cells across four value
+        # shapes, so it gets the same 5-minute cap the musl step has rather than
+        # relying on the job-level timeout.
+        timeout-minutes: 5
         run: node scripts/streaming-smoke.cjs
 
       - name: Validate napi enum bindings
@@ -297,6 +328,19 @@ jobs:
           EOF
           echo "Platform package.json files created"
 
+      # Pre-publish gate. The step below this ("Verify the published package set
+      # resolves from npm") runs AFTER publication by necessity: it resolves its
+      # subject with `npm install`, so it cannot run before the version exists on
+      # the registry. This step covers the other half — does the binary we are
+      # about to publish actually behave — and runs while nothing is on npm yet,
+      # so a style/merge/row-style regression fails the release instead of
+      # shipping. It loads the ubuntu-x64-gnu binary through the published
+      # entrypoint (index.js); the publish job runs on ubuntu-22.04 and cannot
+      # load the other five targets' binaries. Per-target verification for every
+      # matrix target lives in the `build` job, which runs each target natively.
+      - name: Pre-publish round-trip assertion (before any npm publish)
+        run: node scripts/prepublish-smoke.cjs "$PWD/npm/linux-x64-gnu/excelrs.linux-x64-gnu.node"
+
       - name: Publish platform packages
         if: ${{ !inputs.dry_run }}
         run: |
@@ -388,7 +432,24 @@ jobs:
             fi
           done
 
-      - name: Functional smoke test
+      - name: Verify the published package set resolves from npm
+        # Packaging check, deliberately AFTER publication: `npm install` of the
+        # version under test resolves to nothing until it is on the registry, so
+        # this step cannot gate publication.
+        #
+        # This step is PACKAGING-ONLY on purpose. It asserts that the published
+        # artifact resolves and loads -- nothing about how it behaves. Every
+        # behavioral assertion about a built binary (cell style, merged ranges,
+        # row style) lives in the pre-publish gate, which runs before any
+        # `npm publish`. Duplicating those assertions here would make
+        # openspec/specs/release-verification's "assertions complete before
+        # publication" requirement untrue on arrival: a behavioral failure after
+        # publish cannot un-publish, so it would report a release failure while
+        # the packages are already on npm.
+        #
+        # What only a post-publish check can catch: a bad optionalDependencies
+        # set, a missing or misnamed binary, a wrong "main" entry, or a platform
+        # package that failed to publish.
         timeout-minutes: 2
         run: |
           VERSION=$(node -p "require('./package.json').version")
@@ -397,81 +458,16 @@ jobs:
           npm init -y > /dev/null 2>&1
           npm install --no-save "@levu304/excelrs@$VERSION" 2>&1 | tail -3
           node -e "
-            const { Workbook } = require('@levu304/excelrs');
-            const wb = new Workbook();
-            const ws = wb.addWorksheet('test');
-            ws.addRow([1, 2, 3]);
-            ws.addRow(['x', 'y', 'z']);
-            ws.addRow(['p', 'q', 'r']);
-            const style = {
-              font: { bold: true },
-              fill: { kind: 'Solid', foreground: 'FFFF0000' }
-            };
-            ws.setCellStyle(1, 2, style);
-            // Row-level style (read-path gap closed by this change).
-            ws.getRow(3).style = {
-              font: { bold: true, color: 'FFFF0000' },
-              fill: { kind: 'Solid', foreground: 'FFFFFFFF' }
-            };
-            // Merge (writer emits <mergeCells> since v0.5.0; reader now
-            // restores it — read-path gap closed by this change).
-            ws.mergeCells('B2:D2');
-            wb.xlsx.write()
-              .then(buf => {
-                if (buf.length < 100) {
-                  throw new Error(
-                    'xlsx too small: ' + buf.length
-                  );
-                }
-                console.log('✓ native binding works, xlsx size:', buf.length);
-                const wb2 = new Workbook();
-                return wb2.xlsx.read(buf).then(() => {
-                  const ws2 = wb2.getWorksheet('test');
-                  const s = ws2.getCellByRc(1, 2).style;
-                  if (!s || !s.font || s.font.bold !== true) {
-                    throw new Error(
-                      'style lost on read: font.bold not preserved'
-                    );
-                  }
-                  if (!s.fill || s.fill.kind !== 'Solid' ||
-                      s.fill.foreground !== 'FFFF0000') {
-                    const got = s.fill &&
-                      s.fill.kind + '/' + s.fill.foreground;
-                    throw new Error(
-                      'style lost on read: fill not preserved' +
-                      ' (got ' + got + ')'
-                    );
-                  }
-                  console.log('✓ styled xlsx round-trips through read path');
-                  // Merged range must survive the read path.
-                  const merges = ws2.mergedRanges || [];
-                  if (!merges.includes('B2:D2')) {
-                    throw new Error(
-                      'merge lost on read: mergedRanges=' +
-                      JSON.stringify(merges)
-                    );
-                  }
-                  console.log('✓ merged range round-trips through read path');
-                  // Row-level style must survive the read path.
-                  const rs = ws2.getRow(3).style;
-                  if (!rs || !rs.font || rs.font.bold !== true ||
-                      rs.font.color !== 'FFFF0000') {
-                    throw new Error(
-                      'row style lost on read: ' + JSON.stringify(rs)
-                    );
-                  }
-                  if (!rs.fill || rs.fill.foreground !== 'FFFFFFFF') {
-                    throw new Error(
-                      'row style lost on read: fill=' + JSON.stringify(rs.fill)
-                    );
-                  }
-                  console.log('✓ row style round-trips through read path');
-                });
-              })
-              .catch(err => {
-                console.error('FAIL:', err.message);
-                process.exit(1);
-              });
+            // Resolution + load only. No write/read round-trip: see the comment
+            // above on why behavioral assertions must not live after publish.
+            const assert = require('assert');
+            const entry = require.resolve('@levu304/excelrs');
+            console.log('✓ main entry resolves:', entry);
+            const binding = require('@levu304/excelrs');
+            for (const name of ['Workbook', 'WorkbookXlsx', 'Cell', 'Row']) {
+              assert.ok(binding[name], name + ' missing from published exports');
+            }
+            console.log('✓ native binding loads and exports the documented surface');
           "
           rm -rf "$SMOKE_DIR"
 
