@@ -82,7 +82,7 @@
 
 - **`StreamWriter.finalizeToFile(path)`** — writes `.xlsx` directly to a file on
   disk via incremental zip file-entry flushing. Output is streamed with backpressure
-  (per ADR-005: input sheets are buffered in the handle, so peak write memory is
+  (per ADR-028: input sheets are buffered in the handle, so peak write memory is
   O(all sheets); true incremental `writeSheet()` remains deferred — see
   `openspec/specs/streaming-write-incremental/spec.md`).
 - **`StreamWriter.finalizeToReadable()`** — emits `.xlsx` as a JS `ReadableStream`

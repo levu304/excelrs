@@ -10,7 +10,7 @@ The streaming writer SHALL provide a `finalizeToReadable()` method that returns 
 behavior SHALL be as stated by the two-phase model in
 `openspec/specs/streaming-xlsx/spec.md`. True incremental `writeSheet()` remains deferred per
 `openspec/specs/streaming-write-incremental/spec.md` and
-`docs/adr/005-streaming-write-buffering.md`.
+`docs/adr/028-streaming-write-buffering.md`.
 
 #### Scenario: finalizeToReadable returns a chunk stream
 

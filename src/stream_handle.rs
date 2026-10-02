@@ -448,7 +448,7 @@ impl StreamWriter {
     ///
     /// Terminal write errors are sent as `Err` channel items, which the stream
     /// adapter rejects on (rather than closing silently) — see
-    /// `docs/adr/005-streaming-write-buffering.md`.
+    /// `docs/adr/028-streaming-write-buffering.md`.
     #[napi]
     pub fn finalize_to_readable(&self, env: Env) -> Result<ReadableStream<'_, BufferSlice<'_>>> {
         let sheets = self.sheets.clone();

@@ -55,42 +55,20 @@ or written to a `.npmrc` during release.
 - **WHEN** the publish job runs a release
 - **THEN** it SHALL authenticate via trusted publishing and no write credential SHALL be present in repository secrets or a generated `.npmrc`
 
-### Requirement: Trusted publishing is configured for the seven published packages
+### Requirement: Trusted publishing is configured for every published package
 
-Each of the seven published packages SHALL have a trusted-publisher configuration on
-npmjs.com authorizing the `release.yml` workflow to perform `npm publish`:
-`@levu304/excelrs`, `@levu304/excelrs-darwin-arm64`,
-`@levu304/excelrs-linux-x64-gnu`, `@levu304/excelrs-linux-arm64-gnu`,
-`@levu304/excelrs-linux-x64-musl`, `@levu304/excelrs-linux-arm64-musl`, and
-`@levu304/excelrs-win32-x64-msvc`.
+Every package published by the release workflow SHALL have a trusted-publisher configuration
+on npmjs.com authorizing the `release.yml` workflow to perform `npm publish`. The set of
+packages this applies to SHALL be the set the publish job publishes, as declared by
+`release.yml`.
 
 #### Scenario: Every published package can be trusted-published
 
-- **WHEN** each of the seven packages is published by the release workflow
-- **THEN** each SHALL have an npm trusted-publisher configuration authorizing the `release.yml` workflow
+- **WHEN** the release workflow publishes its package set
+- **THEN** every package in that set SHALL have a trusted-publisher configuration
+  authorizing the `release.yml` workflow
 
-#### Scenario: Both musl platform packages are covered
+#### Scenario: A newly added platform package is covered
 
-- **WHEN** the trusted-publisher configurations are reviewed
-- **THEN** `@levu304/excelrs-linux-x64-musl` and `@levu304/excelrs-linux-arm64-musl` SHALL both be present
-
-### Requirement: Release package set matches the release-verification spec
-
-The package count and names listed in this capability SHALL match the set the publish job
-publishes and verifies.
-
-#### Scenario: Spec and workflow agree on the package set
-
-- **WHEN** the package names in this capability are compared with those the publish job publishes
-- **THEN** the two sets SHALL be identical in both count and names
-
-### Requirement: Patch release SHALL follow existing release process
-
-Patch releases SHALL follow the existing release-verification requirements.
-No new requirements beyond what the release-verification spec already defines.
-
-#### Scenario: Patch release uses same CI pipeline
-
-- **WHEN** a `v2.2.1` patch tag is pushed
-- **THEN** the existing Release workflow SHALL build, test, verify, and publish
-  all **5** npm packages without workflow modifications
+- **WHEN** a platform package is added to the publish job's package set
+- **THEN** it SHALL have a trusted-publisher configuration without a specification change

@@ -12,7 +12,7 @@
 >
 > This spec remains the **target** for a future change (true incremental
 > `writeSheet`, with the handle owning an open `ZipWriter` across FFI calls).
-> Decision rationale: see `docs/adr/005-streaming-write-buffering.md`.
+> Decision rationale: see `docs/adr/028-streaming-write-buffering.md`.
 > See also issue #25.1 and the reverted prior attempt (commit `c19a4fc`).
 
 ## Purpose

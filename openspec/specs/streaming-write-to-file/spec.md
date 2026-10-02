@@ -10,7 +10,7 @@ valid `.xlsx` to the given file path on disk. Its input- and output-phase memory
 SHALL be as stated by the two-phase model in `openspec/specs/streaming-xlsx/spec.md`. True
 incremental `writeSheet()` remains deferred per
 `openspec/specs/streaming-write-incremental/spec.md` and
-`docs/adr/005-streaming-write-buffering.md`.
+`docs/adr/028-streaming-write-buffering.md`.
 
 #### Scenario: finalizeToFile writes a valid xlsx to the path
 

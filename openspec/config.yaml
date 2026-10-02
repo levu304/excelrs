@@ -2,19 +2,88 @@ schema: spec-driven
 
 # Project context (optional)
 # This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+context: |
+  # excelrs — Rust port of ExcelJS 4.4.0 to a Node.js native addon
+
+  ## Stack
+
+  - **Core:** Rust, single crate `excelrs-core`, built as a `cdylib` via napi-rs v3.
+    No workspace split (see ADR-2).
+  - **FFI bridge:** `#[napi(object)]` flat structs with a `value_type` discriminant.
+    Rust enums with variant data cannot cross the FFI boundary. `index.js` is a
+    hand-maintained JS glue layer for method overloading, which `#[napi]` cannot express.
+  - **XLSX read:** calamine for the in-memory path; a hand-rolled SAX reader for the
+    streaming path. calamine resolves shared strings, so formula and rich-text reads
+    require separate API calls alongside `rows()`.
+  - **XLSX write:** `zip` + `quick-xml`, hand-rolled. Full control over emitted OOXML;
+    the reader's abstractions are not sufficient.
+  - **CSV:** hand-rolled RFC 4180 parser and serializer in both directions.
+  - **Formula evaluation:** opt-in behind the `formula-eval` Cargo feature, using
+    `xlstream-parse` / `xlstream-core`. Not compiled into default builds.
+  - **Tests:** 470 Rust `#[test]`s in `src/`, plus vitest in `__test__/`.
+
+  ## Authority order
+
+  When sources disagree, the higher entry wins:
+
+  1. `openspec/specs/*` — the behavior contract. CI-gated by
+     `openspec validate --strict --specs --changes`.
+  2. The source under `src/` — what the code actually does.
+  3. `CHANGELOG.md` — what shipped, and in which version.
+  4. `ROADMAP.md` — feature-area status and prioritization. Hand-maintained.
+  5. `docs/spec.md` — design rationale only. Carries no observable behavior.
+
+  `docs/spec.md` and `docs/adr/` explain *why* a design is shaped as it is. Constraints
+  that no requirement can state — FFI limitations, platform rules, rejected
+  alternatives — live there. What the system *does* lives in `openspec/specs/`, never in
+  prose.
+
+  ## Machine-readable sources of truth
+
+  These are read as authoritative. Never edit them to make a specification agree:
+
+  - `.github/workflows/release.yml` — the release build matrix and published package set.
+  - `package.json` `napi.targets` — the targets a local build covers.
+  - `Cargo.toml` — dependencies, feature flags, and the `formula-eval` gate.
+
+  A specification states an invariant over these (for example, that the matrix and the
+  declared targets agree) rather than restating their contents. Restating a list is how
+  this corpus rotted: `release-verification` asserted a package count that contradicted
+  itself within one file.
 
 # Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+# These apply ONLY when writing the artifact with the matching key.
+rules:
+  specs:
+    - One behavior per requirement. If a requirement covers several behaviors, split it
+      into separate `### Requirement:` blocks with their own scenarios.
+    - Never restate a list, count, or set that already exists in a machine-readable
+      source. Name the source and require agreement with it instead. A restated
+      inventory goes stale the next time the source changes, and no validator can catch
+      it — it is structurally valid while being semantically false.
+    - Enumerated field maps, attribute lists, and thresholds belong in scenarios, not
+      in the normative description.
+    - Keep the requirement description under 500 characters. Longer prose is an
+      INFO-level finding and indicates a requirement doing too much.
+    - A requirement must not derive its truth from the specification containing it.
+      Name the concrete external artifact instead.
+    - Prefer a requirement that stays true as the implementation evolves over one that
+      pins a current value. If a value must be pinned, ask whether it is an invariant.
+  proposal:
+    - Name capabilities for durable system behavior, not for the work in the change.
+      A capability named after an increment (`add-musl-support`) becomes a changelog
+      wearing a taxonomy costume; name it for what it guarantees (`platform-targets`).
+    - Before adding a capability, check whether an existing one already owns the
+      behavior. Extend it rather than creating a near-duplicate.
+  design:
+    - Record a decision's rejected alternatives and its reasons. A decision without
+      them cannot be revisited, only obeyed.
+    - When a decision is superseded, name what replaced it. A reader must be able to
+      tell which decision currently governs without reading the code.
+    - Prefer deleting a place that can rot over adding a mechanism to check it.
+    - Do not invent vocabulary — a status, a state, a field — for a case that has not
+      occurred yet. Add it when something needs it.
+  tasks:
+    - Every task states how to verify completion, in the task itself.
+    - Land the tests and documentation a group's work calls for inside that group, not
+      in a final group. Deferred verification cascades failures backwards.

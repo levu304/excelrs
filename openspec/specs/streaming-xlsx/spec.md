@@ -63,7 +63,7 @@ SHALL be **O(all sheets)**, NOT constant.
 
 True incremental `writeSheet()` — each sheet's XML written to the zip as it arrives, before
 `finalize` — is **deferred**; see `openspec/specs/streaming-write-incremental/spec.md` and
-`docs/adr/005-streaming-write-buffering.md`.
+`docs/adr/028-streaming-write-buffering.md`.
 
 #### Scenario: Input phase buffers all sheets
 
@@ -78,7 +78,7 @@ True incremental `writeSheet()` — each sheet's XML written to the zip as it ar
 #### Scenario: True incremental writeSheet is deferred
 
 - **WHEN** a reader looks for true incremental `writeSheet()` behavior
-- **THEN** it SHALL be recorded as deferred to `openspec/specs/streaming-write-incremental/spec.md` and `docs/adr/005-streaming-write-buffering.md`
+- **THEN** it SHALL be recorded as deferred to `openspec/specs/streaming-write-incremental/spec.md` and `docs/adr/028-streaming-write-buffering.md`
 
 ### Requirement: Streaming writer streams the output phase one sheet at a time
 

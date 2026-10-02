@@ -134,7 +134,7 @@ The v1.0.0 drop-in compatibility milestone is complete. Post-v1 work ships as a 
 | --- | --- | --- |
 | Charts | very high | Entire chart engine; chart XML is extremely verbose and version-specific |
 | Pivot tables | very high | Complex OOXML with pivotCache, pivotTable, multiple axis types |
-| Full formula evaluation (500+ functions) | very high | Beyond the 20-function `formula-eval` subset (shipped opt-in, unreleased); standalone interpreter is a separate product (ADR-9) |
+| Full formula evaluation (500+ functions) | very high | Beyond the 20-function `formula-eval` subset. The engine shipped opt-in in v2.9.0 (`Workbook`/`Worksheet.recalculate()`, [ADR-009](docs/adr/009-formula-preservation-not-evaluation.md)) but is **not** compiled into default builds; whether it is promoted out of its opt-in Cargo feature is an open product decision, not a settled one |
 
 **Deferred minor-parity (not in v2.0.0; triage after the v2.0.0 capstone):** `Themes (write)`, `State (visible/hidden)`, `Tab color`, `Properties (defaultRowHeight, etc.)`. Smaller ExcelJS API gaps, explicitly out of v2.0.0 scope but tracked for post-v2.0.0 triage.
 
