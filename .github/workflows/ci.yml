@@ -59,6 +59,9 @@ jobs:
       - name: Verify build output carries the glue transforms
         run: node scripts/verify-build-output.cjs
 
+      - name: Verify ROADMAP.md status/version drift
+        run: node scripts/verify-roadmap-drift.cjs
+
       - name: Lint types (Biome)
         run: pnpm lint:js
 

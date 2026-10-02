@@ -17,15 +17,15 @@
 | CSV write | shipped | v0.9.0 | Manual RFC 4180 serializer |
 | Streaming XLSX | shipped | v2.0.0 | Large-file streaming reader/writer (SAX-based) |
 | **Worksheet structure** | | | |
-| Rows / columns CRUD | partial | v0.1.0 | `getRow`/`addRow`/`getRows`/`columns()`; no `getColumn`/`splice`/`insertRow` |
+| Rows / columns CRUD | partial | v0.1.0 | `getRow`/`addRow`/`getRows`/`columns()`; `insertRow`/`spliceRows`/`duplicateRow` (v1.3.0); no `getColumn` |
 | Merge cells | shipped | v0.5.0 | mergeCells, unMergeCells |
 | Freeze / split panes | shipped | v0.11.0 | `<sheetViews><pane>` read/write implemented; `ws.views` |
 | Auto filters | shipped | v0.11.0 | `<autoFilter ref>` read/write; `ws.autoFilter` |
-| Insert / splice rows | targeted | v1.3.0 | `insertRow`/`insertRows`/`spliceRows` — targeted for v1.3.0 |
-| Duplicate row | targeted | v1.3.0 | `duplicateRow` — targeted for v1.3.0 |
+| Insert / splice rows | shipped | v1.3.0 | `insertRow`/`insertRows`/`spliceRows` |
+| Duplicate row | shipped | v1.3.0 | `duplicateRow` |
 | Column widths / headers | shipped | v0.1.0 | |
-| Outline levels (rows/cols) | targeted | v1.3.0 | Row/col grouping (`outlineLvl`) — targeted for v1.3.0 |
-| Page breaks | targeted | v1.3.0 | `rowBreaks`/`colBreaks` — targeted for v1.3.0 |
+| Outline levels (rows/cols) | shipped | v1.3.0 | Row/col grouping (`outlineLvl`) |
+| Page breaks | shipped | v1.3.0 | `rowBreaks`/`colBreaks` page breaks |
 | **Cell values & types** | | | |
 | Number, String, Bool, Error | shipped | v0.1.0 | |
 | Formula (read/write) | shipped | v0.1.0 | Stored as string formula + cached value. `cachedValue` getter + `worksheet.recalculate()` behind the `formula-eval` Cargo feature (unreleased). Authorable cached scalars via `cell.value = { formula, number|string|boolean|errorValue|dateSerial }` → `<f>..</f><v>..</v>` round-trip; `cell.value` returns the cached scalar, `cell.formula` returns the formula text. |
@@ -75,7 +75,6 @@
 - **shipped** — fully usable, matches ExcelJS API expectations
 - **partial** — partially implemented; write works or read works but not both
 - **planned** — not yet implemented, targeted for a future release
-- **targeted** — planned and assigned to a specific upcoming release (see Prioritized Roadmap)
 - **n-a** — explicitly out of scope for the drop-in compat promise (v1)
 
 ---
@@ -124,8 +123,8 @@ The v1.0.0 drop-in compatibility milestone is complete. Post-v1 work ships as a 
 | Target | Feature | Effort | Status | Notes |
 | --- | --- | --- | --- | --- |
 | **v1.1.0** | **Tables** | high | shipped | `ws.addTable` / `ws.getTable(s)` / `ws.removeTable`; `Table` / `TableColumn` / `TableRow` model; `xl/tables/tableN.xml` + relationship; `autoFilter` integration; header/totals rows; header styling |
-| **v1.2.0** | **Conditional formatting** | high | targeted | read/write `<conditionalFormatting>` + `dxfs`; rule types `cellIs`, `expression`/formula, `colorScale`, `dataBar`, `iconSet`, `top10`, `unique`/`duplicate`, `containsText`, `timePeriod`, blanks/errors/nonBlanks; priority ordering |
-| **v1.3.0** | **Worksheet-structure parity finish** | medium | targeted | `insertRow(s)` / `spliceRows` / `duplicateRow`; row/col `outlineLevel` (grouping); `rowBreaks` / `colBreaks` page breaks — closes the remaining "planned" v1.x parity-matrix rows |
+| **v1.2.0** | **Conditional formatting** | high | shipped | read/write `<conditionalFormatting>` + `dxfs`; rule types `cellIs`, `expression`/formula, `colorScale`, `dataBar`, `iconSet`, `top10`, `unique`/`duplicate`, `containsText`, `timePeriod`, blanks/errors/nonBlanks; priority ordering |
+| **v1.3.0** | **Worksheet-structure parity finish** | medium | shipped | `insertRow(s)` / `spliceRows` / `duplicateRow`; row/col `outlineLevel` (grouping); `rowBreaks` / `colBreaks` page breaks — closes the remaining "planned" v1.x parity-matrix rows |
 | **v2.0.0** | **Streaming XLSX + parity capstone** | high | shipped | streaming reader/writer architecture for large files (SAX-based); **declares the ExcelJS-4.4.0 v1.x drop-in parity program complete** (exclusions: charts, pivot tables, themes-write, sheet state, tab color, default properties; formula evaluation is a moat, not a parity gap — ExcelJS evaluates nothing — so the 20-function `formula-eval` subset ships opt-in, full 500+ deferred v3+); streaming surface is non-breaking (new `stream` namespace only) |
 
 **Deferred to v3+ (distant, unchanged):**
