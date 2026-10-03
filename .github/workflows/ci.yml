@@ -53,6 +53,7 @@ jobs:
         run: >-
           npx napi build --platform --release
           --features formula-eval
+          --no-const-enum --runtime-string-enum
           --js native.js --dts native.d.ts
           --pipe "node scripts/apply-glue.cjs"
 

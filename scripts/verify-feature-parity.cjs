@@ -8,6 +8,14 @@
 // `pnpm build && pnpm test` exercised a binary the pipeline never tests. Nothing
 // compared the two, and `openspec validate` reports the corpus clean either way.
 //
+// It now guards a second invariant, stated by openspec/specs/package-entrypoint:
+// "Build invocations agree on type-declaration flags". Same shape, same failure — the
+// three `napi build` steps in the workflows omitted the type-declaration flags, so the
+// pipeline generated `const enum` declarations while the local build emitted plain
+// enums. Nothing compared those either, and no check read declaration form until
+// verify-build-output.cjs started, which then failed every CI leg and the release
+// verify step.
+//
 // Scope: `napi build` invocations only. `--features` also appears on `cargo clippy`
 // and `cargo test` lines, which are deliberately a different question (which feature
 // set the Rust test suite exercises). Folding those in would make the comparison
@@ -53,6 +61,13 @@ const REQUIRED_SOURCES = [
 // everything up to the next flag so a trailing `--js native.js` is not swallowed.
 const FEATURES_RE = /--features[=\s]+([^\n]*)/g
 
+// The flags that decide how the generated declarations are written. This list names
+// WHAT is compared; `package.json`'s build scripts supply the expected VALUE, so
+// changing the flags there changes what every other invocation is measured against
+// without editing this. Hardcoding the expectation here instead would restate a value
+// that already has a source of truth, and would need editing on every napi upgrade.
+const TYPE_DECLARATION_FLAGS = ['--no-const-enum', '--runtime-string-enum']
+
 // Any list item that could open a workflow step. Matched at one-or-more indent
 // rather than a fixed 6 spaces, so re-indenting a step cannot silently merge its
 // body into a neighbour's chunk.
@@ -61,11 +76,16 @@ const STEP_RE = /^([ \t]+)-\s+(?:name|uses|run|id|if|env|shell|with|working-dire
 // A `napi build` command. `pnpm exec napi build` / `npx napi build` both match.
 const BUILD_RE = /\bnapi[ \t]+build\b/g
 
-// Parses one command's `--features` value. A YAML block scalar folds newlines into
-// the command, and a trailing `\` continues it onto the next line; both are joined
-// first so a continued value is not read as the literal feature `\`.
-function parseFeatures(command) {
-  const flattened = command.replace(/\\[ \t]*\r?\n[ \t]*/g, ' ')
+// A YAML block scalar folds newlines into the command, and a trailing `\` continues it
+// onto the next line. Joining both here — once, for every parser below — is what stops a
+// continued value from being read as a literal `\` token. Two implementations of this
+// step would be the defect, not the fix.
+function flattenCommand(command) {
+  return command.replace(/\\[ \t]*\r?\n[ \t]*/g, ' ')
+}
+
+// Parses one command's `--features` value from an already-flattened command.
+function parseFeatures(flattened) {
   const found = new Set()
   for (const m of flattened.matchAll(FEATURES_RE)) {
     // Cut at the next flag, then split on whitespace and commas.
@@ -78,10 +98,19 @@ function parseFeatures(command) {
   return found
 }
 
-// Returns every `napi build` occurrence in `text`, each paired with the feature set
-// declared between this occurrence and the next one. Comparing occurrences (not
-// chunks) is what stops a second, undeclared build in the same step from inheriting
-// the first one's flags.
+// Which type-declaration flags a command actually carries. Token equality, not a
+// substring search: `--const-enum` must not be found inside `--no-const-enum`, and
+// `--target` / `--cross-compile` are not members of this list and are ignored by
+// construction rather than by an exclusion rule.
+function parseTypeDeclarationFlags(flattened) {
+  const tokens = flattened.split(/[\s"'`\\]+/)
+  return new Set(TYPE_DECLARATION_FLAGS.filter((flag) => tokens.includes(flag)))
+}
+
+// Returns every `napi build` occurrence in `text`, each paired with the feature set and
+// the type-declaration flags declared between this occurrence and the next one. Comparing
+// occurrences (not chunks) is what stops a second, undeclared build in the same step from
+// inheriting the first one's flags.
 function findInvocations(text, where, onFound) {
   const starts = [...text.matchAll(BUILD_RE)]
   starts.forEach((m, i) => {
@@ -90,8 +119,12 @@ function findInvocations(text, where, onFound) {
     // and anything earlier on a folded line is included, and so a preceding
     // `cargo test --features` on the same physical line is excluded.
     const lineStart = text.lastIndexOf('\n', m.index) + 1
-    const command = text.slice(lineStart, end)
-    onFound({ where, features: parseFeatures(command) })
+    const command = flattenCommand(text.slice(lineStart, end))
+    onFound({
+      where,
+      features: parseFeatures(command),
+      typeDeclFlags: parseTypeDeclarationFlags(command),
+    })
   })
   return starts.length
 }
@@ -201,13 +234,44 @@ for (const inv of invocations.slice(1)) {
   }
 }
 
+// The same agreement, for the flags that decide how the generated declarations are
+// written. `native.d.ts` is unpublished, so no consumer sees either form — but its
+// declaration form is exactly what verify-build-output.cjs compares the published types
+// against, so a pipeline build that emits `const enum` while the local build emits `enum`
+// makes that comparison fail on a difference the pipeline itself introduced.
+//
+// Deliberately no "every invocation declares none" guard here. For features that case is
+// caught locally, because an all-empty Cargo feature set has no legitimate reading. For
+// type-declaration flags it is caught by verify-build-output.cjs: if the flags were
+// stripped from package.json too, every invocation would agree and this check would pass,
+// but the published declarations would then disagree with the generated ones and that
+// check fails instead. A second guard for the same hole would be a second place to keep
+// in sync.
+for (const inv of invocations.slice(1)) {
+  const missing = [...reference.typeDeclFlags].filter((f) => !inv.typeDeclFlags.has(f))
+  const extra = [...inv.typeDeclFlags].filter((f) => !reference.typeDeclFlags.has(f))
+  if (missing.length || extra.length) {
+    const parts = []
+    if (missing.length) parts.push(`missing ${missing.join(', ')}`)
+    if (extra.length) parts.push(`declares extra ${extra.join(', ')}`)
+    failures.push(
+      `${inv.where} does not match ${reference.where} on type-declaration flags ` +
+        `(${parts.join('; ')}). Reference declares: ` +
+        `${[...reference.typeDeclFlags].join(', ') || '(none)'}.`,
+    )
+  }
+}
+
 if (failures.length > 0) {
   console.error('[verify-feature-parity] FAILED\n')
   for (const f of failures) console.error(`  - ${f}`)
   console.error(
     '\n  The local build must enable the same Cargo features the pipeline builds.\n' +
       '  A developer running `pnpm build && pnpm test` should exercise the artifact\n' +
-      '  CI and release actually test.\n',
+      '  CI and release actually test.\n\n' +
+      '  Every `napi build` invocation must also declare the same type-declaration\n' +
+      '  flags, or the pipeline generates declarations in a different form than the\n' +
+      '  local build and CI fails comparing the two.\n',
   )
   process.exit(1)
 }
@@ -215,5 +279,6 @@ if (failures.length > 0) {
 console.log(
   `[verify-feature-parity] OK — ${invocations.length} \`napi build\` invocation(s) ` +
     `across package.json and ${workflows.length} workflow(s) all declare: ` +
-    `${[...reference.features].join(', ') || '(none)'}`
+    `${[...reference.features].join(', ') || '(none)'}; type-declaration flags: ` +
+    `${[...reference.typeDeclFlags].join(', ') || '(none)'}`
 )
