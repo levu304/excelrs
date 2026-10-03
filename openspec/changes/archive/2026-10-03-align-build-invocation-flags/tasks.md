@@ -32,4 +32,4 @@ evidence being sought.
 
 - [x] 3.2 Confirm the diff touches no published surface: the changed-file list against `main` is only the two workflow files, the checker, and its probe suite, plus the OpenSpec change directory — no change to `index.d.ts`, `index.js`, `package.json`, or `src/`. Verify by reading the stat output.
 
-- [ ] 3.3 Push and confirm the dependent PR's gate goes green with `gh pr checks`. All three legs SHALL pass. Note in the PR body that the release matrix legs (musl, emnapi) cannot be exercised locally and are the residual unverified surface, per design.md Risks.
+- [x] 3.3 Push and confirm the dependent PR's gate goes green with `gh pr checks`. All three legs SHALL pass. Note in the PR body that the release matrix legs (musl, emnapi) cannot be exercised locally and are the residual unverified surface, per design.md Risks.
