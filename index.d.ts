@@ -617,8 +617,27 @@ export declare class Worksheet {
   setProperties(props: WorksheetProperties): void
 }
 
-/** Worksheet visibility state, mirroring ExcelJS `WorksheetState`. */
-export type WorksheetState = 'visible' | 'hidden' | 'veryHidden'
+/**
+ * Worksheet visibility state, mirroring ExcelJS `WorksheetState`.
+ *
+ * Maps to the `state` attribute on `<sheet>` in `xl/workbook.xml`:
+ * `visible` (default, attribute omitted on write), `hidden`, `veryHidden`.
+ * Variant names are lowercase to match ExcelJS's string values exactly.
+ */
+export declare enum SheetState {
+  visible = 'visible',
+  hidden = 'hidden',
+  veryHidden = 'veryHidden'
+}
+
+/**
+ * ExcelJS-compatible alias for {@link SheetState}.
+ *
+ * Derived rather than restated, so the two names cannot drift apart. It stays a
+ * string-literal union rather than the enum type itself: a string enum rejects bare
+ * string literals, so aliasing it directly would break `ws.state = 'visible'`.
+ */
+export type WorksheetState = `${SheetState}`
 
 /** Worksheet-level metadata (tab color, default dimensions, outline levels). */
 export interface WorksheetProperties {
@@ -635,7 +654,7 @@ export interface WorksheetProperties {
 }
 
 /** Active pane quadrant. */
-export declare const enum ActivePane {
+export declare enum ActivePane {
   BottomLeft = 'BottomLeft',
   BottomRight = 'BottomRight',
   TopLeft = 'TopLeft',
@@ -695,7 +714,7 @@ export interface Alignment {
 }
 
 /** Horizontal alignment. */
-export declare const enum AlignmentHorizontal {
+export declare enum AlignmentHorizontal {
   Left = 'Left',
   Center = 'Center',
   Right = 'Right',
@@ -704,7 +723,7 @@ export declare const enum AlignmentHorizontal {
 }
 
 /** Vertical alignment. */
-export declare const enum AlignmentVertical {
+export declare enum AlignmentVertical {
   Top = 'Top',
   Middle = 'Middle',
   Bottom = 'Bottom'
@@ -720,7 +739,7 @@ export interface AnchorPoint {
 }
 
 /** Anchor type for embedded images. */
-export declare const enum AnchorType {
+export declare enum AnchorType {
   OneCell = 'OneCell',
   TwoCell = 'TwoCell'
 }
@@ -758,7 +777,7 @@ export interface BorderStyle {
 }
 
 /** Border line style per OOXML §18.18.3. */
-export declare const enum BorderStyleStyle {
+export declare enum BorderStyleStyle {
   Thin = 'Thin',
   Medium = 'Medium',
   Thick = 'Thick',
@@ -792,14 +811,14 @@ export interface CellComment {
 }
 
 /** Cell comments display mode. */
-export declare const enum CellComments {
+export declare enum CellComments {
   None = 'None',
   AsDisplayed = 'AsDisplayed',
   AtEnd = 'AtEnd'
 }
 
 /** Discriminant for cell value variants. Mirrors the `value_type` string values. */
-export declare const enum CellType {
+export declare enum CellType {
   Null = 'Null',
   Number = 'Number',
   String = 'String',
@@ -1034,7 +1053,7 @@ export interface Fill {
 }
 
 /** Fill kind variants matching OOXML pattern fill types. */
-export declare const enum FillKind {
+export declare enum FillKind {
   None = 'None',
   Solid = 'Solid',
   Gradient = 'Gradient'
@@ -1062,7 +1081,7 @@ export interface GradientStop {
 }
 
 /** Gradient type: linear or path. */
-export declare const enum GradientType {
+export declare enum GradientType {
   Linear = 'Linear',
   Path = 'Path'
 }
@@ -1158,7 +1177,7 @@ export interface JsStreamValue {
 }
 
 /** Page orientation. */
-export declare const enum Orientation {
+export declare enum Orientation {
   Portrait = 'Portrait',
   Landscape = 'Landscape'
 }
@@ -1265,7 +1284,7 @@ export interface SheetView {
 }
 
 /** Sheet view pane state. */
-export declare const enum SheetViewState {
+export declare enum SheetViewState {
   Frozen = 'Frozen',
   Split = 'Split'
 }

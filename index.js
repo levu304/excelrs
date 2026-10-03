@@ -587,28 +587,6 @@ if (!nativeBinding) {
 }
 
 module.exports = nativeBinding
-module.exports.Cell = nativeBinding.Cell
-module.exports.Column = nativeBinding.Column
-module.exports.Row = nativeBinding.Row
-module.exports.StreamReader = nativeBinding.StreamReader
-module.exports.StreamWriter = nativeBinding.StreamWriter
-module.exports.Workbook = nativeBinding.Workbook
-module.exports.WorkbookCsv = nativeBinding.WorkbookCsv
-module.exports.WorkbookStream = nativeBinding.WorkbookStream
-module.exports.WorkbookStreamXlsx = nativeBinding.WorkbookStreamXlsx
-module.exports.WorkbookXlsx = nativeBinding.WorkbookXlsx
-module.exports.Worksheet = nativeBinding.Worksheet
-module.exports.ActivePane = nativeBinding.ActivePane
-module.exports.AlignmentHorizontal = nativeBinding.AlignmentHorizontal
-module.exports.AlignmentVertical = nativeBinding.AlignmentVertical
-module.exports.AnchorType = nativeBinding.AnchorType
-module.exports.BorderStyleStyle = nativeBinding.BorderStyleStyle
-module.exports.CellComments = nativeBinding.CellComments
-module.exports.CellType = nativeBinding.CellType
-module.exports.FillKind = nativeBinding.FillKind
-module.exports.GradientType = nativeBinding.GradientType
-module.exports.Orientation = nativeBinding.Orientation
-module.exports.SheetViewState = nativeBinding.SheetViewState
 
 // __EXCELJS_GETCELL_GLUE__
 // JS glue: ExcelJS-compat getCell overloads (delegate to Rust getCellBy* APIs)
