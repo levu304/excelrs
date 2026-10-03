@@ -103,12 +103,14 @@ jobs:
           pnpm exec napi build --cross-compile \
             --platform --release --target "$T" \
             --features formula-eval --js native.js --dts native.d.ts \
+            --no-const-enum --runtime-string-enum \
             --pipe "node scripts/apply-glue.cjs"
       - name: "Build native addon (non-musl: emnapi default)"
         if: ${{ !matrix.musl }}
         run: >-
           pnpm exec napi build --platform --release
           --target ${{ matrix.target }} --features formula-eval --js native.js
+          --no-const-enum --runtime-string-enum
           --dts native.d.ts
           --pipe "node scripts/apply-glue.cjs"
 
