@@ -17,7 +17,7 @@
 | CSV write | shipped | v0.9.0 | Manual RFC 4180 serializer |
 | Streaming XLSX | shipped | v2.0.0 | Large-file streaming reader/writer (SAX-based) |
 | **Worksheet structure** | | | |
-| Rows / columns CRUD | partial | v0.1.0 | `getRow`/`addRow`/`getRows`/`columns()`; `insertRow`/`spliceRows`/`duplicateRow` (v1.3.0); no `getColumn` |
+| Rows / columns CRUD | partial | v0.1.0 | `getRow`/`addRow`/`getRows`/`columns()`; `insertRow`/`spliceRows`/`duplicateRow` (v1.3.0); `getColumn` live handle (unreleased) |
 | Merge cells | shipped | v0.5.0 | mergeCells, unMergeCells |
 | Freeze / split panes | shipped | v0.11.0 | `<sheetViews><pane>` read/write implemented; `ws.views` |
 | Auto filters | shipped | v0.11.0 | `<autoFilter ref>` read/write; `ws.autoFilter` |
@@ -52,7 +52,7 @@
 | Workbook properties | shipped | v0.1.0 | creator, modified, created, etc. |
 | Workbook views | shipped | v1.0.0 | Workbook views + calc properties (`calcPr`) read/write |
 | Calc properties | shipped | v1.0.0 | `fullCalcOnLoad` read/write (`<calcPr>`) |
-| Themes (write) | planned | — | Read-only via theme1.xml |
+| Themes (write) | shipped | unreleased | Theme refs re-emitted + `theme1.xml` passthrough; plain ARGB output unchanged |
 | **Worksheet** | | | |
 | Data validation | shipped | v0.8.0 | Full read/write, all types |
 | State (visible/hidden) | shipped | unreleased | `ws.state` (`visible`/`hidden`/`veryHidden`) read/write; `state` attr on `<sheet>` |

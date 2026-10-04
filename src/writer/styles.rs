@@ -617,16 +617,17 @@ fn emit_num_fmts<W: Write>(w: &mut W, num_fmts: &[(u32, String)]) -> Result<(), 
 }
 
 /// Build a color element (`<color>` / `<fgColor>` / `<bgColor>`) string,
-/// preserving a theme reference when present (v0.13.0). Falls back to the
-/// resolved ARGB when the color came from an ARGB/RGB value or an indexed
-/// palette entry.
+/// preserving a theme reference when the color originated from one (the read
+/// side stores both the resolved ARGB and the theme link, and the theme part
+/// passes through verbatim on write). Falls back to the resolved ARGB when
+/// the color came from an ARGB/RGB value or an indexed palette entry.
 fn emit_color_attrs(el: &str, color: &Option<String>, theme: &Option<u8>, tint: &Option<f64>) -> String {
     match (color, theme) {
-        (Some(c), _) => format!(r#"<{el} rgb="{}"/>"#, escape(c)),
-        (None, Some(t)) => match tint {
+        (_, Some(t)) => match tint {
             Some(tn) => format!(r#"<{el} theme="{}" tint="{}"/>"#, t, tn),
             None => format!(r#"<{el} theme="{}"/>"#, t),
         },
+        (Some(c), None) => format!(r#"<{el} rgb="{}"/>"#, escape(c)),
         (None, None) => String::new(),
     }
 }
@@ -1538,9 +1539,9 @@ mod tests {
         assert!(!xml.contains(r##"color rgb="FF&""##), "unescaped border color: {xml}");
     }
 
-    /// Theme-resolved ARGB must be emitted as-is (regression guard).
+    /// Plain ARGB with no theme link is emitted as rgb (regression guard).
     #[test]
-    fn test_emit_theme_resolved_argb() {
+    fn test_emit_plain_argb() {
         let styles = vec![Some(Style {
             font: Some(Font {
                 color: Some("FF4F81BD".into()),
@@ -1559,9 +1560,9 @@ mod tests {
     }
 
     #[test]
-    fn test_emit_font_themed_color_writes_resolved_argb() {
-        // A themed color that was resolved on read keeps its resolved ARGB
-        // on write so every reader (ExcelJS in particular) can use it.
+    fn test_emit_font_themed_color_writes_theme_ref() {
+        // A themed color resolved on read keeps its theme reference on write;
+        // the theme part passes through verbatim so the reference resolves.
         let font = Font {
             color: Some("FF4F81BD".into()),
             color_theme: Some(4),
@@ -1572,19 +1573,18 @@ mod tests {
         emit_fonts(&mut buf, &[font]).unwrap();
         let xml = String::from_utf8(buf).unwrap();
         assert!(
-            xml.contains(r##"<color rgb="FF4F81BD"/>"##),
-            "resolved ARGB must be written for a themed color: {xml}"
+            xml.contains(r##"<color theme="4"/>"##),
+            "theme ref must be written for a themed color: {xml}"
         );
         assert!(
-            !xml.contains("theme="),
-            "no theme ref when a resolved ARGB is present: {xml}"
+            !xml.contains("rgb="),
+            "no resolved ARGB when a theme ref is present: {xml}"
         );
     }
 
     #[test]
-    fn test_emit_font_themed_color_with_tint_writes_resolved_argb() {
-        // When a resolved ARGB is present it is written; the theme tint is
-        // dropped because it only applies to a <color theme="N"/> reference.
+    fn test_emit_font_themed_color_with_tint_writes_theme_ref() {
+        // The tint rides on the theme reference it modifies.
         let font = Font {
             color: Some("FF4F81BD".into()),
             color_theme: Some(4),
@@ -1595,12 +1595,12 @@ mod tests {
         emit_fonts(&mut buf, &[font]).unwrap();
         let xml = String::from_utf8(buf).unwrap();
         assert!(
-            xml.contains(r##"<color rgb="FF4F81BD"/>"##),
-            "resolved ARGB must be written (tint dropped): {xml}"
+            xml.contains(r##"<color theme="4" tint="-0.5"/>"##),
+            "theme ref with tint must be written: {xml}"
         );
         assert!(
-            !xml.contains("theme="),
-            "no theme ref when a resolved ARGB is present: {xml}"
+            !xml.contains("rgb="),
+            "no resolved ARGB when a theme ref is present: {xml}"
         );
     }
 

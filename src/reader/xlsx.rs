@@ -83,6 +83,8 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
     }
     // Preserve foreign dxfs (e.g. pivot tables) for round-trip fidelity.
     inner.dxfs = style_table.dxfs.clone();
+    // Retain the raw theme part for verbatim round-trip emission.
+    inner.theme_xml = style_table.theme_xml.clone();
 
     // Step 3.6: parse auto-filter ranges from sheet XML and attach
     let per_sheet_auto_filters = parse_sheet_auto_filters(data, &sheet_paths)?;
@@ -211,6 +213,15 @@ pub fn workbook_inner_from_bytes(data: &[u8]) -> Result<WorkbookInner, ExcelrsEr
     for (i, levels) in per_sheet_col_outline.into_iter().enumerate() {
         for (col_num, level) in levels {
             inner.worksheets[i].insert_column_outline_level(col_num, level);
+        }
+    }
+
+    // Step 3.18b: column widths and hidden state — writer emits
+    // <col width="N" customWidth="1"> and <col hidden="1">.
+    let per_sheet_col_dims = parse_sheet_col_dims(data, &sheet_paths)?;
+    for (i, dims) in per_sheet_col_dims.into_iter().enumerate() {
+        for (col_num, width, hidden) in dims {
+            inner.worksheets[i].insert_column_dimensions(col_num, width, hidden);
         }
     }
 
@@ -1282,6 +1293,88 @@ fn parse_col_outline_levels_from_xml(xml: &str) -> Vec<(u32, u8)> {
                 if let (Some(lo), Some(hi), Some(l)) = (min, max, level) {
                     for c in lo..=hi.min(16384) {
                         result.push((c, l.min(7)));
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+    result
+}
+
+/// A parsed `<col>` descriptor: 1-indexed column number, optional width in
+/// characters (`None` when the attribute is absent), and hidden state.
+type ColDim = (u32, Option<f64>, bool);
+
+/// Parse column widths and hidden state from every worksheet part. Returns one
+/// vector per sheet (index aligned with `sheet_count`), each holding
+/// `(col_number, width, hidden)` triples from `<cols><col min max width hidden/>`.
+/// A `<col>` may span `min`..`max`; the descriptor applies to every column in
+/// that range. Width is `None` when the attribute is absent.
+fn parse_sheet_col_dims(data: &[u8], sheet_paths: &[String]) -> Result<Vec<Vec<ColDim>>, ExcelrsError> {
+    use std::io::{Cursor, Read};
+    let cursor = Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
+    let mut all: Vec<Vec<ColDim>> = Vec::with_capacity(sheet_paths.len());
+    for i in 0..sheet_paths.len() {
+        let path = sheet_paths[i].clone();
+        let dims = match archive.by_name(&path) {
+            Ok(entry) => {
+                let mut xml = String::new();
+                entry.take(MAX_ENTRY_BYTES).read_to_string(&mut xml)?;
+                parse_col_dims_from_xml(&xml)
+            }
+            Err(_) => Vec::new(),
+        };
+        all.push(dims);
+    }
+    Ok(all)
+}
+
+/// Extract column widths and hidden state from a worksheet XML blob.
+fn parse_col_dims_from_xml(xml: &str) -> Vec<ColDim> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut result: Vec<ColDim> = Vec::new();
+    let mut events: u64 = 0;
+    loop {
+        buf.clear();
+        events += 1;
+        if events > MAX_EVENTS as u64 {
+            break;
+        }
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) if e.name().as_ref() == b"col" => {
+                let mut min: Option<u32> = None;
+                let mut max: Option<u32> = None;
+                let mut width: Option<f64> = None;
+                let mut hidden = false;
+                for attr in e.attributes().flatten() {
+                    let key = attr.key.as_ref();
+                    let val = String::from_utf8_lossy(&attr.value);
+                    if key == b"min" {
+                        min = val.trim().parse().ok();
+                    } else if key == b"max" {
+                        max = val.trim().parse().ok();
+                    } else if key == b"width" {
+                        width = val.trim().parse().ok();
+                    } else if key == b"hidden" {
+                        let v = val.trim().to_lowercase();
+                        hidden = v == "1" || v == "true";
+                    }
+                }
+                if let (Some(lo), Some(hi)) = (min, max) {
+                    // A width-less, visible <col> (outline-only) carries no
+                    // dimensions to apply.
+                    if width.is_none() && !hidden {
+                        continue;
+                    }
+                    for c in lo..=hi.min(16384) {
+                        result.push((c, width, hidden));
                     }
                 }
             }
@@ -4404,6 +4497,23 @@ mod tests {
     }
 
     // -- Security regression guards --
+
+    #[test]
+    fn test_parse_col_dims_width_and_hidden() {
+        let xml = r#"<cols><col min="1" max="1" width="15.83" customWidth="1"/><col min="2" max="3" width="10" hidden="1"/></cols>"#;
+        let dims = parse_col_dims_from_xml(xml);
+        assert_eq!(dims.len(), 3, "got {dims:?}");
+        assert_eq!(dims[0], (1, Some(15.83), false));
+        assert_eq!(dims[1], (2, Some(10.0), true));
+        assert_eq!(dims[2], (3, Some(10.0), true));
+    }
+
+    #[test]
+    fn test_parse_col_dims_skips_outline_only() {
+        // An outline-only <col> carries no dimensions to apply.
+        let xml = r#"<cols><col min="1" max="2" outlineLevel="1"/></cols>"#;
+        assert!(parse_col_dims_from_xml(xml).is_empty());
+    }
 
     #[test]
     fn test_xml_col_range_bounded() {

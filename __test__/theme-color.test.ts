@@ -78,7 +78,7 @@ test('F4: fill foreground theme color resolves to accent6 ARGB', async () => {
 // F5 — Round-trip: read themed → write → ExcelJS reads → same ARGB
 // ---------------------------------------------------------------------------
 
-test('F5: round-trip themed ARGB through excelrs write', async () => {
+test('F5: round-trip themed ref through excelrs write', async () => {
   // 1. Create themed workbook with ExcelJS
   const wbjsIn = new ExcelJS.Workbook()
   const wsIn = wbjsIn.addWorksheet('Sheet1')
@@ -95,13 +95,19 @@ test('F5: round-trip themed ARGB through excelrs write', async () => {
   // 3. Write back with excelrs
   const bufOut = await wb.xlsx.write()
 
-  // 4. Read with ExcelJS
+  // 4. ExcelJS loads without repair and sees its native theme form
+  // (ExcelJS never resolves theme refs to argb, not even its own files).
   const wbjsOut = new ExcelJS.Workbook()
   // exceljs load() expects legacy Buffer type; newer @types/node returns
   // Buffer<ArrayBufferLike>.  `as never` bridges the version gap.
   await wbjsOut.xlsx.load(bufOut as never)
   const colorOut = wbjsOut.getWorksheet('Sheet1')!.getCell('A1').font?.color
-  expect(colorOut?.argb?.toUpperCase()).toBe('FF4F81BD')
+  expect(colorOut).toMatchObject({ theme: 4 })
+
+  // 5. excelrs re-read resolves through the passed-through theme part.
+  const wb2 = new Workbook()
+  await wb2.xlsx.read(bufOut as never)
+  expect(wb2.getWorksheet('Sheet1')!.getCell('A1').style?.font?.color).toBe('FF4F81BD')
 })
 
 // ---------------------------------------------------------------------------
@@ -158,4 +164,49 @@ test('F9: color is always a plain string, never an object', async () => {
   })
   const color = wb.getWorksheet('Sheet1')!.getCell('A1').style?.font?.color
   expect(typeof color).toBe('string')
+})
+
+// ---------------------------------------------------------------------------
+// F10 — Custom theme fixture round-trips with palette intact
+// ---------------------------------------------------------------------------
+
+test('F10: custom-theme fixture round-trips and still resolves custom ARGB', async () => {
+  const fixturePath = path.resolve(__dirname, '..', 'fixtures', 'custom-theme.xlsx')
+  const bufIn = fs.readFileSync(fixturePath)
+  const wb = new Workbook()
+  await wb.xlsx.read(bufIn as never)
+  expect(wb.getWorksheet('Sheet1')!.getCell('A1').style?.font?.color).toBe('FFFF0000')
+
+  const bufOut = await wb.xlsx.write()
+
+  // ExcelJS opens the round-tripped file without repair.
+  const wbjs = new ExcelJS.Workbook()
+  await wbjs.xlsx.load(bufOut as never)
+  expect(wbjs.getWorksheet('Sheet1')!.getCell('A1').value).toBe('Custom Theme')
+
+  // excelrs re-read resolves through the passed-through custom palette.
+  const wb2 = new Workbook()
+  await wb2.xlsx.read(bufOut as never)
+  expect(wb2.getWorksheet('Sheet1')!.getCell('A1').style?.font?.color).toBe('FFFF0000')
+})
+
+// ---------------------------------------------------------------------------
+// F11 — Plain ARGB styles still emit rgb (no theme link invented)
+// ---------------------------------------------------------------------------
+
+test('F11: authored ARGB color round-trips as rgb', async () => {
+  const wb = new Workbook()
+  const ws = wb.addWorksheet('Plain')
+  ws.addRow(['hello'])
+  ws.setCellStyle(1, 1, { font: { color: 'FF0000FF' } })
+
+  const buf = await wb.xlsx.write()
+  const wb2 = new Workbook()
+  await wb2.xlsx.read(buf as never)
+  expect(wb2.getWorksheet('Plain')!.getCell('A1').style?.font?.color).toBe('FF0000FF')
+
+  // ExcelJS sees a resolved argb (proves rgb emission: it cannot resolve themes).
+  const wbjs = new ExcelJS.Workbook()
+  await wbjs.xlsx.load(buf as never)
+  expect(wbjs.getWorksheet('Plain')!.getCell('A1').font?.color?.argb?.toUpperCase()).toBe('FF0000FF')
 })

@@ -92,6 +92,8 @@ pub struct StyleTableRead {
     pub scheme: ThemeColorScheme,
     /// Differential formats (`<dxfs>`) — referenced by conditional-format rules.
     pub dxfs: Vec<Dxf>,
+    /// Raw `xl/theme/theme1.xml` bytes when the source file carries a theme part.
+    pub theme_xml: Option<Vec<u8>>,
 }
 
 /// One parsed `<xf>` record from `<cellXfs>`.
@@ -124,6 +126,7 @@ impl StyleTableRead {
             cell_xfs: Vec::new(),
             scheme: ThemeColorScheme::default(),
             dxfs: Vec::new(),
+            theme_xml: None,
         }
     }
 
@@ -699,6 +702,7 @@ pub fn parse_style_table(data: &[u8], scheme: &ThemeColorScheme) -> Result<Style
         cell_xfs,
         scheme: ThemeColorScheme::default(),
         dxfs: Vec::new(),
+        theme_xml: None,
     })
 }
 
@@ -762,14 +766,15 @@ pub fn parse_styles_and_sheet_maps(
     let cursor = Cursor::new(data);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExcelrsError::Zip(e.to_string()))?;
 
-    // Resolve theme color scheme from xl/theme/theme1.xml (optional)
-    let scheme = match archive.by_name("xl/theme/theme1.xml") {
-        Ok(entry) => {
-            let mut data = String::new();
-            entry.take(MAX_ENTRY_BYTES).read_to_string(&mut data)?;
+    // Resolve theme color scheme from xl/theme/theme1.xml (optional).
+    // The raw bytes are retained for verbatim round-trip emission.
+    let theme_xml: Option<Vec<u8>> = read_entry(&mut archive, "xl/theme/theme1.xml").ok();
+    let scheme = match &theme_xml {
+        Some(bytes) => {
+            let data = String::from_utf8_lossy(bytes);
             ThemeColorScheme::from_xml(&data).unwrap_or_default()
         }
-        Err(_) => ThemeColorScheme::default(),
+        None => ThemeColorScheme::default(),
     };
 
     // Parse xl/styles.xml (optional — some files lack it)
@@ -797,6 +802,7 @@ pub fn parse_styles_and_sheet_maps(
 
     // Expose the resolved theme scheme to callers (rich-text run fonts reuse it).
     style_table.scheme = scheme;
+    style_table.theme_xml = theme_xml;
     Ok((style_table, sheet_style_maps))
 }
 
@@ -1531,6 +1537,7 @@ mod tests {
             ],
             scheme: ThemeColorScheme::default(),
             dxfs: Vec::new(),
+            theme_xml: None,
         };
         let style = table.resolve_style(1).unwrap();
         assert_eq!(style.font.as_ref().unwrap().bold, Some(true));

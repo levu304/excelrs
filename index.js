@@ -596,4 +596,9 @@ nativeBinding.Worksheet.prototype.getCell = function (a, b) {
 nativeBinding.Row.prototype.getCell = function (col) {
   return typeof col === 'number' ? this.getCellByColNum(col) : this.getCellByColLetter(col)
 }
+// __EXCELJS_GETCOLUMN_GLUE__
+// JS glue: ExcelJS-compat getColumn overload (delegates to Rust getColumnBy* APIs)
+nativeBinding.Worksheet.prototype.getColumn = function (col) {
+  return typeof col === 'number' ? this.getColumnByNum(col) : this.getColumnByLetter(col)
+}
 
