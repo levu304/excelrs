@@ -75,6 +75,17 @@ fn canonical_key<T: serde::Serialize>(value: &T) -> String {
     serde_json::to_string(value).unwrap_or_default()
 }
 
+/// Theme-aware dedup key: the canonical JSON key plus the theme linkage.
+///
+/// Theme-link fields are `#[serde(skip)]` (they must not reach the napi/JS
+/// surface), so two entries that differ only in theme linkage — a themed color
+/// and a plain color resolving to the same ARGB — would otherwise share one
+/// sub-table slot and silently merge first-wins. Appending the linkage keeps
+/// twins in separate slots while leaving the serialized shape untouched.
+fn theme_key<T: serde::Serialize>(value: &T, theme: Option<u8>, tint: Option<f64>) -> String {
+    format!("{}|{theme:?}|{tint:?}", canonical_key(value))
+}
+
 /// Walk a list of cell-level styles and build a deduplicated [`StyleTable`].
 ///
 /// - `None` / empty style → Normal (all indices in `cell_xfs` = 0).
@@ -124,7 +135,7 @@ pub fn build_style_table(styles: &[Option<Style>]) -> StyleTable {
 
             // Font
             let font_id = match &style.font {
-                Some(f) => *font_map.entry(canonical_key(f)).or_insert_with(|| {
+                Some(f) => *font_map.entry(theme_key(f, f.color_theme, f.color_tint)).or_insert_with(|| {
                     let id = fonts.len() as u32;
                     fonts.push(f.clone());
                     id
@@ -134,7 +145,7 @@ pub fn build_style_table(styles: &[Option<Style>]) -> StyleTable {
 
             // Fill
             let fill_id = match &style.fill {
-                Some(f) => *fill_map.entry(canonical_key(f)).or_insert_with(|| {
+                Some(f) => *fill_map.entry(theme_key(f, f.foreground_theme, f.foreground_tint)).or_insert_with(|| {
                     let id = fills.len() as u32;
                     fills.push(f.clone());
                     id
@@ -144,7 +155,7 @@ pub fn build_style_table(styles: &[Option<Style>]) -> StyleTable {
 
             // Border
             let border_id = match &style.border {
-                Some(b) => *border_map.entry(canonical_key(b)).or_insert_with(|| {
+                Some(b) => *border_map.entry(theme_key(b, b.top.as_ref().and_then(|s| s.color_theme), b.top.as_ref().and_then(|s| s.color_tint))).or_insert_with(|| {
                     let id = borders.len() as u32;
                     borders.push(b.clone());
                     id
@@ -1557,6 +1568,198 @@ mod tests {
             xml.contains(r##"<color rgb="FF4F81BD"/>"##),
             "theme-resolved ARGB must be emitted: {xml}"
         );
+    }
+
+    /// Themed and plain twins resolving to the same ARGB occupy separate
+    /// font slots and keep their own emission forms, in either order.
+    #[test]
+    fn test_font_twin_dedup_keeps_theme_link() {
+        let themed = Font {
+            color: Some("FF4F81BD".into()),
+            color_theme: Some(4),
+            color_tint: None,
+            ..Default::default()
+        };
+        let plain = Font {
+            color: Some("FF4F81BD".into()),
+            ..Default::default()
+        };
+        for (a, b) in [(&themed, &plain), (&plain, &themed)] {
+            let styles = vec![
+                Some(Style {
+                    font: Some(a.clone()),
+                    ..Default::default()
+                }),
+                Some(Style {
+                    font: Some(b.clone()),
+                    ..Default::default()
+                }),
+            ];
+            let table = build_style_table(&styles);
+            assert_eq!(table.fonts.len(), 3, "Normal + two font slots: {:?}", table.fonts);
+            let mut buf = Vec::new();
+            emit_fonts(&mut buf, &table.fonts).unwrap();
+            let xml = String::from_utf8(buf).unwrap();
+            assert!(
+                xml.contains(r##"<color theme="4"/>"##),
+                "themed twin keeps its theme ref: {xml}"
+            );
+            assert!(
+                xml.contains(r##"<color rgb="FF4F81BD"/>"##),
+                "plain twin keeps its rgb: {xml}"
+            );
+        }
+    }
+
+    /// Fill twins (themed foreground vs plain same-ARGB) stay separate.
+    #[test]
+    fn test_fill_twin_dedup_keeps_theme_link() {
+        let themed = Fill {
+            kind: FillKind::Solid,
+            foreground: Some("FF4F81BD".into()),
+            foreground_theme: Some(4),
+            foreground_tint: None,
+            ..Default::default()
+        };
+        let plain = Fill {
+            kind: FillKind::Solid,
+            foreground: Some("FF4F81BD".into()),
+            ..Default::default()
+        };
+        for (a, b) in [(&themed, &plain), (&plain, &themed)] {
+            let styles = vec![
+                Some(Style {
+                    fill: Some(a.clone()),
+                    ..Default::default()
+                }),
+                Some(Style {
+                    fill: Some(b.clone()),
+                    ..Default::default()
+                }),
+            ];
+            let table = build_style_table(&styles);
+            assert_eq!(table.fills.len(), 3, "Normal + two fill slots: {:?}", table.fills);
+            let mut buf = Vec::new();
+            emit_fills(&mut buf, &table.fills).unwrap();
+            let xml = String::from_utf8(buf).unwrap();
+            assert!(
+                xml.contains(r##"<fgColor theme="4"/>"##),
+                "themed twin keeps its theme ref: {xml}"
+            );
+            assert!(
+                xml.contains(r##"<fgColor rgb="FF4F81BD"/>"##),
+                "plain twin keeps its rgb: {xml}"
+            );
+        }
+    }
+
+    /// Border twins (themed top color vs plain same-ARGB) stay separate.
+    #[test]
+    fn test_border_twin_dedup_keeps_theme_link() {
+        let themed = Border {
+            top: Some(BorderStyle {
+                style: BorderStyleStyle::Thin,
+                color: Some("FF4F81BD".into()),
+                color_theme: Some(4),
+                color_tint: None,
+            }),
+            ..Default::default()
+        };
+        let plain = Border {
+            top: Some(BorderStyle {
+                style: BorderStyleStyle::Thin,
+                color: Some("FF4F81BD".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        for (a, b) in [(&themed, &plain), (&plain, &themed)] {
+            let styles = vec![
+                Some(Style {
+                    border: Some(a.clone()),
+                    ..Default::default()
+                }),
+                Some(Style {
+                    border: Some(b.clone()),
+                    ..Default::default()
+                }),
+            ];
+            let table = build_style_table(&styles);
+            assert_eq!(table.borders.len(), 3, "Normal + two border slots: {:?}", table.borders);
+            let mut buf = Vec::new();
+            emit_borders(&mut buf, &table.borders).unwrap();
+            let xml = String::from_utf8(buf).unwrap();
+            assert!(
+                xml.contains(r##"<color theme="4"/>"##),
+                "themed twin keeps its theme ref: {xml}"
+            );
+            assert!(
+                xml.contains(r##"<color rgb="FF4F81BD"/>"##),
+                "plain twin keeps its rgb: {xml}"
+            );
+        }
+    }
+
+    /// Twin-free workbooks are byte-identical to the pre-fix behavior: a
+    /// themed-only or plain-only set of distinct values produces the same
+    /// slot count and emission as before.
+    #[test]
+    fn test_twin_free_outputs_unchanged() {
+        // Plain-only: two distinct plain colors → two slots, both rgb.
+        let plain_styles = vec![
+            Some(Style {
+                font: Some(Font {
+                    color: Some("FF4F81BD".into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            Some(Style {
+                font: Some(Font {
+                    color: Some("FF0000FF".into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        ];
+        let table = build_style_table(&plain_styles);
+        assert_eq!(table.fonts.len(), 3, "Normal + two plain slots");
+        let mut buf = Vec::new();
+        emit_fonts(&mut buf, &table.fonts).unwrap();
+        let xml = String::from_utf8(buf).unwrap();
+        assert!(xml.contains(r##"<color rgb="FF4F81BD"/>"##), "plain 1: {xml}");
+        assert!(xml.contains(r##"<color rgb="FF0000FF"/>"##), "plain 2: {xml}");
+        assert!(!xml.contains("theme="), "no theme refs in plain-only output: {xml}");
+
+        // Themed-only: two distinct themed colors → two slots, both theme refs.
+        let themed_styles = vec![
+            Some(Style {
+                font: Some(Font {
+                    color: Some("FF4F81BD".into()),
+                    color_theme: Some(4),
+                    color_tint: None,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            Some(Style {
+                font: Some(Font {
+                    color: Some("FF0000FF".into()),
+                    color_theme: Some(6),
+                    color_tint: None,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        ];
+        let table = build_style_table(&themed_styles);
+        assert_eq!(table.fonts.len(), 3, "Normal + two themed slots");
+        let mut buf = Vec::new();
+        emit_fonts(&mut buf, &table.fonts).unwrap();
+        let xml = String::from_utf8(buf).unwrap();
+        assert!(xml.contains(r##"<color theme="4"/>"##), "themed 1: {xml}");
+        assert!(xml.contains(r##"<color theme="6"/>"##), "themed 2: {xml}");
+        assert!(!xml.contains("rgb="), "no rgb in themed-only output: {xml}");
     }
 
     #[test]

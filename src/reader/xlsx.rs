@@ -1291,7 +1291,9 @@ fn parse_col_outline_levels_from_xml(xml: &str) -> Vec<(u32, u8)> {
                     }
                 }
                 if let (Some(lo), Some(hi), Some(l)) = (min, max, level) {
-                    for c in lo..=hi.min(16384) {
+                    // Clamp the lower bound: col_num 0 is the auto-assign
+                    // sentinel and must never be created from file input.
+                    for c in lo.max(1)..=hi.min(16384) {
                         result.push((c, l.min(7)));
                     }
                 }
@@ -1373,7 +1375,9 @@ fn parse_col_dims_from_xml(xml: &str) -> Vec<ColDim> {
                     if width.is_none() && !hidden {
                         continue;
                     }
-                    for c in lo..=hi.min(16384) {
+                    // Clamp the lower bound: col_num 0 is the auto-assign
+                    // sentinel and must never be created from file input.
+                    for c in lo.max(1)..=hi.min(16384) {
                         result.push((c, width, hidden));
                     }
                 }
@@ -4513,6 +4517,25 @@ mod tests {
         // An outline-only <col> carries no dimensions to apply.
         let xml = r#"<cols><col min="1" max="2" outlineLevel="1"/></cols>"#;
         assert!(parse_col_dims_from_xml(xml).is_empty());
+    }
+
+    #[test]
+    fn test_parse_col_dims_ignores_zero_min() {
+        // min="0" would create the col_num 0 auto-assign sentinel; ignore it.
+        let xml = r#"<cols><col min="0" max="0" width="10" customWidth="1"/></cols>"#;
+        assert!(parse_col_dims_from_xml(xml).is_empty());
+    }
+
+    #[test]
+    fn test_parse_col_outline_ignores_zero_min() {
+        let xml = r#"<cols><col min="0" max="0" outlineLevel="1"/></cols>"#;
+        assert!(parse_col_outline_levels_from_xml(xml).is_empty());
+    }
+
+    #[test]
+    fn test_parse_col_dims_valid_min_still_parses() {
+        let xml = r#"<cols><col min="1" max="1" width="10" customWidth="1"/></cols>"#;
+        assert_eq!(parse_col_dims_from_xml(xml), vec![(1, Some(10.0), false)]);
     }
 
     #[test]

@@ -3540,6 +3540,28 @@ mod tests {
     }
 
     #[test]
+    fn test_zero_min_col_descriptor_creates_no_column() {
+        // A crafted <col min="0" max="0" width="10"> must not create the
+        // col_num 0 auto-assign sentinel, and must not reappear on write.
+        // The reader-level guard is unit-tested in reader::xlsx; here we
+        // assert the writer never emits min="0" for a normal workbook.
+        use std::io::{Cursor, Read};
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("Sheet1".into());
+        ws.insert_column_dimensions(1, Some(10.0), false);
+        let bytes = workbook_to_bytes(&inner).unwrap();
+        let mut archive = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut sheet = String::new();
+        archive
+            .by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut sheet)
+            .unwrap();
+        assert!(!sheet.contains(r#"min="0""#), "no min=0 in output: {sheet}");
+        assert!(sheet.contains(r#"min="1""#), "valid col still emitted: {sheet}");
+    }
+
+    #[test]
     fn test_read_does_not_create_phantom_cells() {
         // Regression: ws.getCellByRc(r,c) must NOT emit phantom <c> for cells
         // that were only read (not written). Inspects raw sheet XML inside the ZIP

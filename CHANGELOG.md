@@ -5,6 +5,17 @@
 
 ### Fixed
 
+- **Themed and plain colors resolving to the same ARGB no longer merge in the style
+  table** — dedup keys ignored the theme link (a `#[serde(skip)]` field), so a themed
+  color and a plain twin silently shared one sub-table slot first-wins: the themed cell
+  could lose its `theme="N"` reference (emitted as static `rgb=`) or the plain cell
+  could inherit the theme reference. Dedup keys are now theme-aware for font, fill, and
+  border sub-tables; twin-free workbooks are byte-identical.
+- **Crafted `<col min="0">` descriptors no longer create the `col_num = 0` sentinel** —
+  both the width/hidden and outline-level parsers now clamp the lower bound, so a
+  zero-based descriptor is ignored instead of round-tripping as schema-invalid
+  `<col min="0" max="0">`.
+
 - **CI and release builds now run the same generated-type transform as a local build** — the
   `napi --pipe` step (`scripts/apply-glue.cjs`) that produces the `CellValue` discriminated
   union, `CellValueInput`, the refined `Cell` value setter, and the `getCell` overload
