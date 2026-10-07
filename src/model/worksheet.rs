@@ -27,7 +27,7 @@ use super::sheet_view::SheetView;
 use super::style::Dxf;
 use super::table::{AddTableOptions, Table, TableColumn, TableList, TableRow};
 use crate::model::color::Color;
-use crate::model::style::{apply_style, Style};
+use crate::model::style::Style;
 use crate::types;
 
 /// Worksheet visibility state, mirroring ExcelJS `WorksheetState`.
@@ -536,8 +536,26 @@ impl Worksheet {
             col.set_outline_level(level as u32);
         } else {
             let mut c = Column::new(String::new(), String::new(), 0.0);
-            c.col_num = col_num;
+            c.set_col_num(col_num);
             c.set_outline_level(level as u32);
+            cols.push(c);
+        }
+    }
+
+    /// Set the width and hidden state of a column from a parsed `<col>`
+    /// descriptor (used by the reader). Creates the definition at `col_num`
+    /// if absent. `None` width leaves any existing width untouched.
+    pub fn insert_column_dimensions(&self, col_num: u32, width: Option<f64>, hidden: bool) {
+        let mut cols = self.columns.lock().expect("Worksheet columns lock poisoned");
+        if let Some(col) = cols.iter_mut().find(|c| c.col_num() == col_num) {
+            if let Some(w) = width {
+                col.set_width(w);
+            }
+            col.set_hidden(hidden);
+        } else {
+            let mut c = Column::new(String::new(), String::new(), width.unwrap_or(0.0));
+            c.set_col_num(col_num);
+            c.set_hidden(hidden);
             cols.push(c);
         }
     }
@@ -609,28 +627,27 @@ impl Worksheet {
     #[napi]
     pub fn set_columns(&self, cols: Vec<ColumnInput>) -> napi::Result<()> {
         let mut columns = self.columns.lock().expect("Worksheet columns lock poisoned");
-        let mut parsed: Vec<Column> = cols
-            .into_iter()
-            .map(|c| {
-                let mut col = Column::new(
-                    c.header.unwrap_or_default(),
-                    c.key.unwrap_or_default(),
-                    c.width.unwrap_or(0.0),
-                );
-                col.col_num = c.col_num.unwrap_or(0);
-                col.set_hidden(c.hidden.unwrap_or(false));
-                col.outline_level = c.outline_level.unwrap_or(0);
-                col.style = c.style;
-                col
-            })
-            .collect();
+        let mut parsed: Vec<Column> = Vec::with_capacity(cols.len());
+        for c in cols {
+            let mut col = Column::new(
+                c.header.unwrap_or_default(),
+                c.key.unwrap_or_default(),
+                c.width.unwrap_or(0.0),
+            );
+            col.set_col_num(c.col_num.unwrap_or(0));
+            col.set_hidden(c.hidden.unwrap_or(false));
+            col.set_outline_level(c.outline_level.unwrap_or(0) as u32);
+            // Validated like `Cell.set_style`; None is a no-op on the fresh default.
+            col.set_style(c.style)?;
+            parsed.push(col);
+        }
 
         // Auto-assign col_num for entries with col_num == 0
         let next_col_num = columns.iter().map(|c| c.col_num()).max().unwrap_or(0) + 1;
         let mut next_auto = next_col_num;
         for col in &mut parsed {
             if col.col_num() == 0 {
-                col.col_num = next_auto;
+                col.set_col_num(next_auto);
                 next_auto += 1;
             }
         }
@@ -648,14 +665,40 @@ impl Worksheet {
             }
         }
 
-        // Validate styles (matching Cell.set_style behavior)
-        for col in &mut parsed {
-            let style = col.style.take();
-            apply_style(&mut col.style, style)?;
-        }
-
+        // Styles were validated per-column during construction (via `set_style`).
         *columns = parsed;
         Ok(())
+    }
+
+    /// Get column by 1-indexed column number. Creates the definition if absent.
+    /// The returned handle shares state with the worksheet model, so mutations
+    /// through it persist (same contract as `get_row`).
+    /// This is the Rust backing for `Worksheet.getColumn(col: number)`.
+    #[napi]
+    pub fn get_column_by_num(&self, col: u32) -> napi::Result<Column> {
+        if col == 0 {
+            return Err(napi::Error::from_reason("getColumn: column number must be >= 1"));
+        }
+        let mut columns = self.columns.lock().expect("Worksheet columns lock poisoned");
+        if let Some(existing) = columns.iter().find(|c| c.col_num() == col) {
+            return Ok(existing.clone());
+        }
+        let mut fresh = Column::new(String::new(), String::new(), 0.0);
+        fresh.set_col_num(col);
+        columns.push(fresh.clone());
+        Ok(fresh)
+    }
+
+    /// Get column by letter (e.g. "B"). Creates the definition if absent.
+    /// This is the Rust backing for `Worksheet.getColumn(col: string)`.
+    #[napi]
+    pub fn get_column_by_letter(&self, letter: String) -> napi::Result<Column> {
+        match crate::types::col_letter_to_num(&letter) {
+            Ok(n) if n > 0 => self.get_column_by_num(n),
+            _ => Err(napi::Error::from_reason(format!(
+                "getColumn: invalid column letter '{letter}'"
+            ))),
+        }
     }
 
     /// Merge a range of cells (e.g. "A1:C3"). Accepts an A1-style range string.
@@ -1929,5 +1972,67 @@ mod tests {
     fn test_is_cell_merged_anchor_no_merges() {
         let ws = Worksheet::new("Test".into());
         assert!(!ws.is_cell_merged_anchor(1, 1), "A1 not anchor when no merges");
+    }
+
+    #[test]
+    fn test_get_column_by_num_auto_creates_and_mutation_persists() {
+        // Live-handle contract: a width set through the handle is visible
+        // through a fresh lookup (the FFI passes Column by clone).
+        let ws = Worksheet::new("Test".into());
+        let mut col = ws.get_column_by_num(2).unwrap();
+        assert_eq!(col.col_num(), 2);
+        col.set_width(20.0);
+        assert_eq!(ws.get_column_by_num(2).unwrap().width(), 20.0);
+    }
+
+    #[test]
+    fn test_get_column_by_letter_matches_by_num() {
+        let ws = Worksheet::new("Test".into());
+        ws.get_column_by_num(3).unwrap().set_hidden(true);
+        let by_letter = ws.get_column_by_letter("C".into()).unwrap();
+        assert_eq!(by_letter.col_num(), 3);
+        assert!(by_letter.hidden());
+    }
+
+    #[test]
+    fn test_get_column_by_letter_rejects_invalid() {
+        let ws = Worksheet::new("Test".into());
+        assert!(ws.get_column_by_letter("!!".into()).is_err());
+        assert!(ws.get_column_by_letter("".into()).is_err());
+        assert!(ws.get_column_by_num(0).is_err());
+    }
+
+    #[test]
+    fn test_set_columns_replace_detaches_outstanding_handle() {
+        // Documented D1 behavior: setColumns replaces the vec, so a handle
+        // obtained before the replace keeps the old definition while fresh
+        // lookups resolve against the new one.
+        let ws = Worksheet::new("Test".into());
+        let mut stale = ws.get_column_by_num(1).unwrap();
+        stale.set_width(10.0);
+        ws.set_columns(vec![ColumnInput {
+            col_num: Some(1),
+            width: Some(30.0),
+            ..Default::default()
+        }])
+        .unwrap();
+        assert_eq!(stale.width(), 10.0, "outstanding handle keeps old definition");
+        assert_eq!(ws.get_column_by_num(1).unwrap().width(), 30.0);
+    }
+
+    #[test]
+    fn test_get_column_sparse_col_num_lookup() {
+        // Sparse definition (only column B) is found by its col_num, and
+        // neighboring columns auto-create independently.
+        let ws = Worksheet::new("Test".into());
+        ws.set_columns(vec![ColumnInput {
+            col_num: Some(2),
+            width: Some(15.0),
+            ..Default::default()
+        }])
+        .unwrap();
+        assert_eq!(ws.get_column_by_num(2).unwrap().width(), 15.0);
+        assert_eq!(ws.get_column_by_letter("A".into()).unwrap().width(), 0.0);
+        assert_eq!(ws.get_column_by_letter("A".into()).unwrap().col_num(), 1);
     }
 }

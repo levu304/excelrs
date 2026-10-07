@@ -27,6 +27,10 @@ pub struct WorkbookInner {
     /// Differential formats (`<dxfs>`) carried from the source file. Preserved
     /// on round-trip so foreign dxfs (e.g. pivot-table) survive.
     pub dxfs: Vec<Dxf>,
+    /// Raw `xl/theme/theme1.xml` bytes carried from the source file. Emitted
+    /// verbatim on write so theme references keep resolving against the
+    /// author's palette. `None` when the source had no theme part.
+    pub theme_xml: Option<Vec<u8>>,
 }
 
 impl WorkbookInner {
@@ -40,6 +44,7 @@ impl WorkbookInner {
             views: Vec::new(),
             calc_properties: None,
             dxfs: Vec::new(),
+            theme_xml: None,
         }
     }
 

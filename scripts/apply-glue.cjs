@@ -69,6 +69,11 @@ const WORKSHEET_GETCELL_GLUE = `  /** Get cell by A1-style address string (JS gl
   /** Get cell by 1-indexed row and column numbers (JS glue → getCellByRc). */
   getCell(row: number, col: number): Cell`
 
+const WORKSHEET_GETCOLUMN_GLUE = `  /** Get column by 1-indexed number (JS glue → getColumnByNum). */
+  getColumn(col: number): Column
+  /** Get column by letter (JS glue → getColumnByLetter). */
+  getColumn(col: string): Column`
+
 function processFile(filePath) {
   const basename = path.basename(filePath)
 
@@ -133,6 +138,19 @@ function processFile(filePath) {
       content = content.replace(
         /(removeTable\(name: string\): boolean\n)\}/,
         '$1' + WORKSHEET_GETCELL_GLUE + '\n}'
+      )
+      modified = true
+    }
+
+    // Worksheet: inject getColumn overloads after the generated accessors
+    // (mid-class anchor; guarded so a re-run pipe stays idempotent).
+    if (
+      content.includes('getColumnByLetter(letter: string): Column\n') &&
+      !content.includes('getColumn(col: number): Column')
+    ) {
+      content = content.replace(
+        /(getColumnByLetter\(letter: string\): Column\n)/,
+        '$1' + WORKSHEET_GETCOLUMN_GLUE + '\n'
       )
       modified = true
     }

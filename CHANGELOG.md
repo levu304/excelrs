@@ -5,6 +5,17 @@
 
 ### Fixed
 
+- **Themed and plain colors resolving to the same ARGB no longer merge in the style
+  table** — dedup keys ignored the theme link (a `#[serde(skip)]` field), so a themed
+  color and a plain twin silently shared one sub-table slot first-wins: the themed cell
+  could lose its `theme="N"` reference (emitted as static `rgb=`) or the plain cell
+  could inherit the theme reference. Dedup keys are now theme-aware for font, fill, and
+  border sub-tables; twin-free workbooks are byte-identical.
+- **Crafted `<col min="0">` descriptors no longer create the `col_num = 0` sentinel** —
+  both the width/hidden and outline-level parsers now clamp the lower bound, so a
+  zero-based descriptor is ignored instead of round-tripping as schema-invalid
+  `<col min="0" max="0">`.
+
 - **CI and release builds now run the same generated-type transform as a local build** — the
   `napi --pipe` step (`scripts/apply-glue.cjs`) that produces the `CellValue` discriminated
   union, `CellValueInput`, the refined `Cell` value setter, and the `getCell` overload
@@ -46,8 +57,30 @@
   no allowlist is needed. Both files are parsed through the TypeScript compiler API rather than
   a keyword regex, which misreports the declarations a `.d.ts` exports without an `export`
   keyword — thirteen false positives on the tree as it stood.
+- **`Worksheet.getColumn` (number or letter) returns a live column handle** — ExcelJS
+  migrants calling `ws.getColumn('B')` previously hit `TypeError: ws.getColumn is not a
+  function`; only bulk `setColumns` existed. The handle auto-creates the definition when
+  absent and mutations through it (`width`, `hidden`, `style`, `outlineLevel`, `header`,
+  `key`) persist into the worksheet model, matching the `getRow` contract. Key-based lookup,
+  `spliceColumns`, and `eachColumn` stay out of scope (`addRow` takes positional arrays, so
+  `key` has no consumer).
+- **The reader now parses column widths and hidden state from `<cols>`** — previously only
+  `outlineLevel` was ingested, so widths set via `setColumns` or `getColumn` vanished on
+  reload. This makes the `dimension-properties` width round-trip scenario actually true.
+- **Legacy array formulas are now specified and pinned by test** — `<f t="array" ref>`
+  cells read as plain formulas (text plus cached `<v>` preserved on every carrying cell) and
+  write back as plain `<f>` with no `t`/`ref`. Values survive, array-ness does not, and the
+  file opens without repair. Preservation and spill evaluation stay deferred.
 
 ### Changed
+
+- **Themed colors now round-trip as theme references (`theme-color-references`)** — the writer
+  previously demoted every `<color theme="N"/>` to a static `<color rgb="..."/>`, so
+  theme-switching in Excel stopped affecting converted cells. It now emits the originating
+  `theme` (+`tint`) reference and passes `xl/theme/theme1.xml` through read-to-write
+  byte-identical. Plain ARGB output is unchanged. Known consequence: ExcelJS cannot resolve
+  theme references (not even its own), so ExcelJS readers see `{ theme: N }` where they
+  previously saw a resolved `argb` — output is now at parity with what ExcelJS itself emits.
 
 - **`openspec/specs/exceljs-parity` is now a historical record** (11 requirements → 2) — the
   requirements mandating the ongoing accuracy of the hand-maintained `ROADMAP.md` parity matrix

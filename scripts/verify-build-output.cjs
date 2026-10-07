@@ -76,6 +76,8 @@ if (dts !== null) {
     ['Worksheet.getCell(row, col)', 'getCell(row: number, col: number): Cell'],
     ['Row.getCell(col: number)', 'getCell(col: number): Cell'],
     ['Row.getCell(col: string)', 'getCell(col: string): Cell'],
+    ['Worksheet.getColumn(col: number)', 'getColumn(col: number): Column'],
+    ['Worksheet.getColumn(col: string)', 'getColumn(col: string): Column'],
   ]) {
     if (!dts.includes(needle)) {
       failures.push(`${NATIVE_DTS} is missing the ${label} overload declaration.`)
@@ -96,6 +98,7 @@ if (indexJs !== null) {
   for (const [label, needle] of [
     ['Worksheet.prototype.getCell', 'nativeBinding.Worksheet.prototype.getCell'],
     ['Row.prototype.getCell', 'nativeBinding.Row.prototype.getCell'],
+    ['Worksheet.prototype.getColumn', 'nativeBinding.Worksheet.prototype.getColumn'],
   ]) {
     if (!indexJs.includes(needle)) {
       failures.push(`${INDEX_JS} is missing the ${label} overload glue.`)

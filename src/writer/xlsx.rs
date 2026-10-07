@@ -112,6 +112,7 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
             &sheet_images,
             &sheet_comments,
             &sheet_tables,
+            inner.theme_xml.is_some(),
         )?;
 
         // _rels/.rels
@@ -124,7 +125,7 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
 
         // xl/_rels/workbook.xml.rels
         start_file(&mut zip, "xl/_rels/workbook.xml.rels")?;
-        write_workbook_rels(&mut zip, sheet_count)?;
+        write_workbook_rels(&mut zip, sheet_count, inner.theme_xml.is_some())?;
 
         // xl/sharedStrings.xml
         start_file(&mut zip, "xl/sharedStrings.xml")?;
@@ -195,6 +196,12 @@ pub fn workbook_to_bytes(inner: &WorkbookInner) -> Result<Vec<u8>, ExcelrsError>
         let mut style_table = styles::build_style_table(&all_styles);
         style_table.dxfs = dxfs;
         styles::emit_styles_xml(&mut zip, &style_table)?;
+
+        // xl/theme/theme1.xml — verbatim passthrough of the source theme part.
+        if let Some(theme) = &inner.theme_xml {
+            start_file(&mut zip, "xl/theme/theme1.xml")?;
+            std::io::Write::write_all(&mut zip, theme)?;
+        }
 
         // xl/worksheets/sheet{N}.xml
         let mut cell_offset = 0usize;
@@ -764,6 +771,7 @@ fn write_content_types<W: Write>(
     sheet_images: &[Vec<WorksheetImage>],
     sheet_comments: &[Vec<(String, CellComment)>],
     _sheet_tables: &[Vec<Table>],
+    has_theme: bool,
 ) -> Result<(), ExcelrsError> {
     write_str(w, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#)?;
     write_str(
@@ -795,6 +803,12 @@ fn write_content_types<W: Write>(
         w,
         r#"<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>"#,
     )?;
+    if has_theme {
+        write_str(
+            w,
+            r#"<Override PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>"#,
+        )?;
+    }
     // (v1.0.0) media + drawings + comments content types
     for ext in media_exts {
         write_str(
@@ -1057,7 +1071,7 @@ fn emit_calc_pr<W: Write>(w: &mut W, inner: &WorkbookInner) -> Result<(), Excelr
 // xl/_rels/workbook.xml.rels
 // ---------------------------------------------------------------------------
 
-fn write_workbook_rels<W: Write>(w: &mut W, sheet_count: usize) -> Result<(), ExcelrsError> {
+fn write_workbook_rels<W: Write>(w: &mut W, sheet_count: usize, has_theme: bool) -> Result<(), ExcelrsError> {
     write_str(w, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#)?;
     write_str(
         w,
@@ -1077,6 +1091,16 @@ fn write_workbook_rels<W: Write>(w: &mut W, sheet_count: usize) -> Result<(), Ex
             &format!(
                 r#"<Relationship Id="rId{}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{i}.xml"/>"#,
                 i + 2, // rId1=styles, rId2=sharedStrings, rId3+=worksheets
+            ),
+        )?;
+    }
+    if has_theme {
+        // Appended after the sheet rels so existing rIds never shift.
+        write_str(
+            w,
+            &format!(
+                r#"<Relationship Id="rId{}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/>"#,
+                sheet_count + 3,
             ),
         )?;
     }
@@ -3458,6 +3482,83 @@ mod tests {
         let mut data = Vec::new();
         file.read_to_end(&mut data).map_err(ExcelrsError::Io)?;
         workbook_inner_from_bytes(&data)
+    }
+
+    #[test]
+    fn test_custom_theme_round_trips_verbatim() {
+        use std::io::{Cursor, Read};
+        let inner = workbook_inner_from_path(Path::new("fixtures/custom-theme.xlsx")).unwrap();
+        let theme = inner.theme_xml.clone().expect("theme bytes retained on read");
+        let bytes = workbook_to_bytes(&inner).unwrap();
+
+        let mut archive = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        // Theme part passes through byte-identical.
+        let mut emitted = Vec::new();
+        archive
+            .by_name("xl/theme/theme1.xml")
+            .unwrap()
+            .read_to_end(&mut emitted)
+            .unwrap();
+        assert_eq!(emitted, theme, "theme part must round-trip verbatim");
+        // Package stays valid: content-type and relationship entries present.
+        let mut ctypes = String::new();
+        archive
+            .by_name("[Content_Types].xml")
+            .unwrap()
+            .read_to_string(&mut ctypes)
+            .unwrap();
+        assert!(ctypes.contains("/xl/theme/theme1.xml"), "theme content-type: {ctypes}");
+        let mut rels = String::new();
+        archive
+            .by_name("xl/_rels/workbook.xml.rels")
+            .unwrap()
+            .read_to_string(&mut rels)
+            .unwrap();
+        assert!(rels.contains("theme/theme1.xml"), "theme relationship: {rels}");
+        // Themed colors are re-emitted as theme references (theme-wins).
+        let mut styles = String::new();
+        archive
+            .by_name("xl/styles.xml")
+            .unwrap()
+            .read_to_string(&mut styles)
+            .unwrap();
+        assert!(styles.contains(r#"theme="4""#), "themed font keeps its ref: {styles}");
+
+        // Second read: the public value still resolves through the custom palette.
+        let read2 = workbook_inner_from_bytes(&bytes).unwrap();
+        let ws2 = &read2.worksheets()[0];
+        let cell = ws2.get_cell_by_rc(1, 1);
+        assert_eq!(
+            cell.style()
+                .as_ref()
+                .and_then(|s| s.font.as_ref())
+                .and_then(|f| f.color.clone())
+                .as_deref(),
+            Some("FFFF0000"),
+            "custom accent1 must resolve after round-trip"
+        );
+    }
+
+    #[test]
+    fn test_zero_min_col_descriptor_creates_no_column() {
+        // A crafted <col min="0" max="0" width="10"> must not create the
+        // col_num 0 auto-assign sentinel, and must not reappear on write.
+        // The reader-level guard is unit-tested in reader::xlsx; here we
+        // assert the writer never emits min="0" for a normal workbook.
+        use std::io::{Cursor, Read};
+        let mut inner = WorkbookInner::new();
+        let ws = inner.add_worksheet("Sheet1".into());
+        ws.insert_column_dimensions(1, Some(10.0), false);
+        let bytes = workbook_to_bytes(&inner).unwrap();
+        let mut archive = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut sheet = String::new();
+        archive
+            .by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut sheet)
+            .unwrap();
+        assert!(!sheet.contains(r#"min="0""#), "no min=0 in output: {sheet}");
+        assert!(sheet.contains(r#"min="1""#), "valid col still emitted: {sheet}");
     }
 
     #[test]

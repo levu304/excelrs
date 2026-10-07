@@ -474,6 +474,20 @@ export declare class Worksheet {
   getCell(address: string): Cell
   /** Get cell by 1-indexed row and column numbers (JS glue → getCellByRc). */
   getCell(row: number, col: number): Cell
+  /**
+   * Get column by 1-indexed column number.
+   * Creates the definition if absent; mutations through the handle persist.
+   */
+  getColumnByNum(col: number): Column
+  /**
+   * Get column by letter (e.g., "B").
+   * Creates the definition if absent; throws on an unparseable letter.
+   */
+  getColumnByLetter(letter: string): Column
+  /** Get column by 1-indexed number (JS glue → getColumnByNum). */
+  getColumn(col: number): Column
+  /** Get column by letter (JS glue → getColumnByLetter). */
+  getColumn(col: string): Column
   /** Get row by 1-indexed row number. Creates the row if it doesn't exist. */
   getRow(rowNumber: number): Row
   /** Add a row of cell values. Returns the created Row. */
